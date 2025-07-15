@@ -1,0 +1,51 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "ty-find"
+description = "CLI tool for finding Python function definitions using ty's LSP server"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+authors = [
+    {name = "Your Name", email = "your.email@example.com"},
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Text Editors :: Integrated Development Environments (IDE)",
+]
+keywords = ["lsp", "python", "definition", "navigation", "ty"]
+dynamic = ["version"]
+dependencies = []
+
+[project.urls]
+homepage = "https://github.com/yourusername/ty-find"
+repository = "https://github.com/yourusername/ty-find"
+documentation = "https://github.com/yourusername/ty-find#readme"
+
+[project.scripts]
+ty-find = "ty_find:main"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=6.0",
+    "pytest-asyncio",
+    "black",
+    "isort",
+    "mypy",
+]
+
+[tool.maturin]
+bindings = "bin"
+strip = true

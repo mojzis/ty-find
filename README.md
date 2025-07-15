@@ -17,14 +17,14 @@ Add to your `pyproject.toml`:
 [project.optional-dependencies]
 dev = [
     # Other dev dependencies...
-    "ty-find @ git+https://github.com/yourusername/ty-find.git",
+    "ty-find @ git+https://github.com/mojzis/ty-find.git",
 ]
 
 # For uv projects (recommended)
 [dependency-groups]
 dev = [
     # Other dev dependencies...
-    "ty-find @ git+https://github.com/yourusername/ty-find.git",
+    "ty-find @ git+https://github.com/mojzis/ty-find.git",
 ]
 ```
 
@@ -42,7 +42,7 @@ pip install "ty-find @ git+https://github.com/yourusername/ty-find.git"
 
 ### From Source (Rust)
 ```bash
-git clone https://github.com/yourusername/ty-find.git
+git clone https://github.com/mojzis/ty-find.git
 cd ty-find
 cargo install --path .
 ```

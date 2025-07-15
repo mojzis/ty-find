@@ -19,7 +19,7 @@ dev = [
     "isort",
     "mypy",
     # Add ty-find as a dev dependency from GitHub
-    "ty-find @ git+https://github.com/yourusername/ty-find.git",
+    "ty-find @ git+https://github.com/mojzis/ty-find.git",
 ]
 
 # With uv - this is the cleanest approach
@@ -29,5 +29,5 @@ dev = [
     "black",
     "isort", 
     "mypy",
-    "ty-find @ git+https://github.com/yourusername/ty-find.git",
+    "ty-find @ git+https://github.com/mojzis/ty-find.git",
 ]

@@ -9,7 +9,7 @@ readme = "README.md"
 requires-python = ">=3.8"
 license = {text = "MIT"}
 authors = [
-    {name = "Your Name", email = "your.email@example.com"},
+    {name = "mojzis", email = "mojzisek@gmail.com"},
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -30,9 +30,9 @@ dynamic = ["version"]
 dependencies = []
 
 [project.urls]
-homepage = "https://github.com/yourusername/ty-find"
-repository = "https://github.com/yourusername/ty-find"
-documentation = "https://github.com/yourusername/ty-find#readme"
+homepage = "https://github.com/mojzis/ty-find"
+repository = "https://github.com/mojzis/ty-find"
+documentation = "https://github.com/mojzis/ty-find#readme"
 
 [project.scripts]
 ty-find = "ty_find:main"

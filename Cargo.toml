@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 description = "CLI tool for finding Python function definitions using ty's LSP server"
 license = "MIT"
-repository = "https://github.com/yourusername/ty-find"
+repository = "https://github.com/mojzis/ty-find"
 
 [dependencies]
 tokio = { version = "1.0", features = ["full"] }

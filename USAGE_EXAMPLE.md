@@ -11,7 +11,7 @@ dev = [
     "black", 
     "isort",
     "mypy",
-    "ty-find @ git+https://github.com/yourusername/ty-find.git",
+    "ty-find @ git+https://github.com/mojzis/ty-find.git",
 ]
 ```
 
@@ -24,7 +24,7 @@ dev = [
     "black",
     "isort", 
     "mypy",
-    "ty-find @ git+https://github.com/yourusername/ty-find.git",
+    "ty-find @ git+https://github.com/mojzis/ty-find.git",
 ]
 ```
 

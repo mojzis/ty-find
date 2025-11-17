@@ -1,0 +1,142 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact_name: ty-find-linux-amd64
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact_name: ty-find-macos-amd64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact_name: ty-find-macos-arm64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_name: ty-find-windows-amd64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install maturin
+        run: pip install maturin
+
+      - name: Build wheel
+        run: maturin build --release --target ${{ matrix.target }} --out dist
+
+      - name: Build standalone binary
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Prepare binary artifact
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
+            cp target/${{ matrix.target }}/release/ty-find.exe artifacts/${{ matrix.artifact_name }}.exe
+          else
+            cp target/${{ matrix.target }}/release/ty-find artifacts/${{ matrix.artifact_name }}
+            chmod +x artifacts/${{ matrix.artifact_name }}
+          fi
+
+      - name: Upload wheel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.target }}
+          path: dist/*.whl
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.target }}
+          path: artifacts/*
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p release
+          # Copy all wheels
+          cp artifacts/wheel-*/*.whl release/
+          # Copy all binaries
+          cp artifacts/binary-*/* release/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: release/*
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  test-installation:
+    name: Test Installation
+    needs: build
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ['3.9', '3.10', '3.11', '3.12']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Download wheel for current platform
+        uses: actions/download-artifact@v4
+        with:
+          pattern: wheel-*
+          path: dist
+          merge-multiple: true
+
+      - name: Install wheel
+        shell: bash
+        run: |
+          pip install dist/*.whl
+          # Test that the command is available
+          ty-find --version
+
+      - name: Run basic smoke test
+        shell: bash
+        run: |
+          echo "def test_func(): pass" > test_file.py
+          ty-find find test_file.py test_func || echo "Note: This may fail without ty LSP server installed"

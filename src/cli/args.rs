@@ -23,23 +23,54 @@ pub struct Cli {
 pub enum Commands {
     Definition {
         file: PathBuf,
-        
+
         #[arg(short, long)]
         line: u32,
-        
+
         #[arg(short, long)]
         column: u32,
     },
-    
+
     Find {
         file: PathBuf,
-        
+
         symbol: String,
     },
-    
+
     Interactive {
         file: Option<PathBuf>,
     },
+
+    Hover {
+        file: PathBuf,
+
+        #[arg(short, long)]
+        line: u32,
+
+        #[arg(short, long)]
+        column: u32,
+    },
+
+    WorkspaceSymbols {
+        #[arg(short, long)]
+        query: String,
+    },
+
+    DocumentSymbols {
+        file: PathBuf,
+    },
+
+    Daemon {
+        #[command(subcommand)]
+        command: DaemonCommands,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum DaemonCommands {
+    Start,
+    Stop,
+    Status,
 }
 
 #[derive(Clone, ValueEnum)]

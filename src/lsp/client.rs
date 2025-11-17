@@ -37,21 +37,34 @@ impl TyLspClient {
                     "definition": {
                         "dynamicRegistration": false,
                         "linkSupport": true
+                    },
+                    "hover": {
+                        "dynamicRegistration": false,
+                        "contentFormat": ["markdown", "plaintext"]
+                    },
+                    "documentSymbol": {
+                        "dynamicRegistration": false,
+                        "hierarchicalDocumentSymbolSupport": true
+                    }
+                },
+                "workspace": {
+                    "symbol": {
+                        "dynamicRegistration": false
                     }
                 }
             }
         });
 
         let _response = self.send_request("initialize", init_params).await?;
-        
+
         self.send_notification("initialized", serde_json::json!({})).await?;
-        
+
         Ok(())
     }
 
     pub async fn goto_definition(&self, file_path: &str, line: u32, character: u32) -> Result<Vec<Location>> {
         let uri = format!("file://{}", std::fs::canonicalize(file_path)?.display());
-        
+
         let params = GotoDefinitionParams {
             text_document_position_params: TextDocumentPositionParams {
                 text_document: TextDocumentIdentifier { uri },
@@ -62,7 +75,7 @@ impl TyLspClient {
         };
 
         let response = self.send_request("textDocument/definition", serde_json::to_value(params)?).await?;
-        
+
         if let Some(result) = response.result {
             let locations: Vec<Location> = match result {
                 Value::Array(arr) => serde_json::from_value(Value::Array(arr))?,
@@ -70,6 +83,73 @@ impl TyLspClient {
                 _ => vec![],
             };
             Ok(locations)
+        } else {
+            Ok(vec![])
+        }
+    }
+
+    pub async fn hover(&self, file_path: &str, line: u32, character: u32) -> Result<Option<Hover>> {
+        let uri = format!("file://{}", std::fs::canonicalize(file_path)?.display());
+
+        let params = HoverParams {
+            text_document_position_params: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier { uri },
+                position: Position { line, character },
+            },
+            work_done_token: None,
+        };
+
+        let response = self.send_request("textDocument/hover", serde_json::to_value(params)?).await?;
+
+        if let Some(result) = response.result {
+            if result.is_null() {
+                Ok(None)
+            } else {
+                let hover: Hover = serde_json::from_value(result)?;
+                Ok(Some(hover))
+            }
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub async fn workspace_symbols(&self, query: &str) -> Result<Vec<SymbolInformation>> {
+        let params = WorkspaceSymbolParams {
+            query: query.to_string(),
+            work_done_token: None,
+            partial_result_token: None,
+        };
+
+        let response = self.send_request("workspace/symbol", serde_json::to_value(params)?).await?;
+
+        if let Some(result) = response.result {
+            let symbols: Vec<SymbolInformation> = match result {
+                Value::Array(arr) => serde_json::from_value(Value::Array(arr))?,
+                _ => vec![],
+            };
+            Ok(symbols)
+        } else {
+            Ok(vec![])
+        }
+    }
+
+    pub async fn document_symbols(&self, file_path: &str) -> Result<Vec<DocumentSymbol>> {
+        let uri = format!("file://{}", std::fs::canonicalize(file_path)?.display());
+
+        let params = DocumentSymbolParams {
+            text_document: TextDocumentIdentifier { uri },
+            work_done_token: None,
+            partial_result_token: None,
+        };
+
+        let response = self.send_request("textDocument/documentSymbol", serde_json::to_value(params)?).await?;
+
+        if let Some(result) = response.result {
+            let symbols: Vec<DocumentSymbol> = match result {
+                Value::Array(arr) => serde_json::from_value(Value::Array(arr))?,
+                _ => vec![],
+            };
+            Ok(symbols)
         } else {
             Ok(vec![])
         }

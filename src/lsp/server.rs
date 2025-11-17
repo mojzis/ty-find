@@ -1,7 +1,7 @@
-use std::process::Stdio;
-use tokio::process::{Child, Command};
-use tokio::io::BufReader;
 use anyhow::Result;
+use std::process::Stdio;
+use tokio::io::BufReader;
+use tokio::process::{Child, Command};
 
 #[allow(dead_code)]
 pub struct TyLspServer {
@@ -12,10 +12,7 @@ pub struct TyLspServer {
 #[allow(dead_code)]
 impl TyLspServer {
     pub async fn start(workspace_root: &str) -> Result<Self> {
-        let ty_check = Command::new("ty")
-            .arg("--version")
-            .output()
-            .await?;
+        let ty_check = Command::new("ty").arg("--version").output().await?;
 
         if !ty_check.status.success() {
             anyhow::bail!("ty is not installed or not available in PATH");

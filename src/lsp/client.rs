@@ -1,10 +1,10 @@
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
-use std::sync::atomic::{AtomicU64, Ordering};
-use tokio::sync::oneshot;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, AsyncReadExt};
-use serde_json::Value;
 use anyhow::Result;
+use serde_json::Value;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
+use tokio::sync::oneshot;
 
 use crate::lsp::{protocol::*, server::TyLspServer};
 
@@ -57,12 +57,18 @@ impl TyLspClient {
 
         let _response = self.send_request("initialize", init_params).await?;
 
-        self.send_notification("initialized", serde_json::json!({})).await?;
+        self.send_notification("initialized", serde_json::json!({}))
+            .await?;
 
         Ok(())
     }
 
-    pub async fn goto_definition(&self, file_path: &str, line: u32, character: u32) -> Result<Vec<Location>> {
+    pub async fn goto_definition(
+        &self,
+        file_path: &str,
+        line: u32,
+        character: u32,
+    ) -> Result<Vec<Location>> {
         let uri = format!("file://{}", std::fs::canonicalize(file_path)?.display());
 
         let params = GotoDefinitionParams {
@@ -74,7 +80,9 @@ impl TyLspClient {
             partial_result_token: None,
         };
 
-        let response = self.send_request("textDocument/definition", serde_json::to_value(params)?).await?;
+        let response = self
+            .send_request("textDocument/definition", serde_json::to_value(params)?)
+            .await?;
 
         if let Some(result) = response.result {
             let locations: Vec<Location> = match result {
@@ -99,7 +107,9 @@ impl TyLspClient {
             work_done_token: None,
         };
 
-        let response = self.send_request("textDocument/hover", serde_json::to_value(params)?).await?;
+        let response = self
+            .send_request("textDocument/hover", serde_json::to_value(params)?)
+            .await?;
 
         if let Some(result) = response.result {
             if result.is_null() {
@@ -120,7 +130,9 @@ impl TyLspClient {
             partial_result_token: None,
         };
 
-        let response = self.send_request("workspace/symbol", serde_json::to_value(params)?).await?;
+        let response = self
+            .send_request("workspace/symbol", serde_json::to_value(params)?)
+            .await?;
 
         if let Some(result) = response.result {
             let symbols: Vec<SymbolInformation> = match result {
@@ -142,7 +154,9 @@ impl TyLspClient {
             partial_result_token: None,
         };
 
-        let response = self.send_request("textDocument/documentSymbol", serde_json::to_value(params)?).await?;
+        let response = self
+            .send_request("textDocument/documentSymbol", serde_json::to_value(params)?)
+            .await?;
 
         if let Some(result) = response.result {
             let symbols: Vec<DocumentSymbol> = match result {
@@ -211,7 +225,7 @@ impl TyLspClient {
                 let mut server_guard = server.lock().unwrap();
                 server_guard.stdout()
             };
-            
+
             let mut buffer = String::new();
             let mut content_length: Option<usize> = None;
 
@@ -221,7 +235,9 @@ impl TyLspClient {
                     Ok(0) => break,
                     Ok(_) => {
                         if buffer.starts_with("Content-Length:") {
-                            if let Some(len_str) = buffer.strip_prefix("Content-Length:").map(|s| s.trim()) {
+                            if let Some(len_str) =
+                                buffer.strip_prefix("Content-Length:").map(|s| s.trim())
+                            {
                                 content_length = len_str.parse().ok();
                             }
                         } else if buffer.trim().is_empty() && content_length.is_some() {
@@ -229,7 +245,9 @@ impl TyLspClient {
                             let mut content = vec![0; len];
                             if stdout.read_exact(&mut content).await.is_ok() {
                                 if let Ok(response_str) = String::from_utf8(content) {
-                                    if let Ok(response) = serde_json::from_str::<LSPResponse>(&response_str) {
+                                    if let Ok(response) =
+                                        serde_json::from_str::<LSPResponse>(&response_str)
+                                    {
                                         if let Value::Number(id_num) = &response.id {
                                             if let Some(id) = id_num.as_u64() {
                                                 let mut pending = pending_requests.lock().unwrap();

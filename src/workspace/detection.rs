@@ -1,5 +1,5 @@
-use std::path::{Path, PathBuf};
 use anyhow::Result;
+use std::path::{Path, PathBuf};
 
 #[allow(dead_code)]
 pub struct WorkspaceDetector;
@@ -8,19 +8,19 @@ pub struct WorkspaceDetector;
 impl WorkspaceDetector {
     pub fn find_workspace_root(start_path: &Path) -> Option<PathBuf> {
         let mut current = start_path;
-        
+
         loop {
             if Self::has_python_markers(current) {
                 return Some(current.to_path_buf());
             }
-            
+
             if let Some(parent) = current.parent() {
                 current = parent;
             } else {
                 break;
             }
         }
-        
+
         None
     }
 

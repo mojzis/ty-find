@@ -6,11 +6,11 @@
 
 #![allow(dead_code)]
 
+use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use anyhow::{Context, Result};
 
 use crate::lsp::client::TyLspClient;
 
@@ -119,16 +119,15 @@ impl LspClientPool {
         }
 
         // No existing client, create a new one
-        let workspace_str = workspace
-            .to_str()
-            .context("Invalid workspace path")?;
+        let workspace_str = workspace.to_str().context("Invalid workspace path")?;
 
         let client = TyLspClient::new(workspace_str)
             .await
             .context("Failed to create LSP client")?;
 
         // Start the response handler for this client
-        client.start_response_handler()
+        client
+            .start_response_handler()
             .await
             .context("Failed to start response handler")?;
 

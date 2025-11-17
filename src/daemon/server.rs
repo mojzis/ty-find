@@ -6,14 +6,14 @@
 
 #![allow(dead_code)]
 
+use anyhow::{Context, Result};
+use serde_json::Value;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{broadcast, Mutex};
-use anyhow::{Context, Result};
-use serde_json::Value;
 
 use crate::daemon::pool::LspClientPool;
 use crate::daemon::protocol::*;
@@ -134,8 +134,8 @@ impl DaemonServer {
         }
 
         // Bind to Unix socket
-        let listener = UnixListener::bind(&self.socket_path)
-            .context("Failed to bind Unix socket")?;
+        let listener =
+            UnixListener::bind(&self.socket_path).context("Failed to bind Unix socket")?;
 
         tracing::info!("Daemon listening on {}", self.socket_path.display());
 
@@ -230,10 +230,7 @@ impl DaemonServer {
             let request: DaemonRequest = match serde_json::from_str(&buffer) {
                 Ok(req) => req,
                 Err(_e) => {
-                    let error_response = DaemonResponse::error(
-                        0,
-                        DaemonError::parse_error(),
-                    );
+                    let error_response = DaemonResponse::error(0, DaemonError::parse_error());
                     let response_json = serde_json::to_string(&error_response)?;
                     writer.write_all(response_json.as_bytes()).await?;
                     writer.write_all(b"\n").await?;
@@ -290,11 +287,15 @@ impl DaemonServer {
 
     /// Handle a hover request.
     async fn handle_hover(&self, params: Value) -> Result<Value> {
-        let params: HoverParams = serde_json::from_value(params)
-            .context("Invalid hover parameters")?;
+        let params: HoverParams =
+            serde_json::from_value(params).context("Invalid hover parameters")?;
 
         let client = {
-            self.lsp_pool.lock().await.get_or_create(params.workspace).await?
+            self.lsp_pool
+                .lock()
+                .await
+                .get_or_create(params.workspace)
+                .await?
         };
 
         let file_str = params.file.to_string_lossy().to_string();
@@ -306,15 +307,21 @@ impl DaemonServer {
 
     /// Handle a definition request.
     async fn handle_definition(&self, params: Value) -> Result<Value> {
-        let params: DefinitionParams = serde_json::from_value(params)
-            .context("Invalid definition parameters")?;
+        let params: DefinitionParams =
+            serde_json::from_value(params).context("Invalid definition parameters")?;
 
         let client = {
-            self.lsp_pool.lock().await.get_or_create(params.workspace).await?
+            self.lsp_pool
+                .lock()
+                .await
+                .get_or_create(params.workspace)
+                .await?
         };
 
         let file_str = params.file.to_string_lossy().to_string();
-        let locations = client.goto_definition(&file_str, params.line, params.column).await?;
+        let locations = client
+            .goto_definition(&file_str, params.line, params.column)
+            .await?;
 
         let location = locations.into_iter().next();
         let result = DefinitionResult { location };
@@ -323,11 +330,15 @@ impl DaemonServer {
 
     /// Handle a workspace symbols request.
     async fn handle_workspace_symbols(&self, params: Value) -> Result<Value> {
-        let params: WorkspaceSymbolsParams = serde_json::from_value(params)
-            .context("Invalid workspace symbols parameters")?;
+        let params: WorkspaceSymbolsParams =
+            serde_json::from_value(params).context("Invalid workspace symbols parameters")?;
 
         let client = {
-            self.lsp_pool.lock().await.get_or_create(params.workspace).await?
+            self.lsp_pool
+                .lock()
+                .await
+                .get_or_create(params.workspace)
+                .await?
         };
 
         let mut symbols = client.workspace_symbols(&params.query).await?;
@@ -343,11 +354,15 @@ impl DaemonServer {
 
     /// Handle a document symbols request.
     async fn handle_document_symbols(&self, params: Value) -> Result<Value> {
-        let params: DocumentSymbolsParams = serde_json::from_value(params)
-            .context("Invalid document symbols parameters")?;
+        let params: DocumentSymbolsParams =
+            serde_json::from_value(params).context("Invalid document symbols parameters")?;
 
         let client = {
-            self.lsp_pool.lock().await.get_or_create(params.workspace).await?
+            self.lsp_pool
+                .lock()
+                .await
+                .get_or_create(params.workspace)
+                .await?
         };
 
         let file_str = params.file.to_string_lossy().to_string();
@@ -430,8 +445,7 @@ impl DaemonServer {
 
         // Remove socket file
         if self.socket_path.exists() {
-            std::fs::remove_file(&self.socket_path)
-                .context("Failed to remove socket file")?;
+            std::fs::remove_file(&self.socket_path).context("Failed to remove socket file")?;
         }
 
         Ok(())
@@ -473,8 +487,7 @@ impl DaemonServer {
             use std::process::Command;
 
             // Get the current executable path
-            let exe = std::env::current_exe()
-                .context("Failed to get current executable path")?;
+            let exe = std::env::current_exe().context("Failed to get current executable path")?;
 
             // Spawn daemon process in background
             Command::new(exe)

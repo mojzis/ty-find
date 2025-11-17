@@ -11,18 +11,29 @@ pub mod server;
 
 // Re-export main types for convenience
 #[allow(unused_imports)]
-pub use client::{DaemonClient, ensure_daemon_running, get_socket_path};
+pub use client::{ensure_daemon_running, get_socket_path, DaemonClient};
 #[allow(unused_imports)]
 pub use pool::LspClientPool;
 #[allow(unused_imports)]
-pub use server::DaemonServer;
-#[allow(unused_imports)]
 pub use protocol::{
-    DaemonError, DaemonRequest, DaemonResponse, Method,
+    DaemonError,
+    DaemonRequest,
+    DaemonResponse,
+    DefinitionParams,
+    DefinitionResult,
+    DiagnosticsParams,
+    DiagnosticsResult,
+    DocumentSymbolsParams,
+    DocumentSymbolsResult,
     // Request types
-    HoverParams, DefinitionParams, WorkspaceSymbolsParams,
-    DocumentSymbolsParams, DiagnosticsParams, PingParams,
+    HoverParams,
     // Response types
-    HoverResult, DefinitionResult, WorkspaceSymbolsResult,
-    DocumentSymbolsResult, DiagnosticsResult, PingResult,
+    HoverResult,
+    Method,
+    PingParams,
+    PingResult,
+    WorkspaceSymbolsParams,
+    WorkspaceSymbolsResult,
 };
+#[allow(unused_imports)]
+pub use server::DaemonServer;

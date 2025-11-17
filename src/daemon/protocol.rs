@@ -11,9 +11,7 @@ use serde_json::Value;
 use std::path::PathBuf;
 
 // Re-export LSP types that are used in responses
-pub use crate::lsp::protocol::{
-    DocumentSymbol, Hover, Location, Range, SymbolInformation,
-};
+pub use crate::lsp::protocol::{DocumentSymbol, Hover, Location, Range, SymbolInformation};
 
 /// JSON-RPC 2.0 request from CLI to daemon.
 ///
@@ -216,11 +214,7 @@ impl DaemonError {
     /// File not found error (-32000)
     pub fn file_not_found(file: impl Into<String>) -> Self {
         let file = file.into();
-        Self::with_data(
-            -32000,
-            "File not found",
-            serde_json::json!({"file": file}),
-        )
+        Self::with_data(-32000, "File not found", serde_json::json!({"file": file}))
     }
 
     /// Workspace not found error (-32001)
@@ -554,10 +548,7 @@ mod tests {
 
     #[test]
     fn test_method_serialization() {
-        assert_eq!(
-            serde_json::to_string(&Method::Hover).unwrap(),
-            "\"hover\""
-        );
+        assert_eq!(serde_json::to_string(&Method::Hover).unwrap(), "\"hover\"");
         assert_eq!(
             serde_json::to_string(&Method::Definition).unwrap(),
             "\"definition\""

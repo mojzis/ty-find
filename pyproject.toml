@@ -34,9 +34,6 @@ homepage = "https://github.com/mojzis/ty-find"
 repository = "https://github.com/mojzis/ty-find"
 documentation = "https://github.com/mojzis/ty-find#readme"
 
-[project.scripts]
-ty-find = "ty_find:main"
-
 [project.optional-dependencies]
 dev = [
     "pytest>=6.0",

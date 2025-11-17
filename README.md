@@ -18,7 +18,7 @@ A blazingly fast command-line tool for Python code navigation using ty's LSP ser
 
 ### Quick Install (Recommended)
 
-Pre-built wheels are available for Linux, macOS, and Windows:
+Pre-built wheels are available for Linux and macOS:
 
 ```bash
 # Install from PyPI (coming soon - once first release is published)
@@ -27,6 +27,8 @@ pip install ty-find
 # Or with uv
 uv pip install ty-find
 ```
+
+**Note:** Windows is not currently supported. PRs welcome!
 
 ### For Python Projects
 

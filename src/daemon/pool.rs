@@ -4,11 +4,13 @@
 //! Each client maintains a persistent connection to a ty LSP server process,
 //! allowing for fast response times on subsequent requests.
 
+#![allow(dead_code)]
+
+use anyhow::{Context, Result};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use anyhow::{Context, Result};
 
 use crate::lsp::client::TyLspClient;
 
@@ -117,16 +119,15 @@ impl LspClientPool {
         }
 
         // No existing client, create a new one
-        let workspace_str = workspace
-            .to_str()
-            .context("Invalid workspace path")?;
+        let workspace_str = workspace.to_str().context("Invalid workspace path")?;
 
         let client = TyLspClient::new(workspace_str)
             .await
             .context("Failed to create LSP client")?;
 
         // Start the response handler for this client
-        client.start_response_handler()
+        client
+            .start_response_handler()
             .await
             .context("Failed to start response handler")?;
 
@@ -167,7 +168,7 @@ impl LspClientPool {
     ///
     /// pool.remove(&workspace);
     /// ```
-    pub fn remove(&self, workspace: &PathBuf) {
+    pub fn remove(&self, workspace: &Path) {
         let mut entries = self.entries.lock().unwrap();
         entries.remove(workspace);
     }
@@ -180,7 +181,7 @@ impl LspClientPool {
     /// # Arguments
     ///
     /// * `timeout` - The idle timeout duration. Clients that haven't been accessed
-    ///               for longer than this will be removed.
+    ///   for longer than this will be removed.
     ///
     /// # Returns
     ///

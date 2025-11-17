@@ -1,12 +1,12 @@
-use clap::Parser;
-use std::path::PathBuf;
 use anyhow::Result;
+use clap::Parser;
+use std::path::{Path, PathBuf};
 
 mod cli;
 mod daemon;
 mod lsp;
-mod workspace;
 mod utils;
+mod workspace;
 
 use cli::args::{Cli, Commands, DaemonCommands};
 use cli::output::OutputFormatter;
@@ -25,7 +25,8 @@ async fn main() -> Result<()> {
             .init();
     }
 
-    let workspace_root = cli.workspace
+    let workspace_root = cli
+        .workspace
         .unwrap_or_else(|| std::env::current_dir().unwrap())
         .canonicalize()?;
 
@@ -59,21 +60,23 @@ async fn main() -> Result<()> {
 }
 
 async fn handle_definition_command(
-    workspace_root: &PathBuf,
-    file: &PathBuf,
+    workspace_root: &Path,
+    file: &Path,
     line: u32,
     column: u32,
     formatter: &OutputFormatter,
 ) -> Result<()> {
     let client = TyLspClient::new(&workspace_root.to_string_lossy()).await?;
-    
+
     client.start_response_handler().await?;
-    
-    let locations = client.goto_definition(
-        &file.to_string_lossy(),
-        line.saturating_sub(1),
-        column.saturating_sub(1),
-    ).await?;
+
+    let locations = client
+        .goto_definition(
+            &file.to_string_lossy(),
+            line.saturating_sub(1),
+            column.saturating_sub(1),
+        )
+        .await?;
 
     let query_info = format!("{}:{}:{}", file.display(), line, column);
     println!("{}", formatter.format_definitions(&locations, &query_info));
@@ -82,31 +85,34 @@ async fn handle_definition_command(
 }
 
 async fn handle_find_command(
-    workspace_root: &PathBuf,
-    file: &PathBuf,
+    workspace_root: &Path,
+    file: &Path,
     symbol: &str,
     formatter: &OutputFormatter,
 ) -> Result<()> {
     let client = TyLspClient::new(&workspace_root.to_string_lossy()).await?;
     let finder = SymbolFinder::new(&file.to_string_lossy())?;
-    
+
     client.start_response_handler().await?;
-    
+
     let positions = finder.find_symbol_positions(symbol);
-    
+
     if positions.is_empty() {
         println!("Symbol '{}' not found in {}", symbol, file.display());
         return Ok(());
     }
 
-    println!("Found {} occurrence(s) of '{}' in {}:\n", positions.len(), symbol, file.display());
+    println!(
+        "Found {} occurrence(s) of '{}' in {}:\n",
+        positions.len(),
+        symbol,
+        file.display()
+    );
 
     for (line, column) in positions {
-        let locations = client.goto_definition(
-            &file.to_string_lossy(),
-            line,
-            column,
-        ).await?;
+        let locations = client
+            .goto_definition(&file.to_string_lossy(), line, column)
+            .await?;
 
         if !locations.is_empty() {
             let query_info = format!("{}:{}:{}", file.display(), line + 1, column + 1);
@@ -118,17 +124,17 @@ async fn handle_find_command(
 }
 
 async fn handle_interactive_command(
-    workspace_root: &PathBuf,
+    workspace_root: &Path,
     initial_file: Option<PathBuf>,
     formatter: &OutputFormatter,
 ) -> Result<()> {
     let client = TyLspClient::new(&workspace_root.to_string_lossy()).await?;
-    
+
     client.start_response_handler().await?;
-    
+
     println!("ty-find interactive mode");
     println!("Commands: <file>:<line>:<column>, find <file> <symbol>, quit");
-    
+
     let stdin = std::io::stdin();
     let _current_file = initial_file;
 
@@ -150,8 +156,9 @@ async fn handle_interactive_command(
             if parts.len() >= 3 {
                 let file = PathBuf::from(parts[1]);
                 let symbol = parts[2];
-                
-                if let Err(e) = handle_find_command(workspace_root, &file, symbol, formatter).await {
+
+                if let Err(e) = handle_find_command(workspace_root, &file, symbol, formatter).await
+                {
                     eprintln!("Error: {}", e);
                 }
             } else {
@@ -163,9 +170,14 @@ async fn handle_interactive_command(
                 let line_part = &input[second_pos + 1..pos];
                 let column_part = &input[pos + 1..];
 
-                if let (Ok(line), Ok(column)) = (line_part.parse::<u32>(), column_part.parse::<u32>()) {
+                if let (Ok(line), Ok(column)) =
+                    (line_part.parse::<u32>(), column_part.parse::<u32>())
+                {
                     let file = PathBuf::from(file_part);
-                    if let Err(e) = handle_definition_command(workspace_root, &file, line, column, formatter).await {
+                    if let Err(e) =
+                        handle_definition_command(workspace_root, &file, line, column, formatter)
+                            .await
+                    {
                         eprintln!("Error: {}", e);
                     }
                 } else {
@@ -175,7 +187,9 @@ async fn handle_interactive_command(
                 eprintln!("Usage: <file>:<line>:<column>");
             }
         } else {
-            eprintln!("Unknown command. Use: <file>:<line>:<column>, find <file> <symbol>, or quit");
+            eprintln!(
+                "Unknown command. Use: <file>:<line>:<column>, find <file> <symbol>, or quit"
+            );
         }
     }
 
@@ -184,46 +198,59 @@ async fn handle_interactive_command(
 }
 
 async fn handle_hover_command(
-    workspace_root: &PathBuf,
-    file: &PathBuf,
+    workspace_root: &Path,
+    file: &Path,
     line: u32,
     column: u32,
     formatter: &OutputFormatter,
 ) -> Result<()> {
     let mut client = DaemonClient::connect().await?;
 
-    let result = client.execute_hover(
-        workspace_root.clone(),
-        file.to_string_lossy().to_string(),
-        line.saturating_sub(1),
-        column.saturating_sub(1),
-    ).await?;
+    let result = client
+        .execute_hover(
+            workspace_root.to_path_buf(),
+            file.to_string_lossy().to_string(),
+            line.saturating_sub(1),
+            column.saturating_sub(1),
+        )
+        .await?;
 
     if let Some(hover) = result.hover {
-        println!("{}", formatter.format_hover(&hover, &format!("{}:{}:{}", file.display(), line, column)));
+        println!(
+            "{}",
+            formatter.format_hover(&hover, &format!("{}:{}:{}", file.display(), line, column))
+        );
     } else {
-        println!("No hover information found at {}:{}:{}", file.display(), line, column);
+        println!(
+            "No hover information found at {}:{}:{}",
+            file.display(),
+            line,
+            column
+        );
     }
 
     Ok(())
 }
 
 async fn handle_workspace_symbols_command(
-    workspace_root: &PathBuf,
+    workspace_root: &Path,
     query: &str,
     formatter: &OutputFormatter,
 ) -> Result<()> {
     let mut client = DaemonClient::connect().await?;
 
-    let result = client.execute_workspace_symbols(
-        workspace_root.clone(),
-        query.to_string(),
-    ).await?;
+    let result = client
+        .execute_workspace_symbols(workspace_root.to_path_buf(), query.to_string())
+        .await?;
 
     if result.symbols.is_empty() {
         println!("No symbols found matching '{}'", query);
     } else {
-        println!("Found {} symbol(s) matching '{}':\n", result.symbols.len(), query);
+        println!(
+            "Found {} symbol(s) matching '{}':\n",
+            result.symbols.len(),
+            query
+        );
         println!("{}", formatter.format_workspace_symbols(&result.symbols));
     }
 
@@ -231,16 +258,18 @@ async fn handle_workspace_symbols_command(
 }
 
 async fn handle_document_symbols_command(
-    workspace_root: &PathBuf,
-    file: &PathBuf,
+    workspace_root: &Path,
+    file: &Path,
     formatter: &OutputFormatter,
 ) -> Result<()> {
     let mut client = DaemonClient::connect().await?;
 
-    let result = client.execute_document_symbols(
-        workspace_root.clone(),
-        file.to_string_lossy().to_string(),
-    ).await?;
+    let result = client
+        .execute_document_symbols(
+            workspace_root.to_path_buf(),
+            file.to_string_lossy().to_string(),
+        )
+        .await?;
 
     if result.symbols.is_empty() {
         println!("No symbols found in {}", file.display());
@@ -285,32 +314,28 @@ async fn handle_daemon_command(command: DaemonCommands) -> Result<()> {
             }
         }
 
-        DaemonCommands::Stop => {
-            match DaemonClient::connect().await {
-                Ok(mut client) => {
-                    client.shutdown().await?;
-                    println!("Daemon stopped successfully");
-                }
-                Err(_) => {
-                    println!("Daemon is not running");
-                }
+        DaemonCommands::Stop => match DaemonClient::connect().await {
+            Ok(mut client) => {
+                client.shutdown().await?;
+                println!("Daemon stopped successfully");
             }
-        }
+            Err(_) => {
+                println!("Daemon is not running");
+            }
+        },
 
-        DaemonCommands::Status => {
-            match DaemonClient::connect().await {
-                Ok(mut client) => {
-                    let status = client.ping().await?;
-                    println!("Daemon: running");
-                    println!("Uptime: {}s", status.uptime);
-                    println!("Active workspaces: {}", status.active_workspaces);
-                    println!("Cache size: {}", status.cache_size);
-                }
-                Err(_) => {
-                    println!("Daemon: not running");
-                }
+        DaemonCommands::Status => match DaemonClient::connect().await {
+            Ok(mut client) => {
+                let status = client.ping().await?;
+                println!("Daemon: running");
+                println!("Uptime: {}s", status.uptime);
+                println!("Active workspaces: {}", status.active_workspaces);
+                println!("Cache size: {}", status.cache_size);
             }
-        }
+            Err(_) => {
+                println!("Daemon: not running");
+            }
+        },
     }
 
     Ok(())

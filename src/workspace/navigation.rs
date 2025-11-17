@@ -1,48 +1,50 @@
-use std::fs;
 use anyhow::Result;
+use std::fs;
 
+#[allow(dead_code)]
 pub struct SymbolFinder {
     content: String,
     lines: Vec<String>,
 }
 
+#[allow(dead_code)]
 impl SymbolFinder {
     pub fn new(file_path: &str) -> Result<Self> {
         let content = fs::read_to_string(file_path)?;
         let lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
-        
+
         Ok(Self { content, lines })
     }
 
     pub fn find_symbol_positions(&self, symbol: &str) -> Vec<(u32, u32)> {
         let mut positions = Vec::new();
-        
+
         for (line_idx, line) in self.lines.iter().enumerate() {
             let mut char_pos = 0;
             while let Some(pos) = line[char_pos..].find(symbol) {
                 let actual_pos = char_pos + pos;
-                
+
                 if self.is_whole_word_match(line, actual_pos, symbol) {
                     positions.push((line_idx as u32, actual_pos as u32));
                 }
-                
+
                 char_pos = actual_pos + 1;
             }
         }
-        
+
         positions
     }
 
     fn is_whole_word_match(&self, line: &str, pos: usize, symbol: &str) -> bool {
         let chars: Vec<char> = line.chars().collect();
-        
+
         if pos > 0 {
             let prev_char = chars[pos.saturating_sub(1)];
             if prev_char.is_alphanumeric() || prev_char == '_' {
                 return false;
             }
         }
-        
+
         let end_pos = pos + symbol.len();
         if end_pos < chars.len() {
             let next_char = chars[end_pos];
@@ -50,7 +52,7 @@ impl SymbolFinder {
                 return false;
             }
         }
-        
+
         true
     }
 

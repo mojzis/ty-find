@@ -25,20 +25,18 @@ impl OutputFormatter {
             return format!("No definitions found for: {}", query_info);
         }
 
-        let mut output = format!("Found {} definition(s) for: {}\n\n", locations.len(), query_info);
+        let mut output = format!(
+            "Found {} definition(s) for: {}\n\n",
+            locations.len(),
+            query_info
+        );
 
         for (i, location) in locations.iter().enumerate() {
             let file_path = self.uri_to_path(&location.uri);
             let line = location.range.start.line + 1;
             let column = location.range.start.character + 1;
 
-            output.push_str(&format!(
-                "{}. {}:{}:{}\n",
-                i + 1,
-                file_path,
-                line,
-                column
-            ));
+            output.push_str(&format!("{}. {}:{}:{}\n", i + 1, file_path, line, column));
 
             if let Ok(content) = std::fs::read_to_string(&file_path) {
                 let lines: Vec<&str> = content.lines().collect();
@@ -76,8 +74,8 @@ impl OutputFormatter {
     }
 
     fn uri_to_path(&self, uri: &str) -> String {
-        if uri.starts_with("file://") {
-            uri[7..].to_string()
+        if let Some(stripped) = uri.strip_prefix("file://") {
+            stripped.to_string()
         } else {
             uri.to_string()
         }
@@ -104,12 +102,11 @@ impl OutputFormatter {
             }
             OutputFormat::Csv | OutputFormat::Paths => {
                 // CSV and Paths formats don't make sense for hover, fall back to human
-                let content_str = match &hover.contents {
+                match &hover.contents {
                     HoverContents::Scalar(s) => s.clone(),
                     HoverContents::Array(arr) => arr.join("; "),
                     HoverContents::Markup(markup) => markup.value.clone(),
-                };
-                content_str
+                }
             }
         }
     }
@@ -153,13 +150,11 @@ impl OutputFormatter {
                 }
                 output
             }
-            OutputFormat::Paths => {
-                symbols
-                    .iter()
-                    .map(|symbol| self.uri_to_path(&symbol.location.uri))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            }
+            OutputFormat::Paths => symbols
+                .iter()
+                .map(|symbol| self.uri_to_path(&symbol.location.uri))
+                .collect::<Vec<_>>()
+                .join("\n"),
         }
     }
 
@@ -187,7 +182,13 @@ impl OutputFormatter {
         }
     }
 
-    fn format_document_symbols_recursive(&self, symbols: &[DocumentSymbol], indent: usize, output: &mut String) {
+    #[allow(clippy::only_used_in_recursion)]
+    fn format_document_symbols_recursive(
+        &self,
+        symbols: &[DocumentSymbol],
+        indent: usize,
+        output: &mut String,
+    ) {
         for symbol in symbols {
             let line = symbol.range.start.line + 1;
             let column = symbol.range.start.character + 1;
@@ -204,6 +205,7 @@ impl OutputFormatter {
         }
     }
 
+    #[allow(clippy::only_used_in_recursion)]
     fn format_document_symbols_csv(&self, symbols: &[DocumentSymbol], output: &mut String) {
         for symbol in symbols {
             let line = symbol.range.start.line + 1;

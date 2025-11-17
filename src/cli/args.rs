@@ -8,13 +8,13 @@ use std::path::PathBuf;
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
-    
+
     #[arg(long, value_name = "DIR")]
     pub workspace: Option<PathBuf>,
-    
+
     #[arg(short, long)]
     pub verbose: bool,
-    
+
     #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
     pub format: OutputFormat,
 }

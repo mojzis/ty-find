@@ -15,7 +15,18 @@ A blazingly fast command-line tool for Python code navigation using ty's LSP ser
 
 ### Prerequisites
 - [ty](https://github.com/astral-sh/ty) type checker: `pip install ty`
-- Rust toolchain (for building from source)
+
+### Quick Install (Recommended)
+
+Pre-built wheels are available for Linux, macOS, and Windows:
+
+```bash
+# Install from PyPI (coming soon - once first release is published)
+pip install ty-find
+
+# Or with uv
+uv pip install ty-find
+```
 
 ### For Python Projects
 
@@ -25,29 +36,32 @@ Add to your `pyproject.toml`:
 # For pip/setuptools projects
 [project.optional-dependencies]
 dev = [
-    "ty-find @ git+https://github.com/mojzis/ty-find.git",
+    "ty-find",  # Once published to PyPI
 ]
 
 # For uv projects (recommended)
 [dependency-groups]
 dev = [
-    "ty-find @ git+https://github.com/mojzis/ty-find.git",
+    "ty-find",
 ]
 ```
 
-Then install:
+### Install from Git (Pre-Release)
+
+Until the first PyPI release, install from Git:
+
 ```bash
-# With uv (recommended - will automatically build Rust binary)
-uv sync --group dev
-
-# Or with pip
-pip install -e ".[dev]"
-
-# Or install ty-find directly
+# Requires Rust toolchain to build from source
 pip install "ty-find @ git+https://github.com/mojzis/ty-find.git"
+
+# Or with uv
+uv pip install "ty-find @ git+https://github.com/mojzis/ty-find.git"
 ```
 
-### From Source (Rust)
+**Note:** Installing from Git requires the Rust toolchain. Pre-built wheels eliminate this requirement.
+
+### From Source (Development)
+
 ```bash
 git clone https://github.com/mojzis/ty-find.git
 cd ty-find

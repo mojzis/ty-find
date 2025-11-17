@@ -4,8 +4,10 @@
 //! Each client maintains a persistent connection to a ty LSP server process,
 //! allowing for fast response times on subsequent requests.
 
+#![allow(dead_code)]
+
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
@@ -167,7 +169,7 @@ impl LspClientPool {
     ///
     /// pool.remove(&workspace);
     /// ```
-    pub fn remove(&self, workspace: &PathBuf) {
+    pub fn remove(&self, workspace: &Path) {
         let mut entries = self.entries.lock().unwrap();
         entries.remove(workspace);
     }
@@ -180,7 +182,7 @@ impl LspClientPool {
     /// # Arguments
     ///
     /// * `timeout` - The idle timeout duration. Clients that haven't been accessed
-    ///               for longer than this will be removed.
+    ///   for longer than this will be removed.
     ///
     /// # Returns
     ///

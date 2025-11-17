@@ -1,8 +1,10 @@
 use std::path::{Path, PathBuf};
 use anyhow::Result;
 
+#[allow(dead_code)]
 pub struct WorkspaceDetector;
 
+#[allow(dead_code)]
 impl WorkspaceDetector {
     pub fn find_workspace_root(start_path: &Path) -> Option<PathBuf> {
         let mut current = start_path;

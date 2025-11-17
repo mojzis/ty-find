@@ -1,6 +1,7 @@
 use thiserror::Error;
 
 #[derive(Error, Debug)]
+#[allow(dead_code)]
 pub enum TyFindError {
     #[error("ty LSP server not found or failed to start")]
     TyNotAvailable,

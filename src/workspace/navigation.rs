@@ -1,11 +1,13 @@
 use std::fs;
 use anyhow::Result;
 
+#[allow(dead_code)]
 pub struct SymbolFinder {
     content: String,
     lines: Vec<String>,
 }
 
+#[allow(dead_code)]
 impl SymbolFinder {
     pub fn new(file_path: &str) -> Result<Self> {
         let content = fs::read_to_string(file_path)?;

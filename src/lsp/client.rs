@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::oneshot;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, AsyncReadExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, AsyncReadExt};
 use serde_json::Value;
 use anyhow::Result;
 
@@ -192,6 +192,7 @@ impl TyLspClient {
         self.send_raw_message(&content).await
     }
 
+    #[allow(clippy::await_holding_lock)]
     async fn send_raw_message(&self, content: &str) -> Result<()> {
         let message = format!("Content-Length: {}\r\n\r\n{}", content.len(), content);
         let mut server = self.server.lock().unwrap();

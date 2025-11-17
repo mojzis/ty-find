@@ -4,6 +4,8 @@
 //! and handles JSON-RPC requests from CLI clients. The server maintains a pool
 //! of LSP clients and routes requests to the appropriate LSP server.
 
+#![allow(dead_code)]
+
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -89,7 +91,6 @@ impl DaemonServer {
     pub fn get_socket_path() -> PathBuf {
         #[cfg(unix)]
         {
-            use std::os::unix::fs::PermissionsExt;
             let uid = unsafe { libc::getuid() };
             PathBuf::from(format!("/tmp/ty-find-{}.sock", uid))
         }
@@ -228,7 +229,7 @@ impl DaemonServer {
             // Parse JSON-RPC request
             let request: DaemonRequest = match serde_json::from_str(&buffer) {
                 Ok(req) => req,
-                Err(e) => {
+                Err(_e) => {
                     let error_response = DaemonResponse::error(
                         0,
                         DaemonError::parse_error(),

@@ -1,5 +1,5 @@
 use clap::Parser;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use anyhow::Result;
 
 mod cli;
@@ -59,8 +59,8 @@ async fn main() -> Result<()> {
 }
 
 async fn handle_definition_command(
-    workspace_root: &PathBuf,
-    file: &PathBuf,
+    workspace_root: &Path,
+    file: &Path,
     line: u32,
     column: u32,
     formatter: &OutputFormatter,
@@ -82,8 +82,8 @@ async fn handle_definition_command(
 }
 
 async fn handle_find_command(
-    workspace_root: &PathBuf,
-    file: &PathBuf,
+    workspace_root: &Path,
+    file: &Path,
     symbol: &str,
     formatter: &OutputFormatter,
 ) -> Result<()> {
@@ -118,7 +118,7 @@ async fn handle_find_command(
 }
 
 async fn handle_interactive_command(
-    workspace_root: &PathBuf,
+    workspace_root: &Path,
     initial_file: Option<PathBuf>,
     formatter: &OutputFormatter,
 ) -> Result<()> {
@@ -184,8 +184,8 @@ async fn handle_interactive_command(
 }
 
 async fn handle_hover_command(
-    workspace_root: &PathBuf,
-    file: &PathBuf,
+    workspace_root: &Path,
+    file: &Path,
     line: u32,
     column: u32,
     formatter: &OutputFormatter,
@@ -193,7 +193,7 @@ async fn handle_hover_command(
     let mut client = DaemonClient::connect().await?;
 
     let result = client.execute_hover(
-        workspace_root.clone(),
+        workspace_root.to_path_buf(),
         file.to_string_lossy().to_string(),
         line.saturating_sub(1),
         column.saturating_sub(1),
@@ -209,14 +209,14 @@ async fn handle_hover_command(
 }
 
 async fn handle_workspace_symbols_command(
-    workspace_root: &PathBuf,
+    workspace_root: &Path,
     query: &str,
     formatter: &OutputFormatter,
 ) -> Result<()> {
     let mut client = DaemonClient::connect().await?;
 
     let result = client.execute_workspace_symbols(
-        workspace_root.clone(),
+        workspace_root.to_path_buf(),
         query.to_string(),
     ).await?;
 
@@ -231,14 +231,14 @@ async fn handle_workspace_symbols_command(
 }
 
 async fn handle_document_symbols_command(
-    workspace_root: &PathBuf,
-    file: &PathBuf,
+    workspace_root: &Path,
+    file: &Path,
     formatter: &OutputFormatter,
 ) -> Result<()> {
     let mut client = DaemonClient::connect().await?;
 
     let result = client.execute_document_symbols(
-        workspace_root.clone(),
+        workspace_root.to_path_buf(),
         file.to_string_lossy().to_string(),
     ).await?;
 

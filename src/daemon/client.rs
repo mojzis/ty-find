@@ -4,6 +4,8 @@
 //! sockets and sends JSON-RPC 2.0 requests. The client handles auto-starting
 //! the daemon if it's not already running.
 
+#![allow(dead_code)]
+
 use anyhow::{Context, Result};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -456,7 +458,7 @@ fn spawn_daemon(socket_path: &Path) -> Result<()> {
     // Spawn daemon process
     // TODO: This will need to be updated once we implement the actual daemon server
     // For now, this is a placeholder that shows the intended behavior
-    let child = Command::new(&exe)
+    let child = Command::new(exe)
         .arg("daemon")
         .arg("start")
         .arg("--socket")

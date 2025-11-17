@@ -3,12 +3,15 @@ use std::path::PathBuf;
 use anyhow::Result;
 
 mod cli;
+mod daemon;
 mod lsp;
 mod workspace;
 mod utils;
 
-use cli::args::{Cli, Commands};
+use cli::args::{Cli, Commands, DaemonCommands};
 use cli::output::OutputFormatter;
+use daemon::client::DaemonClient;
+use daemon::server::DaemonServer;
 use lsp::client::TyLspClient;
 use workspace::navigation::SymbolFinder;
 
@@ -37,6 +40,18 @@ async fn main() -> Result<()> {
         }
         Commands::Interactive { file } => {
             handle_interactive_command(&workspace_root, file, &formatter).await?;
+        }
+        Commands::Hover { file, line, column } => {
+            handle_hover_command(&workspace_root, &file, line, column, &formatter).await?;
+        }
+        Commands::WorkspaceSymbols { query } => {
+            handle_workspace_symbols_command(&workspace_root, &query, &formatter).await?;
+        }
+        Commands::DocumentSymbols { file } => {
+            handle_document_symbols_command(&workspace_root, &file, &formatter).await?;
+        }
+        Commands::Daemon { command } => {
+            handle_daemon_command(command).await?;
         }
     }
 
@@ -165,5 +180,138 @@ async fn handle_interactive_command(
     }
 
     println!("Goodbye!");
+    Ok(())
+}
+
+async fn handle_hover_command(
+    workspace_root: &PathBuf,
+    file: &PathBuf,
+    line: u32,
+    column: u32,
+    formatter: &OutputFormatter,
+) -> Result<()> {
+    let mut client = DaemonClient::connect().await?;
+
+    let result = client.execute_hover(
+        workspace_root.clone(),
+        file.to_string_lossy().to_string(),
+        line.saturating_sub(1),
+        column.saturating_sub(1),
+    ).await?;
+
+    if let Some(hover) = result.hover {
+        println!("{}", formatter.format_hover(&hover, &format!("{}:{}:{}", file.display(), line, column)));
+    } else {
+        println!("No hover information found at {}:{}:{}", file.display(), line, column);
+    }
+
+    Ok(())
+}
+
+async fn handle_workspace_symbols_command(
+    workspace_root: &PathBuf,
+    query: &str,
+    formatter: &OutputFormatter,
+) -> Result<()> {
+    let mut client = DaemonClient::connect().await?;
+
+    let result = client.execute_workspace_symbols(
+        workspace_root.clone(),
+        query.to_string(),
+    ).await?;
+
+    if result.symbols.is_empty() {
+        println!("No symbols found matching '{}'", query);
+    } else {
+        println!("Found {} symbol(s) matching '{}':\n", result.symbols.len(), query);
+        println!("{}", formatter.format_workspace_symbols(&result.symbols));
+    }
+
+    Ok(())
+}
+
+async fn handle_document_symbols_command(
+    workspace_root: &PathBuf,
+    file: &PathBuf,
+    formatter: &OutputFormatter,
+) -> Result<()> {
+    let mut client = DaemonClient::connect().await?;
+
+    let result = client.execute_document_symbols(
+        workspace_root.clone(),
+        file.to_string_lossy().to_string(),
+    ).await?;
+
+    if result.symbols.is_empty() {
+        println!("No symbols found in {}", file.display());
+    } else {
+        println!("Document outline for {}:\n", file.display());
+        println!("{}", formatter.format_document_symbols(&result.symbols));
+    }
+
+    Ok(())
+}
+
+async fn handle_daemon_command(command: DaemonCommands) -> Result<()> {
+    match command {
+        DaemonCommands::Start => {
+            // Check if daemon is already running
+            let socket_path = daemon::client::get_socket_path()?;
+
+            if socket_path.exists() {
+                match DaemonClient::connect().await {
+                    Ok(_) => {
+                        println!("Daemon is already running");
+                        return Ok(());
+                    }
+                    Err(_) => {
+                        // Socket exists but connection failed, clean up stale socket
+                        let _ = std::fs::remove_file(&socket_path);
+                    }
+                }
+            }
+
+            // Spawn daemon in background
+            DaemonServer::spawn_background()?;
+
+            // Wait for daemon to start
+            println!("Starting daemon...");
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+            // Verify it started
+            match DaemonClient::connect().await {
+                Ok(_) => println!("Daemon started successfully"),
+                Err(e) => println!("Failed to start daemon: {}", e),
+            }
+        }
+
+        DaemonCommands::Stop => {
+            match DaemonClient::connect().await {
+                Ok(mut client) => {
+                    client.shutdown().await?;
+                    println!("Daemon stopped successfully");
+                }
+                Err(_) => {
+                    println!("Daemon is not running");
+                }
+            }
+        }
+
+        DaemonCommands::Status => {
+            match DaemonClient::connect().await {
+                Ok(mut client) => {
+                    let status = client.ping().await?;
+                    println!("Daemon: running");
+                    println!("Uptime: {}s", status.uptime);
+                    println!("Active workspaces: {}", status.active_workspaces);
+                    println!("Cache size: {}", status.cache_size);
+                }
+                Err(_) => {
+                    println!("Daemon: not running");
+                }
+            }
+        }
+    }
+
     Ok(())
 }

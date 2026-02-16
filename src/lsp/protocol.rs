@@ -181,6 +181,24 @@ pub struct WorkspaceSymbolParams {
     pub partial_result_token: Option<String>,
 }
 
+// References request params
+#[derive(Serialize, Deserialize)]
+pub struct ReferenceParams {
+    #[serde(flatten)]
+    pub text_document_position_params: TextDocumentPositionParams,
+    pub context: ReferenceContext,
+    #[serde(rename = "workDoneToken", skip_serializing_if = "Option::is_none")]
+    pub work_done_token: Option<String>,
+    #[serde(rename = "partialResultToken", skip_serializing_if = "Option::is_none")]
+    pub partial_result_token: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ReferenceContext {
+    #[serde(rename = "includeDeclaration")]
+    pub include_declaration: bool,
+}
+
 // Document symbols request params
 #[derive(Serialize, Deserialize)]
 pub struct DocumentSymbolParams {

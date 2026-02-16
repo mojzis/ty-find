@@ -42,6 +42,9 @@ impl TyLspClient {
                         "dynamicRegistration": false,
                         "contentFormat": ["markdown", "plaintext"]
                     },
+                    "references": {
+                        "dynamicRegistration": false
+                    },
                     "documentSymbol": {
                         "dynamicRegistration": false,
                         "hierarchicalDocumentSymbolSupport": true
@@ -88,6 +91,43 @@ impl TyLspClient {
             let locations: Vec<Location> = match result {
                 Value::Array(arr) => serde_json::from_value(Value::Array(arr))?,
                 Value::Object(_) => vec![serde_json::from_value(result)?],
+                _ => vec![],
+            };
+            Ok(locations)
+        } else {
+            Ok(vec![])
+        }
+    }
+
+    pub async fn find_references(
+        &self,
+        file_path: &str,
+        line: u32,
+        character: u32,
+        include_declaration: bool,
+    ) -> Result<Vec<Location>> {
+        let uri = format!("file://{}", std::fs::canonicalize(file_path)?.display());
+
+        let params = ReferenceParams {
+            text_document_position_params: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier { uri },
+                position: Position { line, character },
+            },
+            context: ReferenceContext {
+                include_declaration,
+            },
+            work_done_token: None,
+            partial_result_token: None,
+        };
+
+        let response = self
+            .send_request("textDocument/references", serde_json::to_value(params)?)
+            .await?;
+
+        if let Some(result) = response.result {
+            let locations: Vec<Location> = match result {
+                Value::Array(arr) => serde_json::from_value(Value::Array(arr))?,
+                Value::Null => vec![],
                 _ => vec![],
             };
             Ok(locations)

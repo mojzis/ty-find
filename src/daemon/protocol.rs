@@ -270,6 +270,9 @@ pub enum Method {
     /// Get document outline (all symbols in a file)
     DocumentSymbols,
 
+    /// Find all references to a symbol at a position
+    References,
+
     /// Get diagnostics (type errors, warnings) for a file
     Diagnostics,
 
@@ -288,6 +291,7 @@ impl Method {
             Method::Definition => "definition",
             Method::WorkspaceSymbols => "workspace_symbols",
             Method::DocumentSymbols => "document_symbols",
+            Method::References => "references",
             Method::Diagnostics => "diagnostics",
             Method::Ping => "ping",
             Method::Shutdown => "shutdown",
@@ -363,6 +367,27 @@ pub struct DocumentSymbolsParams {
     pub file: PathBuf,
 }
 
+/// Parameters for references request.
+///
+/// Returns all locations where a symbol is referenced.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ReferencesParams {
+    /// Workspace root directory
+    pub workspace: PathBuf,
+
+    /// File path (absolute or relative to workspace)
+    pub file: PathBuf,
+
+    /// Line number (0-based)
+    pub line: u32,
+
+    /// Column number (0-based)
+    pub column: u32,
+
+    /// Whether to include the declaration in results
+    pub include_declaration: bool,
+}
+
 /// Parameters for diagnostics request.
 ///
 /// Returns type errors and warnings for a file.
@@ -419,6 +444,13 @@ pub struct WorkspaceSymbolsResult {
 pub struct DocumentSymbolsResult {
     /// Hierarchical symbol tree
     pub symbols: Vec<DocumentSymbol>,
+}
+
+/// Result of a references request.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ReferencesResult {
+    /// List of reference locations
+    pub locations: Vec<Location>,
 }
 
 /// A single diagnostic message.

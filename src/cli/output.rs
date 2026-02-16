@@ -81,6 +81,43 @@ impl OutputFormatter {
         }
     }
 
+    pub fn format_references(&self, locations: &[Location], query_info: &str) -> String {
+        match self.format {
+            OutputFormat::Human => {
+                if locations.is_empty() {
+                    return format!("No references found for: {}", query_info);
+                }
+
+                let mut output = format!(
+                    "Found {} reference(s) for: {}\n\n",
+                    locations.len(),
+                    query_info
+                );
+
+                for (i, location) in locations.iter().enumerate() {
+                    let file_path = self.uri_to_path(&location.uri);
+                    let line = location.range.start.line + 1;
+                    let column = location.range.start.character + 1;
+
+                    output.push_str(&format!("{}. {}:{}:{}\n", i + 1, file_path, line, column));
+
+                    if let Ok(content) = std::fs::read_to_string(&file_path) {
+                        let lines: Vec<&str> = content.lines().collect();
+                        if let Some(line_content) = lines.get((line - 1) as usize) {
+                            output.push_str(&format!("   {}\n", line_content.trim()));
+                        }
+                    }
+                    output.push('\n');
+                }
+
+                output
+            }
+            OutputFormat::Json => self.format_json(locations),
+            OutputFormat::Csv => self.format_csv(locations),
+            OutputFormat::Paths => self.format_paths(locations),
+        }
+    }
+
     pub fn format_hover(&self, hover: &Hover, query_info: &str) -> String {
         match self.format {
             OutputFormat::Human => {

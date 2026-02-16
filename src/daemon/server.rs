@@ -274,6 +274,7 @@ impl DaemonServer {
             Method::Definition => self.handle_definition(request.params).await,
             Method::WorkspaceSymbols => self.handle_workspace_symbols(request.params).await,
             Method::DocumentSymbols => self.handle_document_symbols(request.params).await,
+            Method::References => self.handle_references(request.params).await,
             Method::Diagnostics => self.handle_diagnostics(request.params).await,
             Method::Ping => self.handle_ping(request.params).await,
             Method::Shutdown => self.handle_shutdown(request.params).await,
@@ -369,6 +370,33 @@ impl DaemonServer {
         let symbols = client.document_symbols(&file_str).await?;
 
         let result = DocumentSymbolsResult { symbols };
+        Ok(serde_json::to_value(result)?)
+    }
+
+    /// Handle a references request.
+    async fn handle_references(&self, params: Value) -> Result<Value> {
+        let params: ReferencesParams =
+            serde_json::from_value(params).context("Invalid references parameters")?;
+
+        let client = {
+            self.lsp_pool
+                .lock()
+                .await
+                .get_or_create(params.workspace)
+                .await?
+        };
+
+        let file_str = params.file.to_string_lossy().to_string();
+        let locations = client
+            .find_references(
+                &file_str,
+                params.line,
+                params.column,
+                params.include_declaration,
+            )
+            .await?;
+
+        let result = ReferencesResult { locations };
         Ok(serde_json::to_value(result)?)
     }
 

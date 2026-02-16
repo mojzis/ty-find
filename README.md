@@ -6,7 +6,7 @@ A blazingly fast command-line tool for Python code navigation using ty's LSP ser
 
 - 🚀 **Fast**: Daemon mode keeps LSP warm (50-100ms vs 1-2s per command)
 - 🔍 **Type-aware**: Uses ty's LSP for accurate symbol resolution
-- 📦 **Multiple commands**: hover, definition, symbols, outline
+- 📦 **Multiple commands**: hover, definition, references, symbols, outline
 - 🎯 **JSON output**: Perfect for AI coding tools like Claude Code
 - 🔄 **Auto-daemon**: Transparently starts background daemon on first use
 - 🛡️ **User-isolated**: Each user gets their own daemon process
@@ -98,6 +98,32 @@ ty-find definition myfile.py --line 10 --column 5
 # Output:
 Definition: src/services/user.py:15:6
 def create_user(name: str, email: str) -> User:
+```
+
+### Find References
+
+Find all usages of a symbol across the workspace:
+
+```bash
+ty-find references myfile.py --line 10 --column 5
+
+# Output:
+Found 4 reference(s) for: myfile.py:10:5
+
+1. src/services/user.py:15:6
+   def create_user(name: str, email: str) -> User:
+
+2. src/api/routes.py:42:12
+   result = create_user(name, email)
+
+3. tests/test_user.py:8:4
+   create_user("test", "test@example.com")
+
+4. tests/test_user.py:22:4
+   create_user("other", "other@example.com")
+
+# JSON output
+ty-find references myfile.py --line 10 --column 5 --format json
 ```
 
 ### Search Symbols Across Workspace
@@ -255,6 +281,9 @@ ty-find hover src/calculator.py --line 25 --column 10
 # Find where 'calculate_total' is defined
 ty-find find src/calculator.py calculate_total
 
+# Find all usages of the symbol at line 25, column 10
+ty-find references src/calculator.py --line 25 --column 10
+
 # Search for all authentication-related symbols
 ty-find workspace-symbols --query "auth"
 
@@ -284,6 +313,7 @@ ty-find workspace-symbols --query "" --format json | jq '.results[] | select(.ki
 |---------|-------------|---------|
 | `hover` | Get type information at position | `ty-find hover file.py -l 10 -c 5` |
 | `definition` | Go to definition | `ty-find definition file.py -l 10 -c 5` |
+| `references` | Find all references to a symbol | `ty-find references file.py -l 10 -c 5` |
 | `workspace-symbols` | Search symbols across workspace | `ty-find workspace-symbols --query "User"` |
 | `document-symbols` | Get file outline | `ty-find document-symbols file.py` |
 | `find` | Find symbol by name in file | `ty-find find file.py symbol_name` |

@@ -328,6 +328,46 @@ impl DaemonClient {
         serde_json::from_value(result).context("Failed to deserialize document symbols result")
     }
 
+    /// Execute a references request.
+    ///
+    /// Returns all locations where a symbol at the given position is referenced.
+    ///
+    /// # Arguments
+    /// - `workspace`: Workspace root directory
+    /// - `file`: File path (absolute or relative to workspace)
+    /// - `line`: Line number (0-based)
+    /// - `column`: Column number (0-based)
+    /// - `include_declaration`: Whether to include the declaration in results
+    pub async fn execute_references(
+        &mut self,
+        workspace: PathBuf,
+        file: String,
+        line: u32,
+        column: u32,
+        include_declaration: bool,
+    ) -> Result<ReferencesResult> {
+        let params = ReferencesParams {
+            workspace,
+            file: PathBuf::from(file),
+            line,
+            column,
+            include_declaration,
+        };
+
+        let params_value =
+            serde_json::to_value(params).context("Failed to serialize references params")?;
+
+        let response = self.send_request(Method::References, params_value).await?;
+
+        if let Some(error) = response.error {
+            anyhow::bail!("Daemon error: {}", error.message);
+        }
+
+        let result = response.result.context("Response missing result field")?;
+
+        serde_json::from_value(result).context("Failed to deserialize references result")
+    }
+
     /// Send a ping request to check daemon health.
     ///
     /// Returns daemon status information including uptime and cache size.

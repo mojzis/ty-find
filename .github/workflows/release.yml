@@ -80,7 +80,7 @@ jobs:
           find dist -name '*.tar.gz' -exec cp {} wheels/ \;
 
       - name: Create Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           files: wheels/*
           generate_release_notes: true

@@ -7,24 +7,24 @@ license = "MIT"
 repository = "https://github.com/mojzis/ty-find"
 
 [dependencies]
-tokio = { version = "1.0", features = ["full"] }
+tokio = { version = "1.49", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-clap = { version = "4.0", features = ["derive"] }
+clap = { version = "4.5", features = ["derive"] }
 anyhow = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-uuid = { version = "1.0", features = ["v4"] }
+uuid = { version = "1.21", features = ["v4"] }
 futures = "0.3"
-thiserror = "1.0"
+thiserror = "2.0"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
 [dev-dependencies]
-tempfile = "3.0"
-assert_cmd = "2.0"
-predicates = "3.0"
+tempfile = "3.25"
+assert_cmd = "2.1"
+predicates = "3.1"
 
 [[bin]]
 name = "ty-find"

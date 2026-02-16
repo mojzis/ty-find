@@ -11,7 +11,7 @@ use serde_json::Value;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{broadcast, Mutex};
 
@@ -214,26 +214,60 @@ impl DaemonServer {
     async fn handle_connection(self: Arc<Self>, stream: UnixStream) -> Result<()> {
         let (reader, mut writer) = stream.into_split();
         let mut reader = BufReader::new(reader);
-        let mut buffer = String::new();
+        let mut header_line = String::new();
 
         loop {
-            buffer.clear();
+            header_line.clear();
 
-            // Read the request
-            let bytes_read = reader.read_line(&mut buffer).await?;
+            // Read Content-Length header
+            let bytes_read = reader.read_line(&mut header_line).await?;
             if bytes_read == 0 {
                 // EOF - client disconnected
                 break;
             }
 
+            // Parse content length
+            let content_length = match header_line
+                .trim()
+                .strip_prefix("Content-Length: ")
+            {
+                Some(len_str) => match len_str.parse::<usize>() {
+                    Ok(len) => len,
+                    Err(_) => {
+                        let error_response = DaemonResponse::error(0, DaemonError::parse_error());
+                        let response_json = serde_json::to_string(&error_response)?;
+                        let framed = format!("Content-Length: {}\r\n\r\n{}", response_json.len(), response_json);
+                        writer.write_all(framed.as_bytes()).await?;
+                        writer.flush().await?;
+                        continue;
+                    }
+                },
+                None => {
+                    let error_response = DaemonResponse::error(0, DaemonError::parse_error());
+                    let response_json = serde_json::to_string(&error_response)?;
+                    let framed = format!("Content-Length: {}\r\n\r\n{}", response_json.len(), response_json);
+                    writer.write_all(framed.as_bytes()).await?;
+                    writer.flush().await?;
+                    continue;
+                }
+            };
+
+            // Read empty separator line
+            let mut empty_line = String::new();
+            reader.read_line(&mut empty_line).await?;
+
+            // Read request body
+            let mut body = vec![0u8; content_length];
+            reader.read_exact(&mut body).await?;
+
             // Parse JSON-RPC request
-            let request: DaemonRequest = match serde_json::from_str(&buffer) {
+            let request: DaemonRequest = match serde_json::from_slice(&body) {
                 Ok(req) => req,
                 Err(_e) => {
                     let error_response = DaemonResponse::error(0, DaemonError::parse_error());
                     let response_json = serde_json::to_string(&error_response)?;
-                    writer.write_all(response_json.as_bytes()).await?;
-                    writer.write_all(b"\n").await?;
+                    let framed = format!("Content-Length: {}\r\n\r\n{}", response_json.len(), response_json);
+                    writer.write_all(framed.as_bytes()).await?;
                     writer.flush().await?;
                     continue;
                 }
@@ -244,10 +278,10 @@ impl DaemonServer {
             // Process the request
             let response = self.handle_request(request).await;
 
-            // Send response
+            // Send response with Content-Length framing
             let response_json = serde_json::to_string(&response)?;
-            writer.write_all(response_json.as_bytes()).await?;
-            writer.write_all(b"\n").await?;
+            let framed = format!("Content-Length: {}\r\n\r\n{}", response_json.len(), response_json);
+            writer.write_all(framed.as_bytes()).await?;
             writer.flush().await?;
 
             tracing::debug!("Sent response for request ID {}", response.id);

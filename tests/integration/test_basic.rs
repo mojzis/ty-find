@@ -4,23 +4,25 @@ use std::fs;
 use std::process;
 use tempfile::TempDir;
 
-/// Check whether `ty` is available on PATH (needed for LSP-based tests).
-fn ty_is_available() -> bool {
-    process::Command::new("ty")
+/// Ensure `ty` is available on PATH. Panics with install instructions if missing.
+fn require_ty() {
+    let available = process::Command::new("ty")
         .arg("--version")
         .stdout(process::Stdio::null())
         .stderr(process::Stdio::null())
         .status()
         .map(|s| s.success())
-        .unwrap_or(false)
+        .unwrap_or(false);
+
+    assert!(
+        available,
+        "ty is not installed. Install it with: pip install ty"
+    );
 }
 
 #[tokio::test]
 async fn test_definition_command() {
-    if !ty_is_available() {
-        eprintln!("skipping: ty not found on PATH");
-        return;
-    }
+    require_ty();
 
     let temp_dir = TempDir::new().unwrap();
     let test_file = temp_dir.path().join("test.py");
@@ -55,10 +57,7 @@ def main():
 
 #[tokio::test]
 async fn test_find_command() {
-    if !ty_is_available() {
-        eprintln!("skipping: ty not found on PATH");
-        return;
-    }
+    require_ty();
 
     let temp_dir = TempDir::new().unwrap();
     let test_file = temp_dir.path().join("test.py");
@@ -93,10 +92,7 @@ result = calc.add(1, 2)
 
 #[tokio::test]
 async fn test_json_output() {
-    if !ty_is_available() {
-        eprintln!("skipping: ty not found on PATH");
-        return;
-    }
+    require_ty();
 
     let temp_dir = TempDir::new().unwrap();
     let test_file = temp_dir.path().join("test.py");

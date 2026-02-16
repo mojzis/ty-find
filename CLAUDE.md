@@ -19,10 +19,13 @@ cargo build --release
 # Run the tool directly during development
 cargo run -- definition test_example.py --line 1 --column 5
 
+# Install ty (required for integration tests)
+pip install ty
+
 # Test the Rust code
 cargo test
 
-# Run integration tests
+# Run integration tests (requires ty on PATH)
 cargo test --test test_basic
 
 # Check Python packaging works

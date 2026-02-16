@@ -517,10 +517,12 @@ impl DaemonServer {
             // Get the current executable path
             let exe = std::env::current_exe().context("Failed to get current executable path")?;
 
-            // Spawn daemon process in background
+            // Spawn daemon process in background with --foreground so the
+            // child actually runs the server instead of spawning yet another process.
             Command::new(exe)
                 .arg("daemon")
                 .arg("start")
+                .arg("--foreground")
                 .stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())

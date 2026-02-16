@@ -25,6 +25,15 @@ libc = "0.2"
 tempfile = "3.25"
 assert_cmd = "2.1"
 predicates = "3.1"
+libc = "0.2"
+
+[[test]]
+name = "test_basic"
+path = "tests/integration/test_basic.rs"
+
+[[test]]
+name = "test_daemon"
+path = "tests/integration/test_daemon.rs"
 
 [[bin]]
 name = "ty-find"

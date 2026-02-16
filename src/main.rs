@@ -84,14 +84,11 @@ async fn handle_definition_command(
 ) -> Result<()> {
     let client = TyLspClient::new(&workspace_root.to_string_lossy()).await?;
 
-    client.start_response_handler().await?;
+    let file_str = file.to_string_lossy();
+    client.open_document(&file_str).await?;
 
     let locations = client
-        .goto_definition(
-            &file.to_string_lossy(),
-            line.saturating_sub(1),
-            column.saturating_sub(1),
-        )
+        .goto_definition(&file_str, line.saturating_sub(1), column.saturating_sub(1))
         .await?;
 
     let query_info = format!("{}:{}:{}", file.display(), line, column);
@@ -136,9 +133,10 @@ async fn handle_find_command(
     formatter: &OutputFormatter,
 ) -> Result<()> {
     let client = TyLspClient::new(&workspace_root.to_string_lossy()).await?;
-    let finder = SymbolFinder::new(&file.to_string_lossy())?;
+    let file_str = file.to_string_lossy();
+    let finder = SymbolFinder::new(&file_str)?;
 
-    client.start_response_handler().await?;
+    client.open_document(&file_str).await?;
 
     let positions = finder.find_symbol_positions(symbol);
 
@@ -173,9 +171,7 @@ async fn handle_interactive_command(
     initial_file: Option<PathBuf>,
     formatter: &OutputFormatter,
 ) -> Result<()> {
-    let client = TyLspClient::new(&workspace_root.to_string_lossy()).await?;
-
-    client.start_response_handler().await?;
+    let _client = TyLspClient::new(&workspace_root.to_string_lossy()).await?;
 
     println!("ty-find interactive mode");
     println!("Commands: <file>:<line>:<column>, find <file> <symbol>, quit");

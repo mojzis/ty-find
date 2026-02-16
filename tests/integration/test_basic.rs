@@ -91,24 +91,42 @@ result = calc.add(1, 2)
         .stdout(predicate::str::contains("add"));
 }
 
-#[test]
-fn test_json_output() {
+#[tokio::test]
+async fn test_json_output() {
     if !ty_is_available() {
         eprintln!("skipping: ty not found on PATH");
         return;
     }
 
+    let temp_dir = TempDir::new().unwrap();
+    let test_file = temp_dir.path().join("test.py");
+
+    fs::write(
+        &test_file,
+        r#"
+def greet():
+    return "hi"
+
+greet()
+"#,
+    )
+    .unwrap();
+
     let mut cmd = Command::cargo_bin("ty-find").unwrap();
-    cmd.arg("--format")
+    cmd.arg("--workspace")
+        .arg(temp_dir.path())
+        .arg("--format")
         .arg("json")
         .arg("definition")
-        .arg("nonexistent.py")
+        .arg(&test_file)
         .arg("--line")
-        .arg("1")
+        .arg("5")
         .arg("--column")
         .arg("1");
 
+    // JSON output should contain a valid location with uri and range fields
     cmd.assert()
         .success()
-        .stdout(predicate::str::contains("[]"));
+        .stdout(predicate::str::contains("uri"))
+        .stdout(predicate::str::contains("range"));
 }

@@ -121,7 +121,10 @@ async fn handle_references_command(
         .await?;
 
     let query_info = format!("{}:{}:{}", file.display(), line, column);
-    println!("{}", formatter.format_references(&result.locations, &query_info));
+    println!(
+        "{}",
+        formatter.format_references(&result.locations, &query_info)
+    );
 
     Ok(())
 }

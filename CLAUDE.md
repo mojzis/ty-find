@@ -49,6 +49,16 @@ ty-find find test_example.py calculate_sum
 ty-find interactive
 ```
 
+## Pre-commit Checks
+
+**Always run all checks before committing to avoid CI pipeline failures:**
+
+```bash
+cargo fmt --check && cargo clippy --all-features -- -D warnings && cargo test --all-features
+```
+
+If formatting fails, fix it with `cargo fmt` and re-run the checks.
+
 ## Architecture
 
 ### Core Components

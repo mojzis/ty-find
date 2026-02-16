@@ -227,16 +227,17 @@ impl DaemonServer {
             }
 
             // Parse content length
-            let content_length = match header_line
-                .trim()
-                .strip_prefix("Content-Length: ")
-            {
+            let content_length = match header_line.trim().strip_prefix("Content-Length: ") {
                 Some(len_str) => match len_str.parse::<usize>() {
                     Ok(len) => len,
                     Err(_) => {
                         let error_response = DaemonResponse::error(0, DaemonError::parse_error());
                         let response_json = serde_json::to_string(&error_response)?;
-                        let framed = format!("Content-Length: {}\r\n\r\n{}", response_json.len(), response_json);
+                        let framed = format!(
+                            "Content-Length: {}\r\n\r\n{}",
+                            response_json.len(),
+                            response_json
+                        );
                         writer.write_all(framed.as_bytes()).await?;
                         writer.flush().await?;
                         continue;
@@ -245,7 +246,11 @@ impl DaemonServer {
                 None => {
                     let error_response = DaemonResponse::error(0, DaemonError::parse_error());
                     let response_json = serde_json::to_string(&error_response)?;
-                    let framed = format!("Content-Length: {}\r\n\r\n{}", response_json.len(), response_json);
+                    let framed = format!(
+                        "Content-Length: {}\r\n\r\n{}",
+                        response_json.len(),
+                        response_json
+                    );
                     writer.write_all(framed.as_bytes()).await?;
                     writer.flush().await?;
                     continue;
@@ -266,7 +271,11 @@ impl DaemonServer {
                 Err(_e) => {
                     let error_response = DaemonResponse::error(0, DaemonError::parse_error());
                     let response_json = serde_json::to_string(&error_response)?;
-                    let framed = format!("Content-Length: {}\r\n\r\n{}", response_json.len(), response_json);
+                    let framed = format!(
+                        "Content-Length: {}\r\n\r\n{}",
+                        response_json.len(),
+                        response_json
+                    );
                     writer.write_all(framed.as_bytes()).await?;
                     writer.flush().await?;
                     continue;
@@ -280,7 +289,11 @@ impl DaemonServer {
 
             // Send response with Content-Length framing
             let response_json = serde_json::to_string(&response)?;
-            let framed = format!("Content-Length: {}\r\n\r\n{}", response_json.len(), response_json);
+            let framed = format!(
+                "Content-Length: {}\r\n\r\n{}",
+                response_json.len(),
+                response_json
+            );
             writer.write_all(framed.as_bytes()).await?;
             writer.flush().await?;
 

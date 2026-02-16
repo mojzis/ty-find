@@ -125,12 +125,6 @@ impl LspClientPool {
             .await
             .context("Failed to create LSP client")?;
 
-        // Start the response handler for this client
-        client
-            .start_response_handler()
-            .await
-            .context("Failed to start response handler")?;
-
         let client_arc = Arc::new(client);
 
         // Store the client in the pool

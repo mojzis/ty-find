@@ -23,6 +23,9 @@ impl TyLspClient {
             pending_requests: Arc::new(Mutex::new(HashMap::new())),
         };
 
+        // Must start reading responses before sending initialize,
+        // otherwise the initialize response is never consumed and we deadlock.
+        client.start_response_handler().await?;
         client.initialize(workspace_root).await?;
         Ok(client)
     }
@@ -36,7 +39,7 @@ impl TyLspClient {
                 "textDocument": {
                     "definition": {
                         "dynamicRegistration": false,
-                        "linkSupport": true
+                        "linkSupport": false
                     },
                     "hover": {
                         "dynamicRegistration": false,
@@ -64,6 +67,25 @@ impl TyLspClient {
             .await?;
 
         Ok(())
+    }
+
+    pub async fn open_document(&self, file_path: &str) -> Result<()> {
+        let canonical = std::fs::canonicalize(file_path)?;
+        let uri = format!("file://{}", canonical.display());
+        let text = std::fs::read_to_string(&canonical)?;
+
+        self.send_notification(
+            "textDocument/didOpen",
+            serde_json::json!({
+                "textDocument": {
+                    "uri": uri,
+                    "languageId": "python",
+                    "version": 1,
+                    "text": text
+                }
+            }),
+        )
+        .await
     }
 
     pub async fn goto_definition(
@@ -256,7 +278,7 @@ impl TyLspClient {
         Ok(())
     }
 
-    pub async fn start_response_handler(&self) -> Result<()> {
+    async fn start_response_handler(&self) -> Result<()> {
         let server = Arc::clone(&self.server);
         let pending_requests = Arc::clone(&self.pending_requests);
 

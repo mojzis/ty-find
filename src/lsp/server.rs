@@ -19,7 +19,7 @@ impl TyLspServer {
         }
 
         let process = Command::new("ty")
-            .arg("lsp")
+            .arg("server")
             .current_dir(workspace_root)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

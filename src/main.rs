@@ -328,7 +328,15 @@ async fn handle_document_symbols_command(
 
 async fn handle_daemon_command(command: DaemonCommands) -> Result<()> {
     match command {
-        DaemonCommands::Start => {
+        DaemonCommands::Start { foreground } => {
+            if foreground {
+                // We are the spawned child process — actually run the daemon server
+                let socket_path = DaemonServer::get_socket_path();
+                let server = DaemonServer::new(socket_path);
+                server.start().await?;
+                return Ok(());
+            }
+
             // Check if daemon is already running
             let socket_path = daemon::client::get_socket_path()?;
 

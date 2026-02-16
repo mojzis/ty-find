@@ -82,7 +82,11 @@ pub enum Commands {
 
 #[derive(Subcommand)]
 pub enum DaemonCommands {
-    Start,
+    Start {
+        /// Run the daemon in the foreground (used internally by the spawned process)
+        #[arg(long)]
+        foreground: bool,
+    },
     Stop,
     Status,
 }

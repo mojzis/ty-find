@@ -51,6 +51,20 @@ pub enum Commands {
         column: u32,
     },
 
+    References {
+        file: PathBuf,
+
+        #[arg(short, long)]
+        line: u32,
+
+        #[arg(short, long)]
+        column: u32,
+
+        /// Include the declaration in the results
+        #[arg(long, default_value_t = true)]
+        include_declaration: bool,
+    },
+
     WorkspaceSymbols {
         #[arg(short, long)]
         query: String,

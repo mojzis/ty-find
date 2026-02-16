@@ -42,6 +42,22 @@ async fn main() -> Result<()> {
         Commands::Interactive { file } => {
             handle_interactive_command(&workspace_root, file, &formatter).await?;
         }
+        Commands::References {
+            file,
+            line,
+            column,
+            include_declaration,
+        } => {
+            handle_references_command(
+                &workspace_root,
+                &file,
+                line,
+                column,
+                include_declaration,
+                &formatter,
+            )
+            .await?;
+        }
         Commands::Hover { file, line, column } => {
             handle_hover_command(&workspace_root, &file, line, column, &formatter).await?;
         }
@@ -80,6 +96,32 @@ async fn handle_definition_command(
 
     let query_info = format!("{}:{}:{}", file.display(), line, column);
     println!("{}", formatter.format_definitions(&locations, &query_info));
+
+    Ok(())
+}
+
+async fn handle_references_command(
+    workspace_root: &Path,
+    file: &Path,
+    line: u32,
+    column: u32,
+    include_declaration: bool,
+    formatter: &OutputFormatter,
+) -> Result<()> {
+    let mut client = DaemonClient::connect().await?;
+
+    let result = client
+        .execute_references(
+            workspace_root.to_path_buf(),
+            file.to_string_lossy().to_string(),
+            line.saturating_sub(1),
+            column.saturating_sub(1),
+            include_declaration,
+        )
+        .await?;
+
+    let query_info = format!("{}:{}:{}", file.display(), line, column);
+    println!("{}", formatter.format_references(&result.locations, &query_info));
 
     Ok(())
 }

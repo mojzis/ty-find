@@ -93,29 +93,30 @@ jobs:
           draft: false
           prerelease: false
 
-  # TODO: Add PyPI publishing once trusted publisher is configured on pypi.org
-  # publish-to-pypi:
-  #   name: Publish to PyPI
-  #   needs: [build-wheels, build-sdist, create-release]
-  #   runs-on: ubuntu-latest
-  #   if: startsWith(github.ref, 'refs/tags/') && github.event_name == 'push'
-  #   environment:
-  #     name: pypi
-  #     url: https://pypi.org/p/ty-find
-  #   permissions:
-  #     id-token: write
-  #   steps:
-  #     - name: Download all artifacts
-  #       uses: actions/download-artifact@v4
-  #       with:
-  #         path: dist
-  #     - name: Flatten artifacts
-  #       run: |
-  #         mkdir -p wheels
-  #         find dist -name '*.whl' -exec cp {} wheels/ \;
-  #         find dist -name '*.tar.gz' -exec cp {} wheels/ \;
-  #     - name: Publish to PyPI
-  #       uses: pypa/gh-action-pypi-publish@release/v1
-  #       with:
-  #         packages-dir: wheels/
-  #         skip-existing: true
+  publish-to-pypi:
+    name: Publish to PyPI
+    needs: [build-wheels, build-sdist, create-release]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/') && github.event_name == 'push'
+    environment:
+      name: pypi
+      url: https://pypi.org/p/ty-find
+    permissions:
+      id-token: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Flatten artifacts
+        run: |
+          mkdir -p wheels
+          find dist -name '*.whl' -exec cp {} wheels/ \;
+          find dist -name '*.tar.gz' -exec cp {} wheels/ \;
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: wheels/
+          skip-existing: true

@@ -1,5 +1,7 @@
 use crate::cli::args::OutputFormat;
-use crate::lsp::protocol::{DocumentSymbol, Hover, HoverContents, Location, SymbolInformation};
+use crate::lsp::protocol::{
+    DocumentSymbol, Hover, HoverContents, Location, MarkedStringOrString, SymbolInformation,
+};
 use serde_json;
 
 pub struct OutputFormatter {
@@ -123,11 +125,7 @@ impl OutputFormatter {
             OutputFormat::Human => {
                 let mut output = format!("Hover information for: {}\n\n", query_info);
 
-                let content_str = match &hover.contents {
-                    HoverContents::Scalar(s) => s.clone(),
-                    HoverContents::Array(arr) => arr.join("\n"),
-                    HoverContents::Markup(markup) => markup.value.clone(),
-                };
+                let content_str = Self::extract_hover_text(&hover.contents);
 
                 output.push_str(&content_str);
                 output.push('\n');
@@ -139,11 +137,7 @@ impl OutputFormatter {
             }
             OutputFormat::Csv | OutputFormat::Paths => {
                 // CSV and Paths formats don't make sense for hover, fall back to human
-                match &hover.contents {
-                    HoverContents::Scalar(s) => s.clone(),
-                    HoverContents::Array(arr) => arr.join("; "),
-                    HoverContents::Markup(markup) => markup.value.clone(),
-                }
+                Self::extract_hover_text(&hover.contents)
             }
         }
     }
@@ -239,6 +233,22 @@ impl OutputFormatter {
             if let Some(children) = &symbol.children {
                 self.format_document_symbols_recursive(children, indent + 1, output);
             }
+        }
+    }
+
+    fn extract_hover_text(contents: &HoverContents) -> String {
+        match contents {
+            HoverContents::Scalar(s) => s.clone(),
+            HoverContents::Markup(markup) => markup.value.clone(),
+            HoverContents::MarkedString(ms) => ms.value.clone(),
+            HoverContents::Array(arr) => arr
+                .iter()
+                .map(|item| match item {
+                    MarkedStringOrString::String(s) => s.clone(),
+                    MarkedStringOrString::MarkedString(ms) => ms.value.clone(),
+                })
+                .collect::<Vec<_>>()
+                .join("\n"),
         }
     }
 

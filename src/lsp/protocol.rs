@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use serde_repr::{Deserialize_repr, Serialize_repr};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Position {
@@ -75,9 +76,26 @@ pub struct Hover {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(untagged)]
 pub enum HoverContents {
-    Scalar(String),
-    Array(Vec<String>),
     Markup(MarkupContent),
+    MarkedString(MarkedString),
+    Array(Vec<MarkedStringOrString>),
+    Scalar(String),
+}
+
+/// A MarkedString is either a plain string or a language-tagged code block.
+/// LSP spec: MarkedString = string | { language: string; value: string }
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct MarkedString {
+    pub language: String,
+    pub value: String,
+}
+
+/// Represents either a plain string or a MarkedString object in arrays.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(untagged)]
+pub enum MarkedStringOrString {
+    MarkedString(MarkedString),
+    String(String),
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -125,7 +143,7 @@ pub struct DocumentSymbol {
     pub children: Option<Vec<DocumentSymbol>>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize_repr, Deserialize_repr, Clone, Debug)]
 #[repr(u8)]
 pub enum SymbolKind {
     File = 1,
@@ -156,7 +174,7 @@ pub enum SymbolKind {
     TypeParameter = 26,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize_repr, Deserialize_repr, Clone, Debug)]
 #[repr(u8)]
 pub enum SymbolTag {
     Deprecated = 1,
@@ -208,4 +226,112 @@ pub struct DocumentSymbolParams {
     pub work_done_token: Option<String>,
     #[serde(rename = "partialResultToken", skip_serializing_if = "Option::is_none")]
     pub partial_result_token: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_symbol_kind_deserialize_from_integer() {
+        let json = r#"12"#;
+        let kind: SymbolKind = serde_json::from_str(json).unwrap();
+        assert!(matches!(kind, SymbolKind::Function));
+    }
+
+    #[test]
+    fn test_symbol_kind_serialize_to_integer() {
+        let json = serde_json::to_string(&SymbolKind::Function).unwrap();
+        assert_eq!(json, "12");
+    }
+
+    #[test]
+    fn test_symbol_information_with_integer_kind() {
+        let json = r#"{
+            "name": "calculate_sum",
+            "kind": 12,
+            "location": {
+                "uri": "file:///test.py",
+                "range": {
+                    "start": {"line": 3, "character": 4},
+                    "end": {"line": 3, "character": 17}
+                }
+            }
+        }"#;
+        let info: SymbolInformation = serde_json::from_str(json).unwrap();
+        assert_eq!(info.name, "calculate_sum");
+        assert!(matches!(info.kind, SymbolKind::Function));
+    }
+
+    #[test]
+    fn test_document_symbol_with_integer_kind() {
+        let json = r#"{
+            "name": "Animal",
+            "kind": 5,
+            "range": {
+                "start": {"line": 0, "character": 0},
+                "end": {"line": 10, "character": 0}
+            },
+            "selectionRange": {
+                "start": {"line": 0, "character": 6},
+                "end": {"line": 0, "character": 12}
+            },
+            "children": [
+                {
+                    "name": "__init__",
+                    "kind": 6,
+                    "range": {
+                        "start": {"line": 2, "character": 4},
+                        "end": {"line": 4, "character": 0}
+                    },
+                    "selectionRange": {
+                        "start": {"line": 2, "character": 8},
+                        "end": {"line": 2, "character": 16}
+                    }
+                }
+            ]
+        }"#;
+        let symbol: DocumentSymbol = serde_json::from_str(json).unwrap();
+        assert_eq!(symbol.name, "Animal");
+        assert!(matches!(symbol.kind, SymbolKind::Class));
+        let children = symbol.children.unwrap();
+        assert_eq!(children.len(), 1);
+        assert!(matches!(children[0].kind, SymbolKind::Method));
+    }
+
+    #[test]
+    fn test_symbol_tag_deserialize_from_integer() {
+        let json = r#"[1]"#;
+        let tags: Vec<SymbolTag> = serde_json::from_str(json).unwrap();
+        assert_eq!(tags.len(), 1);
+        assert!(matches!(tags[0], SymbolTag::Deprecated));
+    }
+
+    #[test]
+    fn test_hover_contents_markup() {
+        let json = r#"{"kind": "markdown", "value": "```python\ndef foo(): ...\n```"}"#;
+        let contents: HoverContents = serde_json::from_str(json).unwrap();
+        assert!(matches!(contents, HoverContents::Markup(_)));
+    }
+
+    #[test]
+    fn test_hover_contents_marked_string() {
+        let json = r#"{"language": "python", "value": "def foo(): ..."}"#;
+        let contents: HoverContents = serde_json::from_str(json).unwrap();
+        assert!(matches!(contents, HoverContents::MarkedString(_)));
+    }
+
+    #[test]
+    fn test_hover_contents_scalar() {
+        let json = r#""some hover text""#;
+        let contents: HoverContents = serde_json::from_str(json).unwrap();
+        assert!(matches!(contents, HoverContents::Scalar(_)));
+    }
+
+    #[test]
+    fn test_hover_contents_array_mixed() {
+        let json = r#"[{"language": "python", "value": "def foo(): ..."}, "plain text"]"#;
+        let contents: HoverContents = serde_json::from_str(json).unwrap();
+        assert!(matches!(contents, HoverContents::Array(_)));
+    }
 }

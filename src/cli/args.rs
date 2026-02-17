@@ -21,6 +21,7 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
+    /// Go to definition at a specific file location
     Definition {
         file: PathBuf,
 
@@ -31,16 +32,13 @@ pub enum Commands {
         column: u32,
     },
 
-    Find {
-        file: PathBuf,
+    /// Find a symbol by name in a file
+    Find { file: PathBuf, symbol: String },
 
-        symbol: String,
-    },
+    /// Interactive REPL for exploring definitions
+    Interactive { file: Option<PathBuf> },
 
-    Interactive {
-        file: Option<PathBuf>,
-    },
-
+    /// Show hover information at a specific file location
     Hover {
         file: PathBuf,
 
@@ -51,6 +49,7 @@ pub enum Commands {
         column: u32,
     },
 
+    /// Find all references to a symbol at a specific file location
     References {
         file: PathBuf,
 
@@ -65,15 +64,16 @@ pub enum Commands {
         include_declaration: bool,
     },
 
+    /// Search for symbols across the workspace
     WorkspaceSymbols {
         #[arg(short, long)]
         query: String,
     },
 
-    DocumentSymbols {
-        file: PathBuf,
-    },
+    /// List all symbols in a file
+    DocumentSymbols { file: PathBuf },
 
+    /// Manage the background ty LSP server daemon
     Daemon {
         #[command(subcommand)]
         command: DaemonCommands,
@@ -82,12 +82,15 @@ pub enum Commands {
 
 #[derive(Subcommand)]
 pub enum DaemonCommands {
+    /// Start the background LSP server
     Start {
         /// Run the daemon in the foreground (used internally by the spawned process)
         #[arg(long)]
         foreground: bool,
     },
+    /// Stop the background LSP server
     Stop,
+    /// Show the daemon's running status
     Status,
 }
 

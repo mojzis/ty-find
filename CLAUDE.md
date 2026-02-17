@@ -6,6 +6,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ty-find is a command-line tool that interfaces with ty's LSP server to provide go-to-definition functionality for Python functions, classes, and variables from the terminal. It's a hybrid Rust/Python project that builds a Rust binary but packages it as a Python package using maturin for easy distribution via pip/uv.
 
+## Prerequisites
+
+- **ty** must be installed and on PATH: `pip install ty` (required for all LSP functionality and integration tests)
+
 ## Common Commands
 
 ### Build and Development

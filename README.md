@@ -9,6 +9,7 @@ Add this to your project's `CLAUDE.md` to enable type-aware code navigation:
 ```markdown
 ### Code Navigation (ty-find)
 Use `ty-find` for type-aware Python code navigation - more accurate than grep for symbols.
+Requires `ty` on PATH (`pip install ty`).
 
 **Commands** (use relative paths from repo root):
 ty-find references path/to/file.py -l LINE -c COL   # Find all usages of symbol

@@ -347,6 +347,7 @@ impl DaemonServer {
         };
 
         let file_str = params.file.to_string_lossy().to_string();
+        client.open_document(&file_str).await?;
         let hover = client.hover(&file_str, params.line, params.column).await?;
 
         let result = HoverResult { hover };
@@ -367,6 +368,7 @@ impl DaemonServer {
         };
 
         let file_str = params.file.to_string_lossy().to_string();
+        client.open_document(&file_str).await?;
         let locations = client
             .goto_definition(&file_str, params.line, params.column)
             .await?;
@@ -414,6 +416,7 @@ impl DaemonServer {
         };
 
         let file_str = params.file.to_string_lossy().to_string();
+        client.open_document(&file_str).await?;
         let symbols = client.document_symbols(&file_str).await?;
 
         let result = DocumentSymbolsResult { symbols };
@@ -434,6 +437,7 @@ impl DaemonServer {
         };
 
         let file_str = params.file.to_string_lossy().to_string();
+        client.open_document(&file_str).await?;
         let locations = client
             .find_references(
                 &file_str,

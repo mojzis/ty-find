@@ -8,6 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use serde_repr::{Deserialize_repr, Serialize_repr};
 use std::path::PathBuf;
 
 // Re-export LSP types that are used in responses
@@ -479,7 +480,7 @@ pub struct Diagnostic {
 }
 
 /// Severity level of a diagnostic.
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Serialize_repr, Deserialize_repr, Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum DiagnosticSeverity {
     Error = 1,

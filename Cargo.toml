@@ -1,6 +1,6 @@
 [package]
 name = "ty-find"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2021"
 description = "CLI tool for finding Python function definitions using ty's LSP server"
 license = "MIT"

@@ -10,7 +10,7 @@ mod workspace;
 
 use cli::args::{Cli, Commands, DaemonCommands};
 use cli::output::OutputFormatter;
-use daemon::client::DaemonClient;
+use daemon::client::{ensure_daemon_running, DaemonClient};
 use daemon::server::DaemonServer;
 use lsp::client::TyLspClient;
 use workspace::detection::WorkspaceDetector;
@@ -110,6 +110,7 @@ async fn handle_references_command(
     include_declaration: bool,
     formatter: &OutputFormatter,
 ) -> Result<()> {
+    ensure_daemon_running().await?;
     let mut client = DaemonClient::connect().await?;
 
     let result = client
@@ -256,6 +257,7 @@ async fn handle_hover_command(
     column: u32,
     formatter: &OutputFormatter,
 ) -> Result<()> {
+    ensure_daemon_running().await?;
     let mut client = DaemonClient::connect().await?;
 
     let result = client
@@ -289,6 +291,7 @@ async fn handle_workspace_symbols_command(
     query: &str,
     formatter: &OutputFormatter,
 ) -> Result<()> {
+    ensure_daemon_running().await?;
     let mut client = DaemonClient::connect().await?;
 
     let result = client
@@ -314,6 +317,7 @@ async fn handle_document_symbols_command(
     file: &Path,
     formatter: &OutputFormatter,
 ) -> Result<()> {
+    ensure_daemon_running().await?;
     let mut client = DaemonClient::connect().await?;
 
     let result = client

@@ -8,7 +8,7 @@
 
 use anyhow::{Context, Result};
 use serde_json::Value;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
@@ -437,7 +437,7 @@ pub async fn ensure_daemon_running() -> Result<()> {
 
     // Spawn daemon in background
     tracing::info!("Starting daemon...");
-    spawn_daemon(&socket_path)?;
+    spawn_daemon()?;
 
     // Wait for daemon to start
     for i in 0..MAX_STARTUP_RETRIES {
@@ -466,30 +466,23 @@ pub async fn ensure_daemon_running() -> Result<()> {
 ///
 /// The daemon is started as a detached background process that will
 /// continue running after the CLI process exits.
-fn spawn_daemon(socket_path: &Path) -> Result<()> {
+fn spawn_daemon() -> Result<()> {
     use std::process::{Command, Stdio};
 
     // Get the current executable path
     let exe = std::env::current_exe().context("Failed to get current executable path")?;
 
-    // Spawn daemon process
-    // TODO: This will need to be updated once we implement the actual daemon server
-    // For now, this is a placeholder that shows the intended behavior
+    // Spawn daemon process with --foreground so the child actually runs
+    // the server instead of spawning yet another process.
     let child = Command::new(exe)
         .arg("daemon")
         .arg("start")
-        .arg("--socket")
-        .arg(socket_path)
+        .arg("--foreground")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
         .context("Failed to spawn daemon process")?;
-
-    // Detach the process (it will continue running after parent exits)
-    // Note: The process is already detached via spawn. For true daemonization
-    // on Unix, we could use std::os::unix::process::CommandExt::pre_exec
-    // to call setsid() if needed in the future.
 
     tracing::debug!("Spawned daemon process with PID {}", child.id());
 

@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
 
@@ -63,6 +64,81 @@ fn test_daemon_start_does_not_fork_bomb() {
         "Detected {} ty-find processes — likely a fork bomb! \
          Expected at most 2 (parent + 1 background child).",
         count,
+    );
+}
+
+/// Test that a daemon-dependent command auto-starts the daemon when it is not
+/// already running.
+///
+/// Strategy:
+/// 1. Ensure no daemon is running (stop + remove socket).
+/// 2. Run a `hover` command which goes through `ensure_daemon_running()`.
+/// 3. Verify that the daemon socket was created (proving auto-start fired).
+/// 4. Clean up.
+///
+/// The hover request itself may fail (ty LSP may not be installed), but the
+/// daemon server should have been spawned and its socket should exist.
+#[test]
+fn test_daemon_auto_start_on_first_request() {
+    let bin_path = assert_cmd::cargo::cargo_bin!("ty-find");
+    let socket_path = format!("/tmp/ty-find-{}.sock", unsafe { libc::getuid() });
+
+    // --- setup: make sure no daemon is running ---
+    let _ = Command::new(&bin_path).arg("daemon").arg("stop").output();
+    std::thread::sleep(Duration::from_millis(200));
+    let _ = std::fs::remove_file(&socket_path);
+
+    // Sanity-check: socket must not exist.
+    assert!(
+        !Path::new(&socket_path).exists(),
+        "Socket still present after cleanup"
+    );
+
+    // --- act: run a daemon-dependent command (hover) ---
+    // Create a minimal Python file so the CLI doesn't bail on missing file before
+    // reaching the daemon auto-start path.
+    let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
+    let test_file = temp_dir.path().join("test.py");
+    std::fs::write(&test_file, "x = 1\n").expect("failed to write test file");
+
+    // The hover command will call ensure_daemon_running() then try to use the
+    // daemon.  The LSP request may fail, but we only care that the daemon was
+    // spawned.
+    let _output = Command::new(&bin_path)
+        .arg("hover")
+        .arg(&test_file)
+        .arg("-l")
+        .arg("1")
+        .arg("-c")
+        .arg("1")
+        .output()
+        .expect("failed to run hover command");
+
+    // Give the daemon a moment to fully bind the socket (it may already be
+    // bound because ensure_daemon_running polls for it, but be safe).
+    std::thread::sleep(Duration::from_millis(500));
+
+    // --- assert: daemon socket should exist ---
+    let socket_exists = Path::new(&socket_path).exists();
+
+    // Double-check via daemon status.
+    let status = Command::new(&bin_path)
+        .arg("daemon")
+        .arg("status")
+        .output()
+        .expect("failed to run daemon status");
+    let status_stdout = String::from_utf8_lossy(&status.stdout);
+
+    // --- cleanup ---
+    let _ = Command::new(&bin_path).arg("daemon").arg("stop").output();
+    std::thread::sleep(Duration::from_millis(200));
+    let _ = std::fs::remove_file(&socket_path);
+
+    assert!(
+        socket_exists || status_stdout.contains("running"),
+        "Daemon was not auto-started. Socket exists: {}, status output: {}",
+        socket_exists,
+        status_stdout,
     );
 }
 

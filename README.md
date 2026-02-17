@@ -85,7 +85,7 @@ Documentation: Service for managing user accounts
 Signature: class UserService(BaseService[User])
 
 # JSON output for programmatic use
-ty-find hover src/main.py --line 45 --column 12 --format json
+ty-find --format json hover src/main.py --line 45 --column 12
 ```
 
 ### Go to Definition
@@ -123,7 +123,7 @@ Found 4 reference(s) for: myfile.py:10:5
    create_user("other", "other@example.com")
 
 # JSON output
-ty-find references myfile.py --line 10 --column 5 --format json
+ty-find --format json references myfile.py --line 10 --column 5
 ```
 
 ### Search Symbols Across Workspace
@@ -138,7 +138,7 @@ UserService (class) - src/services/user.py:10:6
 UserServiceTest (class) - tests/test_user_service.py:5:6
 
 # JSON output
-ty-find workspace-symbols --query "auth" --format json
+ty-find --format json workspace-symbols --query "auth"
 ```
 
 ### Document Outline
@@ -196,20 +196,20 @@ ty-find daemon stop
 
 ## Output Formats
 
-All commands support multiple output formats:
+All commands support multiple output formats via the global `--format` flag (placed before the subcommand):
 
 ```bash
 # Human-readable (default)
 ty-find hover myfile.py -l 10 -c 5
 
 # JSON (for Claude Code, scripts, etc.)
-ty-find hover myfile.py -l 10 -c 5 --format json
+ty-find --format json hover myfile.py -l 10 -c 5
 
 # CSV
-ty-find workspace-symbols --query "User" --format csv
+ty-find --format csv workspace-symbols --query "User"
 
 # Paths only
-ty-find definition myfile.py -l 10 -c 5 --format paths
+ty-find --format paths definition myfile.py -l 10 -c 5
 ```
 
 ## Performance
@@ -233,16 +233,16 @@ ty-find works perfectly with Claude Code as a fast CLI tool:
 
 # Get type information
 result = subprocess.run([
-    "ty-find", "hover", "src/main.py",
-    "--line", "45", "--column", "12",
-    "--format", "json"
+    "ty-find", "--format", "json",
+    "hover", "src/main.py",
+    "--line", "45", "--column", "12"
 ], capture_output=True, text=True)
 
 # Search for symbols
 result = subprocess.run([
-    "ty-find", "workspace-symbols",
-    "--query", "UserService",
-    "--format", "json"
+    "ty-find", "--format", "json",
+    "workspace-symbols",
+    "--query", "UserService"
 ], capture_output=True, text=True)
 ```
 
@@ -301,10 +301,10 @@ ty-find hover src/app.py -l 15 -c 8 --workspace /path/to/project
 
 ```bash
 # Get symbol information as JSON
-ty-find hover src/main.py -l 45 -c 12 --format json | jq '.result.contents.value'
+ty-find --format json hover src/main.py -l 45 -c 12 | jq '.result.contents.value'
 
 # Find all class definitions
-ty-find workspace-symbols --query "" --format json | jq '.results[] | select(.kind == 5)'
+ty-find --format json workspace-symbols --query "" | jq '.results[] | select(.kind == 5)'
 ```
 
 ## Available Commands

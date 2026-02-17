@@ -13,6 +13,7 @@ use cli::output::OutputFormatter;
 use daemon::client::DaemonClient;
 use daemon::server::DaemonServer;
 use lsp::client::TyLspClient;
+use workspace::detection::WorkspaceDetector;
 use workspace::navigation::SymbolFinder;
 
 #[tokio::main]
@@ -25,10 +26,14 @@ async fn main() -> Result<()> {
             .init();
     }
 
-    let workspace_root = cli
-        .workspace
-        .unwrap_or_else(|| std::env::current_dir().unwrap())
-        .canonicalize()?;
+    let workspace_root = if let Some(ws) = cli.workspace {
+        ws.canonicalize()?
+    } else {
+        let cwd = std::env::current_dir()?;
+        WorkspaceDetector::find_workspace_root(&cwd)
+            .unwrap_or(cwd)
+            .canonicalize()?
+    };
 
     let formatter = OutputFormatter::new(cli.format);
 
@@ -145,23 +150,29 @@ async fn handle_find_command(
         return Ok(());
     }
 
-    println!(
-        "Found {} occurrence(s) of '{}' in {}:\n",
-        positions.len(),
-        symbol,
-        file.display()
-    );
-
+    // Collect all definition locations across all occurrences
+    let mut all_locations = Vec::new();
     for (line, column) in positions {
         let locations = client
             .goto_definition(&file.to_string_lossy(), line, column)
             .await?;
-
-        if !locations.is_empty() {
-            let query_info = format!("{}:{}:{}", file.display(), line + 1, column + 1);
-            println!("{}", formatter.format_definitions(&locations, &query_info));
+        for loc in locations {
+            if !all_locations
+                .iter()
+                .any(|l: &crate::lsp::protocol::Location| {
+                    l.uri == loc.uri && l.range.start.line == loc.range.start.line
+                })
+            {
+                all_locations.push(loc);
+            }
         }
     }
+
+    let query_info = format!("'{}' in {}", symbol, file.display());
+    println!(
+        "{}",
+        formatter.format_definitions(&all_locations, &query_info)
+    );
 
     Ok(())
 }

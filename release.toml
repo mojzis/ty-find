@@ -3,7 +3,6 @@
 
 # Create a git tag for the release
 tag = true
-tag-prefix = "v"
 tag-message = "Release {{version}}"
 
 # Commit message for the version bump

@@ -1,15 +1,15 @@
 # ty-find
 
-A blazingly fast command-line tool for Python code navigation using ty's LSP server. Features daemon-backed architecture for sub-100ms response times.
+A command-line tool for Python code navigation using ty's LSP server. Uses a daemon-backed architecture to keep LSP connections warm between commands.
 
 ## Features
 
-- 🚀 **Fast**: Daemon mode keeps LSP warm (50-100ms vs 1-2s per command)
-- 🔍 **Type-aware**: Uses ty's LSP for accurate symbol resolution
-- 📦 **Multiple commands**: hover, definition, references, symbols, outline
-- 🎯 **JSON output**: Perfect for AI coding tools like Claude Code
-- 🔄 **Auto-daemon**: Transparently starts background daemon on first use
-- 🛡️ **User-isolated**: Each user gets their own daemon process
+- **Daemon mode**: Keeps LSP connections warm (50-100ms per command after initial startup)
+- **Type-aware**: Uses ty's LSP for accurate symbol resolution
+- **Multiple commands**: hover, definition, references, symbols, outline
+- **JSON output**: Structured output for scripting and integration with other tools
+- **Auto-daemon**: Starts background daemon on first use
+- **User-isolated**: Each user gets their own daemon process
 
 ## Installation
 
@@ -222,35 +222,38 @@ ty-find --format paths definition myfile.py -l 10 -c 5
 - First command: **1-2 seconds** (starts daemon + LSP)
 - Subsequent: **50-100ms** (warm cache)
 - 10 commands: **~3 seconds**
-- **5-6x faster!** 🚀
 
-## Use with Claude Code
+## Usage with Claude Code
 
-ty-find works perfectly with Claude Code as a fast CLI tool:
+Add this to your project's CLAUDE.md to enable type-aware code navigation:
 
-```python
-# Claude Code can call ty-find directly via Bash
+### Code Navigation (ty-find)
+Use `ty-find` for type-aware Python code navigation - more accurate than grep for symbols.
 
-# Get type information
-result = subprocess.run([
-    "ty-find", "--format", "json",
-    "hover", "src/main.py",
-    "--line", "45", "--column", "12"
-], capture_output=True, text=True)
-
-# Search for symbols
-result = subprocess.run([
-    "ty-find", "--format", "json",
-    "workspace-symbols",
-    "--query", "UserService"
-], capture_output=True, text=True)
+**Commands** (use relative paths from repo root):
+```bash
+ty-find references path/to/file.py -l LINE -c COL   # Find all usages of symbol
+ty-find definition path/to/file.py -l LINE -c COL  # Go to definition
+ty-find hover path/to/file.py -l LINE -c COL       # Get type info
+ty-find find path/to/file.py SymbolName            # Find symbol by name in file
+ty-find workspace-symbols --query "ClassName"      # Search symbols across codebase
+ty-find document-symbols path/to/file.py           # Get file outline
 ```
 
-This provides Claude Code with:
-- ✅ Type-aware understanding of Python code
-- ✅ Accurate symbol resolution (not just grep)
-- ✅ Fast responses (<100ms) for interactive use
-- ✅ 30-50% token reduction vs reading entire files
+**When to use:**
+- Before renaming/refactoring: `ty-find references` to find all usages
+- Understanding unfamiliar code: `ty-find hover` for type info
+- Finding class/function definitions: `ty-find workspace-symbols`
+
+**Output formats:** Add `--format json` before subcommand for programmatic use.
+
+### Why ty-find over grep?
+
+| Scenario | grep | ty-find |
+|---|---|---|
+| Find symbol usages | Matches in docs, comments, strings | Only actual code references |
+| Rename refactoring | May miss or over-match | Type-aware, precise |
+| Performance | Fast | Fast (daemon-backed, ~10ms) |
 
 ## Architecture
 
@@ -393,5 +396,4 @@ MIT License - see LICENSE file for details
 
 ## Credits
 
-- Built with [ty](https://github.com/astral-sh/ty) - Astral's blazingly fast Python type checker
-- Inspired by the need for fast, type-aware Python code navigation in AI coding tools
+- Built with [ty](https://github.com/astral-sh/ty) - Astral's Python type checker

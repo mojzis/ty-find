@@ -6,9 +6,8 @@ tag = true
 tag-prefix = "v"
 tag-message = "Release {{version}}"
 
-# Create a git commit for the version bump
-commit = true
-commit-message = "Release v{{version}}"
+# Commit message for the version bump
+pre-release-commit-message = "Release v{{version}}"
 
 # Push the commit and tag to the remote
 push = true

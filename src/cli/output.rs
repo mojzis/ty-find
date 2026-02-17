@@ -3,14 +3,19 @@ use crate::lsp::protocol::{
     DocumentSymbol, Hover, HoverContents, Location, MarkedStringOrString, SymbolInformation,
 };
 use serde_json;
+use std::path::{Path, PathBuf};
 
 pub struct OutputFormatter {
     format: OutputFormat,
+    cwd: PathBuf,
 }
 
 impl OutputFormatter {
     pub fn new(format: OutputFormat) -> Self {
-        Self { format }
+        Self {
+            format,
+            cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
+        }
     }
 
     pub fn format_definitions(&self, locations: &[Location], query_info: &str) -> String {
@@ -76,10 +81,17 @@ impl OutputFormatter {
     }
 
     fn uri_to_path(&self, uri: &str) -> String {
-        if let Some(stripped) = uri.strip_prefix("file://") {
+        let abs_path = if let Some(stripped) = uri.strip_prefix("file://") {
             stripped.to_string()
         } else {
-            uri.to_string()
+            return uri.to_string();
+        };
+
+        // Try to make path relative to cwd
+        let path = Path::new(&abs_path);
+        match path.strip_prefix(&self.cwd) {
+            Ok(rel) => rel.display().to_string(),
+            Err(_) => abs_path,
         }
     }
 

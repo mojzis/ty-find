@@ -6,6 +6,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ty-find is a command-line tool that interfaces with ty's LSP server to provide go-to-definition functionality for Python functions, classes, and variables from the terminal. It's a hybrid Rust/Python project that builds a Rust binary but packages it as a Python package using maturin for easy distribution via pip/uv.
 
+## Prerequisites
+
+- **ty** must be installed and on PATH: `uv add --dev ty` (required for all LSP functionality and integration tests)
+
 ## Common Commands
 
 ### Build and Development
@@ -20,7 +24,7 @@ cargo build --release
 cargo run -- definition test_example.py --line 1 --column 5
 
 # Install ty (required for integration tests)
-pip install ty
+uv add --dev ty
 
 # Test the Rust code
 cargo test
@@ -46,7 +50,7 @@ maturin build --release
 
 ### Testing with ty LSP server
 ```bash
-# Requires ty to be installed: pip install ty
+# Requires ty to be installed: uv add --dev ty
 ty-find definition test_example.py --line 6 --column 5
 ty-find find test_example.py calculate_sum
 ty-find interactive
@@ -112,7 +116,7 @@ The project uses maturin to bridge Rust and Python ecosystems:
 - maturin automatically builds Rust binary during Python package installation
 
 ### Dependencies
-- **ty LSP server** must be available in PATH (users install via `pip install ty`)
+- **ty LSP server** must be available in PATH (users install via `uv add --dev ty`)
 - **Rust toolchain** required for building from source
 - **tokio** for async LSP communication and process management
 - **clap** for CLI parsing with subcommands and multiple output formats

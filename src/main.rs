@@ -72,6 +72,9 @@ async fn main() -> Result<()> {
         Commands::DocumentSymbols { file } => {
             handle_document_symbols_command(&workspace_root, &file, &formatter).await?;
         }
+        Commands::Inspect { file, symbol } => {
+            handle_inspect_command(&workspace_root, &file, &symbol, &formatter).await?;
+        }
         Commands::Daemon { command } => {
             handle_daemon_command(command).await?;
         }
@@ -173,6 +176,90 @@ async fn handle_find_command(
     println!(
         "{}",
         formatter.format_definitions(&all_locations, &query_info)
+    );
+
+    Ok(())
+}
+
+async fn handle_inspect_command(
+    workspace_root: &Path,
+    file: &Path,
+    symbol: &str,
+    formatter: &OutputFormatter,
+) -> Result<()> {
+    let file_str = file.to_string_lossy();
+    let finder = SymbolFinder::new(&file_str)?;
+
+    let positions = finder.find_symbol_positions(symbol);
+
+    if positions.is_empty() {
+        println!("Symbol '{}' not found in {}", symbol, file.display());
+        return Ok(());
+    }
+
+    // Use the first occurrence for hover and references
+    let (first_line, first_col) = positions[0];
+
+    ensure_daemon_running().await?;
+    let mut client = DaemonClient::connect().await?;
+
+    // Get definitions from all occurrences (deduplicated, like find command)
+    let mut all_definitions = Vec::new();
+    for (line, column) in &positions {
+        let result = client
+            .execute_definition(
+                workspace_root.to_path_buf(),
+                file_str.to_string(),
+                *line,
+                *column,
+            )
+            .await?;
+        if let Some(loc) = result.location {
+            if !all_definitions
+                .iter()
+                .any(|l: &crate::lsp::protocol::Location| {
+                    l.uri == loc.uri && l.range.start.line == loc.range.start.line
+                })
+            {
+                all_definitions.push(loc);
+            }
+        }
+        // Reconnect for each subsequent request since daemon uses single-request connections
+        client = DaemonClient::connect().await?;
+    }
+
+    // Get hover info at first occurrence
+    let hover_result = client
+        .execute_hover(
+            workspace_root.to_path_buf(),
+            file_str.to_string(),
+            first_line,
+            first_col,
+        )
+        .await?;
+
+    // Reconnect for references
+    let mut client = DaemonClient::connect().await?;
+
+    // Get references at first occurrence
+    let refs_result = client
+        .execute_references(
+            workspace_root.to_path_buf(),
+            file_str.to_string(),
+            first_line,
+            first_col,
+            true,
+        )
+        .await?;
+
+    println!(
+        "{}",
+        formatter.format_inspect(
+            symbol,
+            &all_definitions,
+            hover_result.hover.as_ref(),
+            &refs_result.locations,
+        )
     );
 
     Ok(())

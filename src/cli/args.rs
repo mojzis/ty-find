@@ -73,6 +73,9 @@ pub enum Commands {
     /// List all symbols in a file
     DocumentSymbols { file: PathBuf },
 
+    /// Inspect a symbol: find definition, hover info, and references in one shot
+    Inspect { file: PathBuf, symbol: String },
+
     /// Manage the background ty LSP server daemon
     Daemon {
         #[command(subcommand)]

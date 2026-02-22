@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 use std::fmt::Write;
 
 mod cli;
@@ -94,6 +94,10 @@ async fn run(cli: Cli) -> Result<()> {
         }
         Commands::Daemon { command } => {
             commands::handle_daemon_command(command).await?;
+        }
+        Commands::GenerateDocs { output_dir } => {
+            let cmd = Cli::command();
+            cli::generate_docs::generate_docs(&cmd, &output_dir)?;
         }
     }
 

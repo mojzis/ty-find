@@ -105,6 +105,14 @@ pub enum Commands {
         #[command(subcommand)]
         command: DaemonCommands,
     },
+
+    /// Generate markdown documentation from CLI help text
+    #[command(hide = true)]
+    GenerateDocs {
+        /// Output directory for generated markdown files
+        #[arg(long, value_name = "DIR")]
+        output_dir: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]

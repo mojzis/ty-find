@@ -42,6 +42,11 @@ dev = [
     "mypy",
 ]
 
+[dependency-groups]
+dev = [
+    "ty",
+]
+
 [tool.maturin]
 bindings = "bin"
 strip = true

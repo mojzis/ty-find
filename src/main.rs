@@ -9,7 +9,7 @@ mod utils;
 mod workspace;
 
 use cli::args::{Cli, Commands, DaemonCommands};
-use cli::output::OutputFormatter;
+use cli::output::{InspectEntry, OutputFormatter};
 use daemon::client::{ensure_daemon_running, DaemonClient};
 use daemon::server::DaemonServer;
 use lsp::client::TyLspClient;
@@ -63,8 +63,8 @@ async fn run(cli: Cli) -> Result<()> {
         Commands::Definition { file, line, column } => {
             handle_definition_command(&workspace_root, &file, line, column, &formatter).await?;
         }
-        Commands::Find { file, symbol } => {
-            handle_find_command(&workspace_root, file.as_deref(), &symbol, &formatter).await?;
+        Commands::Find { file, symbols } => {
+            handle_find_command(&workspace_root, file.as_deref(), &symbols, &formatter).await?;
         }
         Commands::Interactive { file } => {
             handle_interactive_command(&workspace_root, file, &formatter).await?;
@@ -94,8 +94,8 @@ async fn run(cli: Cli) -> Result<()> {
         Commands::DocumentSymbols { file } => {
             handle_document_symbols_command(&workspace_root, &file, &formatter).await?;
         }
-        Commands::Inspect { file, symbol } => {
-            handle_inspect_command(&workspace_root, file.as_deref(), &symbol, &formatter).await?;
+        Commands::Inspect { file, symbols } => {
+            handle_inspect_command(&workspace_root, file.as_deref(), &symbols, &formatter).await?;
         }
         Commands::Daemon { command } => {
             handle_daemon_command(command).await?;
@@ -160,58 +160,52 @@ async fn handle_references_command(
 async fn handle_find_command(
     workspace_root: &Path,
     file: Option<&Path>,
-    symbol: &str,
+    symbols: &[String],
     formatter: &OutputFormatter,
 ) -> Result<()> {
+    let mut results: Vec<(String, Vec<crate::lsp::protocol::Location>)> = Vec::new();
+
     if let Some(file) = file {
-        // File provided: use text-based search + goto_definition (original behavior)
         let client = TyLspClient::new(&workspace_root.to_string_lossy()).await?;
         let file_str = file.to_string_lossy();
         let finder = SymbolFinder::new(&file_str)?;
-
         client.open_document(&file_str).await?;
 
-        let positions = finder.find_symbol_positions(symbol);
+        for symbol in symbols {
+            let positions = finder.find_symbol_positions(symbol);
 
-        if positions.is_empty() {
-            println!("Symbol '{}' not found in {}", symbol, file.display());
-            return Ok(());
-        }
+            if positions.is_empty() {
+                results.push((symbol.clone(), Vec::new()));
+                continue;
+            }
 
-        let mut all_locations = Vec::new();
-        for (line, column) in positions {
-            let locations = client
-                .goto_definition(&file.to_string_lossy(), line, column)
-                .await?;
-            for loc in locations {
-                if !all_locations
-                    .iter()
-                    .any(|l: &crate::lsp::protocol::Location| {
-                        l.uri == loc.uri && l.range.start.line == loc.range.start.line
-                    })
-                {
-                    all_locations.push(loc);
+            let mut all_locations = Vec::new();
+            for (line, column) in positions {
+                let locations = client
+                    .goto_definition(&file.to_string_lossy(), line, column)
+                    .await?;
+                for loc in locations {
+                    if !all_locations
+                        .iter()
+                        .any(|l: &crate::lsp::protocol::Location| {
+                            l.uri == loc.uri && l.range.start.line == loc.range.start.line
+                        })
+                    {
+                        all_locations.push(loc);
+                    }
                 }
             }
-        }
 
-        let query_info = format!("'{}' in {}", symbol, file.display());
-        println!(
-            "{}",
-            formatter.format_definitions(&all_locations, &query_info)
-        );
+            results.push((symbol.clone(), all_locations));
+        }
     } else {
-        // No file: use workspace symbols to find across the entire workspace
-        let locations = find_symbol_via_workspace(workspace_root, symbol).await?;
-
-        if locations.is_empty() {
-            println!("No symbols found matching '{}'", symbol);
-            return Ok(());
+        for symbol in symbols {
+            let locations = find_symbol_via_workspace(workspace_root, symbol).await?;
+            results.push((symbol.clone(), locations));
         }
-
-        let query_info = format!("'{}'", symbol);
-        println!("{}", formatter.format_definitions(&locations, &query_info));
     }
+
+    println!("{}", formatter.format_find_results(&results));
 
     Ok(())
 }
@@ -244,26 +238,64 @@ async fn find_symbol_via_workspace(
 async fn handle_inspect_command(
     workspace_root: &Path,
     file: Option<&Path>,
-    symbol: &str,
+    symbols: &[String],
     formatter: &OutputFormatter,
 ) -> Result<()> {
     ensure_daemon_running().await?;
 
+    let mut results: Vec<InspectResult> = Vec::new();
+
+    for symbol in symbols {
+        let result = inspect_single_symbol(workspace_root, file, symbol).await?;
+        results.push(result);
+    }
+
+    let formatted: Vec<InspectEntry<'_>> = results
+        .iter()
+        .map(|r| {
+            (
+                r.symbol.as_str(),
+                r.definitions.as_slice(),
+                r.hover.as_ref(),
+                r.references.as_slice(),
+            )
+        })
+        .collect();
+
+    println!("{}", formatter.format_inspect_results(&formatted));
+
+    Ok(())
+}
+
+struct InspectResult {
+    symbol: String,
+    definitions: Vec<crate::lsp::protocol::Location>,
+    hover: Option<crate::lsp::protocol::Hover>,
+    references: Vec<crate::lsp::protocol::Location>,
+}
+
+async fn inspect_single_symbol(
+    workspace_root: &Path,
+    file: Option<&Path>,
+    symbol: &str,
+) -> Result<InspectResult> {
     // Step 1: Find the symbol's location(s)
     let (definition_file, def_line, def_col, all_definitions) = if let Some(file) = file {
-        // File provided: use text-based search + goto_definition
         let file_str = file.to_string_lossy();
         let finder = SymbolFinder::new(&file_str)?;
         let positions = finder.find_symbol_positions(symbol);
 
         if positions.is_empty() {
-            println!("Symbol '{}' not found in {}", symbol, file.display());
-            return Ok(());
+            return Ok(InspectResult {
+                symbol: symbol.to_string(),
+                definitions: Vec::new(),
+                hover: None,
+                references: Vec::new(),
+            });
         }
 
         let (first_line, first_col) = positions[0];
 
-        // Get definitions via daemon
         let mut all_definitions = Vec::new();
         for (line, column) in &positions {
             let mut client = DaemonClient::connect().await?;
@@ -289,18 +321,15 @@ async fn handle_inspect_command(
 
         (file_str.to_string(), first_line, first_col, all_definitions)
     } else {
-        // No file: use workspace symbols
         let mut client = DaemonClient::connect().await?;
         let result = client
             .execute_workspace_symbols(workspace_root.to_path_buf(), symbol.to_string())
             .await?;
 
-        // Prefer exact name matches
         let exact: Vec<_> = result.symbols.iter().filter(|s| s.name == symbol).collect();
         let matched = if exact.is_empty() {
             &result.symbols
         } else {
-            // Borrow from exact
             &result
                 .symbols
                 .iter()
@@ -310,8 +339,12 @@ async fn handle_inspect_command(
         };
 
         if matched.is_empty() {
-            println!("No symbols found matching '{}'", symbol);
-            return Ok(());
+            return Ok(InspectResult {
+                symbol: symbol.to_string(),
+                definitions: Vec::new(),
+                hover: None,
+                references: Vec::new(),
+            });
         }
 
         let first = &matched[0];
@@ -351,17 +384,12 @@ async fn handle_inspect_command(
         )
         .await?;
 
-    println!(
-        "{}",
-        formatter.format_inspect(
-            symbol,
-            &all_definitions,
-            hover_result.hover.as_ref(),
-            &refs_result.locations,
-        )
-    );
-
-    Ok(())
+    Ok(InspectResult {
+        symbol: symbol.to_string(),
+        definitions: all_definitions,
+        hover: hover_result.hover,
+        references: refs_result.locations,
+    })
 }
 
 async fn handle_interactive_command(
@@ -394,15 +422,15 @@ async fn handle_interactive_command(
             let parts: Vec<&str> = input.split_whitespace().collect();
             if parts.len() >= 3 {
                 let file = PathBuf::from(parts[1]);
-                let symbol = parts[2];
+                let symbols: Vec<String> = parts[2..].iter().map(|s| s.to_string()).collect();
 
                 if let Err(e) =
-                    handle_find_command(workspace_root, Some(&file), symbol, formatter).await
+                    handle_find_command(workspace_root, Some(&file), &symbols, formatter).await
                 {
                     eprintln!("Error: {}", e);
                 }
             } else {
-                eprintln!("Usage: find <file> <symbol>");
+                eprintln!("Usage: find <file> <symbol> [symbol2 ...]");
             }
         } else if let Some(pos) = input.rfind(':') {
             if let Some(second_pos) = input[..pos].rfind(':') {

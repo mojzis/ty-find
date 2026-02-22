@@ -13,7 +13,9 @@ Requires `ty` on PATH (`uv add --dev ty`).
 
 **Commands** (use relative paths from repo root):
 ty-find inspect SymbolName                               # Definition + type info + references in one shot
+ty-find inspect Foo Bar Baz                              # Inspect multiple symbols in one call
 ty-find find SymbolName                                  # Find symbol definition across workspace
+ty-find find Foo Bar Baz                                 # Find multiple symbols in one call
 ty-find references path/to/file.py -l LINE -c COL       # Find all usages of symbol at position
 ty-find definition path/to/file.py -l LINE -c COL       # Go to definition at position
 ty-find hover path/to/file.py -l LINE -c COL            # Get type info at position
@@ -72,10 +74,13 @@ cargo install --path .
 
 ### Inspect (Definition + Type Info + References)
 
-All-in-one command — searches the workspace by symbol name, no file needed:
+All-in-one command — searches the workspace by symbol name, no file needed. Supports multiple symbols in a single call:
 
 ```bash
 ty-find inspect calculate_sum
+
+# Inspect multiple symbols at once (results grouped by symbol)
+ty-find inspect calculate_sum UserService Config
 
 # Narrow to a specific file
 ty-find inspect calculate_sum --file src/math.py
@@ -86,10 +91,13 @@ ty-find --format json inspect UserService
 
 ### Find Symbol by Name
 
-Searches the workspace for a symbol's definition:
+Searches the workspace for a symbol's definition. Supports multiple symbols in a single call:
 
 ```bash
 ty-find find calculate_sum
+
+# Find multiple symbols at once (results grouped by symbol)
+ty-find find calculate_sum multiply divide
 
 # Narrow to a specific file (text-based search + goto_definition)
 ty-find find function_name --file myfile.py

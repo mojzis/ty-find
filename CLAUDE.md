@@ -52,7 +52,9 @@ maturin build --release
 ```bash
 # Requires ty to be installed: uv add --dev ty
 ty-find definition test_example.py --line 6 --column 5
-ty-find find test_example.py calculate_sum
+ty-find find calculate_sum
+ty-find find calculate_sum multiply divide   # multiple symbols in one call
+ty-find inspect MyClass my_function          # inspect multiple symbols at once
 ty-find interactive
 ```
 
@@ -104,6 +106,7 @@ If formatting fails, fix it with `cargo fmt` and re-run the checks.
 
 **Command Processing**:
 - Three main commands: `definition` (find at specific line/column), `find` (search symbol), `interactive` (REPL mode)
+- `find` and `inspect` accept multiple symbols in one call to reduce tool invocations (results grouped by symbol)
 - `SymbolFinder` does text-based symbol matching with whole-word detection
 - `OutputFormatter` supports multiple formats: human, JSON, CSV, paths-only
 

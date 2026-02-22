@@ -82,8 +82,9 @@ result = calc.add(1, 2)
     cmd.arg("--workspace")
         .arg(temp_dir.path())
         .arg("find")
-        .arg(&test_file)
-        .arg("add");
+        .arg("add")
+        .arg("--file")
+        .arg(&test_file);
 
     cmd.assert()
         .success()

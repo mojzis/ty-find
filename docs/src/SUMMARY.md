@@ -11,6 +11,7 @@
 - [Overview](commands/overview.md)
 - [inspect](commands/inspect.md)
 - [find](commands/find.md)
+- [interactive](commands/interactive.md)
 - [hover](commands/hover.md)
 - [definition](commands/definition.md)
 - [references](commands/references.md)

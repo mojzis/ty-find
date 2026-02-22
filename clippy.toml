@@ -1,0 +1,8 @@
+cognitive-complexity-threshold = 15
+avoid-breaking-exported-api = false
+allow-unwrap-in-tests = true
+too-many-arguments-threshold = 7
+type-complexity-threshold = 300
+disallowed-methods = [
+    { path = "std::env::set_current_dir", reason = "Thread-unsafe. Use per-command working directory instead." },
+]

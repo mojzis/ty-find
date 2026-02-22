@@ -16,23 +16,9 @@ pub use client::{ensure_daemon_running, get_socket_path, DaemonClient};
 pub use pool::LspClientPool;
 #[allow(unused_imports)]
 pub use protocol::{
-    DaemonError,
-    DaemonRequest,
-    DaemonResponse,
-    DefinitionParams,
-    DefinitionResult,
-    DiagnosticsParams,
-    DiagnosticsResult,
-    DocumentSymbolsParams,
-    DocumentSymbolsResult,
-    // Request types
-    HoverParams,
-    // Response types
-    HoverResult,
-    Method,
-    PingParams,
-    PingResult,
-    WorkspaceSymbolsParams,
+    DaemonError, DaemonRequest, DaemonResponse, DefinitionParams, DefinitionResult,
+    DiagnosticsParams, DiagnosticsResult, DocumentSymbolsParams, DocumentSymbolsResult,
+    HoverParams, HoverResult, Method, PingParams, PingResult, WorkspaceSymbolsParams,
     WorkspaceSymbolsResult,
 };
 #[allow(unused_imports)]

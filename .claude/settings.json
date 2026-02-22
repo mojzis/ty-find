@@ -5,6 +5,12 @@
         "type": "command",
         "command": "uv sync --dev"
       }
+    ],
+    "TaskCompleted": [
+      {
+        "type": "command",
+        "command": "cargo fmt --check && cargo clippy --all-features -- -D warnings"
+      }
     ]
   }
 }

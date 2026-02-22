@@ -40,10 +40,7 @@ impl WorkspaceDetector {
     }
 
     pub async fn check_ty_availability() -> Result<String> {
-        let output = tokio::process::Command::new("ty")
-            .arg("--version")
-            .output()
-            .await?;
+        let output = tokio::process::Command::new("ty").arg("--version").output().await?;
 
         if output.status.success() {
             let version = String::from_utf8_lossy(&output.stdout);

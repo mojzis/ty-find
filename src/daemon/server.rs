@@ -16,20 +16,14 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{broadcast, Mutex};
 
 use crate::daemon::pool::LspClientPool;
-use crate::daemon::protocol::*;
+use crate::daemon::protocol::{
+    DaemonError, DaemonRequest, DaemonResponse, DefinitionParams, DefinitionResult,
+    DiagnosticsResult, DocumentSymbolsParams, DocumentSymbolsResult, HoverParams, HoverResult,
+    Method, PingResult, ReferencesParams, ReferencesResult, ShutdownResult, WorkspaceSymbolsParams,
+    WorkspaceSymbolsResult,
+};
 
 /// The daemon server that handles client connections and LSP requests.
-///
-/// The server listens on a Unix socket and processes JSON-RPC requests from
-/// CLI clients. It maintains a pool of LSP clients (one per workspace) to
-/// enable fast response times by reusing connections.
-///
-/// # Architecture
-///
-/// - One daemon per user (socket at `/tmp/ty-find-{uid}.sock`)
-/// - One LSP client per workspace
-/// - Idle timeout after 5 minutes of inactivity
-/// - Graceful shutdown on SIGTERM or explicit shutdown request
 pub struct DaemonServer {
     /// Path to the Unix socket
     socket_path: PathBuf,
@@ -46,20 +40,6 @@ pub struct DaemonServer {
 
 impl DaemonServer {
     /// Create a new daemon server with the specified socket path.
-    ///
-    /// # Arguments
-    ///
-    /// * `socket_path` - Path to the Unix socket file
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// use std::path::PathBuf;
-    /// use ty_find::daemon::server::DaemonServer;
-    ///
-    /// let socket_path = PathBuf::from("/tmp/ty-find-1000.sock");
-    /// let server = DaemonServer::new(socket_path);
-    /// ```
     pub fn new(socket_path: PathBuf) -> Self {
         let (shutdown_tx, _) = broadcast::channel(1);
 
@@ -72,27 +52,14 @@ impl DaemonServer {
     }
 
     /// Get the socket path for the current user.
-    ///
-    /// The socket path is `/tmp/ty-find-{uid}.sock` where `{uid}` is the
-    /// current user's ID. This ensures each user has their own daemon.
-    ///
-    /// # Returns
-    ///
-    /// The socket path for the current user
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use ty_find::daemon::server::DaemonServer;
-    ///
-    /// let socket_path = DaemonServer::get_socket_path();
-    /// println!("Socket path: {}", socket_path.display());
-    /// ```
+    #[allow(unsafe_code)]
     pub fn get_socket_path() -> PathBuf {
         #[cfg(unix)]
         {
+            // SAFETY: `libc::getuid()` is a simple syscall that returns the real
+            // user ID. It has no preconditions and cannot cause UB.
             let uid = unsafe { libc::getuid() };
-            PathBuf::from(format!("/tmp/ty-find-{}.sock", uid))
+            PathBuf::from(format!("/tmp/ty-find-{uid}.sock"))
         }
 
         #[cfg(not(unix))]
@@ -103,29 +70,6 @@ impl DaemonServer {
     }
 
     /// Start the daemon server and listen for connections.
-    ///
-    /// This method binds to the Unix socket and enters the main event loop,
-    /// accepting connections and spawning tasks to handle them. It also starts
-    /// an idle timeout task that will shut down the daemon after 5 minutes of
-    /// inactivity.
-    ///
-    /// # Returns
-    ///
-    /// Returns an error if the socket cannot be bound or if the server
-    /// encounters a fatal error.
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// use ty_find::daemon::server::DaemonServer;
-    ///
-    /// # async fn example() -> anyhow::Result<()> {
-    /// let socket_path = DaemonServer::get_socket_path();
-    /// let server = DaemonServer::new(socket_path);
-    /// server.start().await?;
-    /// # Ok(())
-    /// # }
-    /// ```
     pub async fn start(self) -> Result<()> {
         // Remove existing socket file if it exists
         if self.socket_path.exists() {
@@ -173,15 +117,15 @@ impl DaemonServer {
                     result = listener.accept() => {
                         match result {
                             Ok((stream, _addr)) => {
-                                let server_clone = Arc::clone(&server_clone);
+                                let server_for_conn = Arc::clone(&server_clone);
                                 tokio::task::spawn_local(async move {
-                                    if let Err(_e) = server_clone.handle_connection(stream).await {
-                                        tracing::error!("Connection error: {}", _e);
+                                    if let Err(err) = server_for_conn.handle_connection(stream).await {
+                                        tracing::error!("Connection error: {err}");
                                     }
                                 });
                             }
-                            Err(_e) => {
-                                tracing::error!("Accept error: {}", _e);
+                            Err(err) => {
+                                tracing::error!("Accept error: {err}");
                             }
                         }
                     }
@@ -204,13 +148,6 @@ impl DaemonServer {
     }
 
     /// Handle a single client connection.
-    ///
-    /// Reads JSON-RPC requests from the client, processes them, and sends
-    /// responses back. Handles multiple requests over a single connection.
-    ///
-    /// # Arguments
-    ///
-    /// * `stream` - The Unix socket stream for this connection
     async fn handle_connection(self: Arc<Self>, stream: UnixStream) -> Result<()> {
         let (reader, mut writer) = stream.into_split();
         let mut reader = BufReader::new(reader);
@@ -227,35 +164,18 @@ impl DaemonServer {
             }
 
             // Parse content length
-            let content_length = match header_line.trim().strip_prefix("Content-Length: ") {
-                Some(len_str) => match len_str.parse::<usize>() {
-                    Ok(len) => len,
-                    Err(_) => {
-                        let error_response = DaemonResponse::error(0, DaemonError::parse_error());
-                        let response_json = serde_json::to_string(&error_response)?;
-                        let framed = format!(
-                            "Content-Length: {}\r\n\r\n{}",
-                            response_json.len(),
-                            response_json
-                        );
-                        writer.write_all(framed.as_bytes()).await?;
-                        writer.flush().await?;
+            let content_length =
+                if let Some(len_str) = header_line.trim().strip_prefix("Content-Length: ") {
+                    if let Ok(len) = len_str.parse::<usize>() {
+                        len
+                    } else {
+                        send_error_response(&mut writer, DaemonError::parse_error()).await?;
                         continue;
                     }
-                },
-                None => {
-                    let error_response = DaemonResponse::error(0, DaemonError::parse_error());
-                    let response_json = serde_json::to_string(&error_response)?;
-                    let framed = format!(
-                        "Content-Length: {}\r\n\r\n{}",
-                        response_json.len(),
-                        response_json
-                    );
-                    writer.write_all(framed.as_bytes()).await?;
-                    writer.flush().await?;
+                } else {
+                    send_error_response(&mut writer, DaemonError::parse_error()).await?;
                     continue;
-                }
-            };
+                };
 
             // Read empty separator line
             let mut empty_line = String::new();
@@ -266,20 +186,9 @@ impl DaemonServer {
             reader.read_exact(&mut body).await?;
 
             // Parse JSON-RPC request
-            let request: DaemonRequest = match serde_json::from_slice(&body) {
-                Ok(req) => req,
-                Err(_e) => {
-                    let error_response = DaemonResponse::error(0, DaemonError::parse_error());
-                    let response_json = serde_json::to_string(&error_response)?;
-                    let framed = format!(
-                        "Content-Length: {}\r\n\r\n{}",
-                        response_json.len(),
-                        response_json
-                    );
-                    writer.write_all(framed.as_bytes()).await?;
-                    writer.flush().await?;
-                    continue;
-                }
+            let Ok(request) = serde_json::from_slice::<DaemonRequest>(&body) else {
+                send_error_response(&mut writer, DaemonError::parse_error()).await?;
+                continue;
             };
 
             tracing::debug!("Received request: {:?}", request.method);
@@ -289,11 +198,7 @@ impl DaemonServer {
 
             // Send response with Content-Length framing
             let response_json = serde_json::to_string(&response)?;
-            let framed = format!(
-                "Content-Length: {}\r\n\r\n{}",
-                response_json.len(),
-                response_json
-            );
+            let framed = format!("Content-Length: {}\r\n\r\n{response_json}", response_json.len());
             writer.write_all(framed.as_bytes()).await?;
             writer.flush().await?;
 
@@ -304,17 +209,6 @@ impl DaemonServer {
     }
 
     /// Process a single JSON-RPC request and return a response.
-    ///
-    /// This method dispatches the request to the appropriate handler based on
-    /// the method name.
-    ///
-    /// # Arguments
-    ///
-    /// * `request` - The JSON-RPC request to process
-    ///
-    /// # Returns
-    ///
-    /// A JSON-RPC response (either success or error)
     async fn handle_request(&self, request: DaemonRequest) -> DaemonResponse {
         let result = match request.method {
             Method::Hover => self.handle_hover(request.params).await,
@@ -338,13 +232,7 @@ impl DaemonServer {
         let params: HoverParams =
             serde_json::from_value(params).context("Invalid hover parameters")?;
 
-        let client = {
-            self.lsp_pool
-                .lock()
-                .await
-                .get_or_create(params.workspace)
-                .await?
-        };
+        let client = { self.lsp_pool.lock().await.get_or_create(params.workspace).await? };
 
         let file_str = params.file.to_string_lossy().to_string();
         client.open_document(&file_str).await?;
@@ -359,19 +247,11 @@ impl DaemonServer {
         let params: DefinitionParams =
             serde_json::from_value(params).context("Invalid definition parameters")?;
 
-        let client = {
-            self.lsp_pool
-                .lock()
-                .await
-                .get_or_create(params.workspace)
-                .await?
-        };
+        let client = { self.lsp_pool.lock().await.get_or_create(params.workspace).await? };
 
         let file_str = params.file.to_string_lossy().to_string();
         client.open_document(&file_str).await?;
-        let locations = client
-            .goto_definition(&file_str, params.line, params.column)
-            .await?;
+        let locations = client.goto_definition(&file_str, params.line, params.column).await?;
 
         let location = locations.into_iter().next();
         let result = DefinitionResult { location };
@@ -383,13 +263,7 @@ impl DaemonServer {
         let params: WorkspaceSymbolsParams =
             serde_json::from_value(params).context("Invalid workspace symbols parameters")?;
 
-        let client = {
-            self.lsp_pool
-                .lock()
-                .await
-                .get_or_create(params.workspace)
-                .await?
-        };
+        let client = { self.lsp_pool.lock().await.get_or_create(params.workspace).await? };
 
         let mut symbols = client.workspace_symbols(&params.query).await?;
 
@@ -407,13 +281,7 @@ impl DaemonServer {
         let params: DocumentSymbolsParams =
             serde_json::from_value(params).context("Invalid document symbols parameters")?;
 
-        let client = {
-            self.lsp_pool
-                .lock()
-                .await
-                .get_or_create(params.workspace)
-                .await?
-        };
+        let client = { self.lsp_pool.lock().await.get_or_create(params.workspace).await? };
 
         let file_str = params.file.to_string_lossy().to_string();
         client.open_document(&file_str).await?;
@@ -428,23 +296,12 @@ impl DaemonServer {
         let params: ReferencesParams =
             serde_json::from_value(params).context("Invalid references parameters")?;
 
-        let client = {
-            self.lsp_pool
-                .lock()
-                .await
-                .get_or_create(params.workspace)
-                .await?
-        };
+        let client = { self.lsp_pool.lock().await.get_or_create(params.workspace).await? };
 
         let file_str = params.file.to_string_lossy().to_string();
         client.open_document(&file_str).await?;
         let locations = client
-            .find_references(
-                &file_str,
-                params.line,
-                params.column,
-                params.include_declaration,
-            )
+            .find_references(&file_str, params.line, params.column, params.include_declaration)
             .await?;
 
         let result = ReferencesResult { locations };
@@ -452,12 +309,11 @@ impl DaemonServer {
     }
 
     /// Handle a diagnostics request.
+    #[allow(clippy::unused_async)] // Matches async handler interface
     async fn handle_diagnostics(&self, _params: Value) -> Result<Value> {
         // Diagnostics are not yet implemented in the LSP client
         // Return empty diagnostics for now
-        let result = DiagnosticsResult {
-            diagnostics: vec![],
-        };
+        let result = DiagnosticsResult { diagnostics: vec![] };
         Ok(serde_json::to_value(result)?)
     }
 
@@ -477,21 +333,18 @@ impl DaemonServer {
     }
 
     /// Handle a shutdown request.
+    #[allow(clippy::unused_async)] // Matches async handler interface
     async fn handle_shutdown(&self, _params: Value) -> Result<Value> {
         tracing::info!("Shutdown requested");
 
         // Send shutdown signal
         let _ = self.shutdown_tx.send(());
 
-        let result = ShutdownResult {
-            message: "Daemon shutting down".to_string(),
-        };
+        let result = ShutdownResult { message: "Daemon shutting down".to_string() };
         Ok(serde_json::to_value(result)?)
     }
 
     /// Idle timeout task that shuts down the daemon after inactivity.
-    ///
-    /// Checks every minute and shuts down if there's been no activity for 5 minutes.
     async fn idle_timeout_task(&self) {
         let idle_timeout = Duration::from_secs(300); // 5 minutes
         let check_interval = Duration::from_secs(60); // 1 minute
@@ -503,7 +356,7 @@ impl DaemonServer {
             let pool = self.lsp_pool.lock().await;
             let removed = pool.cleanup_idle(idle_timeout);
             if removed > 0 {
-                tracing::info!("Removed {} idle LSP clients", removed);
+                tracing::info!("Removed {removed} idle LSP clients");
             }
 
             // Check if daemon should shut down (all clients idle)
@@ -517,8 +370,7 @@ impl DaemonServer {
     }
 
     /// Graceful shutdown cleanup.
-    ///
-    /// Removes the socket file and releases resources.
+    #[allow(clippy::unused_async)] // Called from async context
     async fn cleanup(&self) -> Result<()> {
         tracing::info!("Cleaning up daemon resources");
 
@@ -531,24 +383,6 @@ impl DaemonServer {
     }
 
     /// Spawn the daemon as a background process.
-    ///
-    /// This method forks the current process (on Unix) and starts the daemon
-    /// server in the background. The parent process returns immediately.
-    ///
-    /// # Returns
-    ///
-    /// Returns an error if the daemon cannot be spawned.
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// use ty_find::daemon::server::DaemonServer;
-    ///
-    /// # fn example() -> anyhow::Result<()> {
-    /// DaemonServer::spawn_background()?;
-    /// # Ok(())
-    /// # }
-    /// ```
     pub fn spawn_background() -> Result<()> {
         let socket_path = Self::get_socket_path();
 
@@ -593,6 +427,19 @@ impl DaemonServer {
     }
 }
 
+/// Send a framed error response to the client.
+async fn send_error_response(
+    writer: &mut tokio::net::unix::OwnedWriteHalf,
+    error: DaemonError,
+) -> Result<()> {
+    let error_response = DaemonResponse::error(0, error);
+    let response_json = serde_json::to_string(&error_response)?;
+    let framed = format!("Content-Length: {}\r\n\r\n{response_json}", response_json.len());
+    writer.write_all(framed.as_bytes()).await?;
+    writer.flush().await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -619,7 +466,7 @@ mod tests {
         let result = server.handle_ping(params).await;
 
         assert!(result.is_ok());
-        let value = result.unwrap();
+        let value = result.expect("ping should succeed");
         assert!(value.get("status").is_some());
         assert!(value.get("uptime").is_some());
     }

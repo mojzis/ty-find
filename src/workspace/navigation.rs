@@ -11,7 +11,7 @@ pub struct SymbolFinder {
 impl SymbolFinder {
     pub fn new(file_path: &str) -> Result<Self> {
         let content = fs::read_to_string(file_path)?;
-        let lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
+        let lines: Vec<String> = content.lines().map(String::from).collect();
 
         Ok(Self { content, lines })
     }
@@ -24,7 +24,8 @@ impl SymbolFinder {
             while let Some(pos) = line[char_pos..].find(symbol) {
                 let actual_pos = char_pos + pos;
 
-                if self.is_whole_word_match(line, actual_pos, symbol) {
+                if Self::is_whole_word_match(line, actual_pos, symbol) {
+                    #[allow(clippy::cast_possible_truncation)]
                     positions.push((line_idx as u32, actual_pos as u32));
                 }
 
@@ -35,7 +36,7 @@ impl SymbolFinder {
         positions
     }
 
-    fn is_whole_word_match(&self, line: &str, pos: usize, symbol: &str) -> bool {
+    fn is_whole_word_match(line: &str, pos: usize, symbol: &str) -> bool {
         let chars: Vec<char> = line.chars().collect();
 
         if pos > 0 {
@@ -56,8 +57,8 @@ impl SymbolFinder {
         true
     }
 
-    pub fn get_line(&self, line_number: u32) -> Option<&String> {
-        self.lines.get(line_number as usize)
+    pub fn get_line(&self, line_number: u32) -> Option<&str> {
+        self.lines.get(line_number as usize).map(String::as_str)
     }
 }
 
@@ -72,7 +73,7 @@ mod tests {
         let mut temp_file = NamedTempFile::new().unwrap();
         writeln!(temp_file, "def test_function():").unwrap();
         writeln!(temp_file, "    return test_function()").unwrap();
-        writeln!(temp_file, "").unwrap();
+        writeln!(temp_file).unwrap();
         writeln!(temp_file, "result = test_function()").unwrap();
 
         let finder = SymbolFinder::new(temp_file.path().to_str().unwrap()).unwrap();

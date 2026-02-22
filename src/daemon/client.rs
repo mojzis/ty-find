@@ -14,7 +14,12 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 use tokio::time::timeout;
 
-use super::protocol::*;
+use super::protocol::{
+    DaemonRequest, DaemonResponse, DefinitionParams, DefinitionResult, DocumentSymbolsParams,
+    DocumentSymbolsResult, HoverParams, HoverResult, Method, PingParams, PingResult,
+    ReferencesParams, ReferencesResult, ShutdownParams, WorkspaceSymbolsParams,
+    WorkspaceSymbolsResult,
+};
 
 /// Default timeout for daemon operations (5 seconds).
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -53,6 +58,7 @@ const STARTUP_RETRY_DELAY: Duration = Duration::from_millis(100);
 /// ```
 pub struct DaemonClient {
     /// Path to the Unix domain socket.
+    #[allow(dead_code)]
     socket_path: PathBuf,
 
     /// Connection to the daemon.
@@ -63,11 +69,6 @@ impl DaemonClient {
     /// Connect to an existing daemon.
     ///
     /// Returns an error if the daemon is not running or the socket doesn't exist.
-    ///
-    /// # Errors
-    /// - Socket file doesn't exist
-    /// - Connection to socket failed
-    /// - Daemon is not responsive
     pub async fn connect() -> Result<Self> {
         let socket_path = get_socket_path()?;
 
@@ -77,33 +78,10 @@ impl DaemonClient {
 
         tracing::debug!("Connected to daemon at {}", socket_path.display());
 
-        Ok(Self {
-            socket_path,
-            stream,
-        })
+        Ok(Self { socket_path, stream })
     }
 
     /// Send a JSON-RPC request to the daemon and wait for response.
-    ///
-    /// This method handles the low-level protocol details including:
-    /// - Creating the JSON-RPC request
-    /// - Framing with Content-Length header
-    /// - Sending over the Unix socket
-    /// - Reading the framed response
-    /// - Parsing the JSON-RPC response
-    ///
-    /// # Arguments
-    /// - `method`: The daemon method to invoke
-    /// - `params`: Method-specific parameters as JSON value
-    ///
-    /// # Returns
-    /// The JSON-RPC response from the daemon
-    ///
-    /// # Errors
-    /// - Timeout waiting for response
-    /// - IO error communicating with daemon
-    /// - JSON parsing error
-    /// - Daemon returned an error response
     pub async fn send_request(&mut self, method: Method, params: Value) -> Result<DaemonResponse> {
         let request = DaemonRequest::new(method, params);
 
@@ -112,11 +90,7 @@ impl DaemonClient {
             serde_json::to_string(&request).context("Failed to serialize request")?;
 
         // Frame with Content-Length header
-        let message = format!(
-            "Content-Length: {}\r\n\r\n{}",
-            request_json.len(),
-            request_json
-        );
+        let message = format!("Content-Length: {}\r\n\r\n{request_json}", request_json.len());
 
         // Send request with timeout
         timeout(DEFAULT_TIMEOUT, async {
@@ -147,10 +121,7 @@ impl DaemonClient {
 
         // Read Content-Length header
         let mut header_line = String::new();
-        reader
-            .read_line(&mut header_line)
-            .await
-            .context("Failed to read Content-Length header")?;
+        reader.read_line(&mut header_line).await.context("Failed to read Content-Length header")?;
 
         // Parse content length
         let content_length = header_line
@@ -162,21 +133,15 @@ impl DaemonClient {
 
         // Read empty line
         let mut empty_line = String::new();
-        reader
-            .read_line(&mut empty_line)
-            .await
-            .context("Failed to read header separator")?;
+        reader.read_line(&mut empty_line).await.context("Failed to read header separator")?;
 
-        if empty_line.trim() != "" {
+        if !empty_line.trim().is_empty() {
             anyhow::bail!("Expected empty line after Content-Length header");
         }
 
         // Read response body
         let mut body = vec![0u8; content_length];
-        reader
-            .read_exact(&mut body)
-            .await
-            .context("Failed to read response body")?;
+        reader.read_exact(&mut body).await.context("Failed to read response body")?;
 
         // Parse JSON response
         let response: DaemonResponse =
@@ -188,14 +153,6 @@ impl DaemonClient {
     }
 
     /// Execute a hover request.
-    ///
-    /// Returns type information and documentation at a specific position in a file.
-    ///
-    /// # Arguments
-    /// - `workspace`: Workspace root directory
-    /// - `file`: File path (absolute or relative to workspace)
-    /// - `line`: Line number (0-based)
-    /// - `column`: Column number (0-based)
     pub async fn execute_hover(
         &mut self,
         workspace: PathBuf,
@@ -203,12 +160,7 @@ impl DaemonClient {
         line: u32,
         column: u32,
     ) -> Result<HoverResult> {
-        let params = HoverParams {
-            workspace,
-            file: PathBuf::from(file),
-            line,
-            column,
-        };
+        let params = HoverParams { workspace, file: PathBuf::from(file), line, column };
 
         let params_value =
             serde_json::to_value(params).context("Failed to serialize hover params")?;
@@ -225,14 +177,6 @@ impl DaemonClient {
     }
 
     /// Execute a definition request.
-    ///
-    /// Returns the location where a symbol is defined.
-    ///
-    /// # Arguments
-    /// - `workspace`: Workspace root directory
-    /// - `file`: File path (absolute or relative to workspace)
-    /// - `line`: Line number (0-based)
-    /// - `column`: Column number (0-based)
     pub async fn execute_definition(
         &mut self,
         workspace: PathBuf,
@@ -240,12 +184,7 @@ impl DaemonClient {
         line: u32,
         column: u32,
     ) -> Result<DefinitionResult> {
-        let params = DefinitionParams {
-            workspace,
-            file: PathBuf::from(file),
-            line,
-            column,
-        };
+        let params = DefinitionParams { workspace, file: PathBuf::from(file), line, column };
 
         let params_value =
             serde_json::to_value(params).context("Failed to serialize definition params")?;
@@ -262,29 +201,17 @@ impl DaemonClient {
     }
 
     /// Execute a workspace symbols request.
-    ///
-    /// Searches for symbols matching a query across the entire workspace.
-    ///
-    /// # Arguments
-    /// - `workspace`: Workspace root directory
-    /// - `query`: Search query (can be fuzzy)
     pub async fn execute_workspace_symbols(
         &mut self,
         workspace: PathBuf,
         query: String,
     ) -> Result<WorkspaceSymbolsResult> {
-        let params = WorkspaceSymbolsParams {
-            workspace,
-            query,
-            limit: None,
-        };
+        let params = WorkspaceSymbolsParams { workspace, query, limit: None };
 
         let params_value =
             serde_json::to_value(params).context("Failed to serialize workspace symbols params")?;
 
-        let response = self
-            .send_request(Method::WorkspaceSymbols, params_value)
-            .await?;
+        let response = self.send_request(Method::WorkspaceSymbols, params_value).await?;
 
         if let Some(error) = response.error {
             anyhow::bail!("Daemon error: {}", error.message);
@@ -296,28 +223,17 @@ impl DaemonClient {
     }
 
     /// Execute a document symbols request.
-    ///
-    /// Returns an outline of all symbols in a file.
-    ///
-    /// # Arguments
-    /// - `workspace`: Workspace root directory
-    /// - `file`: File path (absolute or relative to workspace)
     pub async fn execute_document_symbols(
         &mut self,
         workspace: PathBuf,
         file: String,
     ) -> Result<DocumentSymbolsResult> {
-        let params = DocumentSymbolsParams {
-            workspace,
-            file: PathBuf::from(file),
-        };
+        let params = DocumentSymbolsParams { workspace, file: PathBuf::from(file) };
 
         let params_value =
             serde_json::to_value(params).context("Failed to serialize document symbols params")?;
 
-        let response = self
-            .send_request(Method::DocumentSymbols, params_value)
-            .await?;
+        let response = self.send_request(Method::DocumentSymbols, params_value).await?;
 
         if let Some(error) = response.error {
             anyhow::bail!("Daemon error: {}", error.message);
@@ -329,15 +245,6 @@ impl DaemonClient {
     }
 
     /// Execute a references request.
-    ///
-    /// Returns all locations where a symbol at the given position is referenced.
-    ///
-    /// # Arguments
-    /// - `workspace`: Workspace root directory
-    /// - `file`: File path (absolute or relative to workspace)
-    /// - `line`: Line number (0-based)
-    /// - `column`: Column number (0-based)
-    /// - `include_declaration`: Whether to include the declaration in results
     pub async fn execute_references(
         &mut self,
         workspace: PathBuf,
@@ -369,8 +276,6 @@ impl DaemonClient {
     }
 
     /// Send a ping request to check daemon health.
-    ///
-    /// Returns daemon status information including uptime and cache size.
     pub async fn ping(&mut self) -> Result<PingResult> {
         let params = PingParams {};
 
@@ -407,16 +312,6 @@ impl DaemonClient {
 }
 
 /// Ensure the daemon is running, starting it if necessary.
-///
-/// This function:
-/// 1. Checks if the daemon socket exists
-/// 2. If not, spawns the daemon in the background
-/// 3. Waits for the daemon to start (up to DAEMON_STARTUP_TIMEOUT)
-/// 4. Returns once the daemon is responsive
-///
-/// # Errors
-/// - Failed to spawn daemon process
-/// - Daemon failed to start within timeout
 pub async fn ensure_daemon_running() -> Result<()> {
     let socket_path = get_socket_path()?;
 
@@ -428,7 +323,7 @@ pub async fn ensure_daemon_running() -> Result<()> {
                 return Ok(());
             }
             Err(e) => {
-                tracing::warn!("Socket exists but connection failed: {}", e);
+                tracing::warn!("Socket exists but connection failed: {e}");
                 // Try to clean up stale socket
                 let _ = std::fs::remove_file(&socket_path);
             }
@@ -450,7 +345,7 @@ pub async fn ensure_daemon_running() -> Result<()> {
                     return Ok(());
                 }
                 Ok(Err(e)) => {
-                    tracing::debug!("Connection attempt {} failed: {}", i + 1, e);
+                    tracing::debug!("Connection attempt {} failed: {e}", i + 1);
                 }
                 Err(_) => {
                     tracing::debug!("Connection attempt {} timed out", i + 1);
@@ -459,13 +354,10 @@ pub async fn ensure_daemon_running() -> Result<()> {
         }
     }
 
-    anyhow::bail!("Daemon failed to start within {:?}", DAEMON_STARTUP_TIMEOUT)
+    anyhow::bail!("Daemon failed to start within {DAEMON_STARTUP_TIMEOUT:?}")
 }
 
 /// Spawn the daemon process in the background.
-///
-/// The daemon is started as a detached background process that will
-/// continue running after the CLI process exits.
 fn spawn_daemon() -> Result<()> {
     use std::process::{Command, Stdio};
 
@@ -493,15 +385,15 @@ fn spawn_daemon() -> Result<()> {
 ///
 /// Returns `/tmp/ty-find-{uid}.sock` on Unix systems where {uid} is the
 /// current user ID. This ensures each user has their own daemon instance.
-///
-/// # Errors
-/// - Failed to get current user ID
+#[allow(unsafe_code)]
+#[allow(clippy::unnecessary_wraps)] // Returns Err on non-Unix platforms
 pub fn get_socket_path() -> Result<PathBuf> {
     #[cfg(unix)]
     {
-        // Get current user ID for socket isolation
+        // SAFETY: `libc::getuid()` is a simple syscall that returns the real
+        // user ID. It has no preconditions and cannot cause UB.
         let uid = unsafe { libc::getuid() };
-        let socket_name = format!("ty-find-{}.sock", uid);
+        let socket_name = format!("ty-find-{uid}.sock");
         let socket_path = PathBuf::from("/tmp").join(socket_name);
         Ok(socket_path)
     }
@@ -519,24 +411,26 @@ mod tests {
 
     #[test]
     fn test_get_socket_path() {
-        let socket_path = get_socket_path().unwrap();
+        let socket_path = get_socket_path().expect("should return a valid socket path");
         assert!(socket_path.to_string_lossy().contains("ty-find"));
         assert!(socket_path.to_string_lossy().ends_with(".sock"));
     }
 
     #[test]
+    #[allow(unsafe_code)]
     fn test_socket_path_contains_uid() {
         #[cfg(unix)]
         {
+            // SAFETY: `libc::getuid()` is a simple syscall with no preconditions.
             let uid = unsafe { libc::getuid() };
-            let socket_path = get_socket_path().unwrap();
+            let socket_path = get_socket_path().expect("should return a valid socket path");
             let path_str = socket_path.to_string_lossy();
             assert!(path_str.contains(&uid.to_string()));
         }
     }
 
-    #[tokio::test]
-    async fn test_daemon_request_creation() {
+    #[test]
+    fn test_daemon_request_creation() {
         let params = HoverParams {
             workspace: PathBuf::from("/workspace"),
             file: PathBuf::from("file.py"),
@@ -544,7 +438,7 @@ mod tests {
             column: 5,
         };
 
-        let params_value = serde_json::to_value(params).unwrap();
+        let params_value = serde_json::to_value(params).expect("should serialize params");
         let request = DaemonRequest::new(Method::Hover, params_value);
 
         assert_eq!(request.jsonrpc, "2.0");
@@ -552,8 +446,8 @@ mod tests {
         assert!(request.id > 0);
     }
 
-    #[tokio::test]
-    async fn test_response_parsing() {
+    #[test]
+    fn test_response_parsing() {
         let response_json = r#"{
             "jsonrpc": "2.0",
             "id": 1,
@@ -562,14 +456,15 @@ mod tests {
             }
         }"#;
 
-        let response: DaemonResponse = serde_json::from_str(response_json).unwrap();
+        let response: DaemonResponse =
+            serde_json::from_str(response_json).expect("should parse response");
         assert!(response.is_success());
         assert!(!response.is_error());
         assert_eq!(response.id, 1);
     }
 
-    #[tokio::test]
-    async fn test_error_response_parsing() {
+    #[test]
+    fn test_error_response_parsing() {
         let response_json = r#"{
             "jsonrpc": "2.0",
             "id": 1,
@@ -580,11 +475,12 @@ mod tests {
             }
         }"#;
 
-        let response: DaemonResponse = serde_json::from_str(response_json).unwrap();
+        let response: DaemonResponse =
+            serde_json::from_str(response_json).expect("should parse error response");
         assert!(response.is_error());
         assert!(!response.is_success());
 
-        let error = response.error.unwrap();
+        let error = response.error.expect("should have error field");
         assert_eq!(error.code, -32000);
         assert_eq!(error.message, "File not found");
     }

@@ -1,10 +1,18 @@
+use clap::builder::styling::{AnsiColor, Styles};
 use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
+
+const STYLES: Styles = Styles::styled()
+    .header(AnsiColor::Green.on_default().bold())
+    .literal(AnsiColor::Cyan.on_default().bold())
+    .placeholder(AnsiColor::Cyan.on_default())
+    .error(AnsiColor::Red.on_default().bold());
 
 #[derive(Parser)]
 #[command(name = "ty-find")]
 #[command(about = "Find Python function definitions using ty's LSP server")]
 #[command(version)]
+#[command(styles = STYLES)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,

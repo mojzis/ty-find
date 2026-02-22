@@ -32,8 +32,15 @@ pub enum Commands {
         column: u32,
     },
 
-    /// Find a symbol by name in a file
-    Find { file: PathBuf, symbol: String },
+    /// Find a symbol's definition by name (searches workspace if no file given)
+    Find {
+        /// Symbol name to find
+        symbol: String,
+
+        /// Optional file to search in (uses workspace symbols if omitted)
+        #[arg(short, long)]
+        file: Option<PathBuf>,
+    },
 
     /// Interactive REPL for exploring definitions
     Interactive { file: Option<PathBuf> },
@@ -74,7 +81,14 @@ pub enum Commands {
     DocumentSymbols { file: PathBuf },
 
     /// Inspect a symbol: find definition, hover info, and references in one shot
-    Inspect { file: PathBuf, symbol: String },
+    Inspect {
+        /// Symbol name to inspect
+        symbol: String,
+
+        /// Optional file to narrow the search (uses workspace symbols if omitted)
+        #[arg(short, long)]
+        file: Option<PathBuf>,
+    },
 
     /// Manage the background ty LSP server daemon
     Daemon {

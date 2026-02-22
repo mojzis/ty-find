@@ -141,3 +141,35 @@ greet()
         .stdout(predicate::str::contains("uri"))
         .stdout(predicate::str::contains("range"));
 }
+
+#[tokio::test]
+async fn test_inspect_command() {
+    require_ty();
+
+    let temp_dir = TempDir::new().unwrap();
+    let test_file = temp_dir.path().join("test.py");
+
+    fs::write(
+        &test_file,
+        r#"
+def greet(name: str) -> str:
+    return f"Hello, {name}!"
+
+result = greet("world")
+print(result)
+"#,
+    )
+    .unwrap();
+
+    let mut cmd = Command::cargo_bin("ty-find").unwrap();
+    cmd.arg("--workspace")
+        .arg(temp_dir.path())
+        .arg("inspect")
+        .arg("greet")
+        .arg("--file")
+        .arg(&test_file);
+
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("greet"));
+}

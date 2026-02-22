@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Generates llms.txt and llms-full.txt from mdBook source files
+# Generates llms.txt and llms-full.txt from mdBook source files,
+# and copies source .md files into the build output for direct access.
 set -euo pipefail
 
 DOCS_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -9,7 +10,17 @@ SITE_URL="https://mojzis.github.io/ty-find"
 
 mkdir -p "$BOOK_DIR"
 
-# llms.txt — index with links
+# Copy source .md files into the build output so they're served alongside HTML.
+# Preserve directory structure (e.g. commands/*.md).
+grep -oP '\(([^)]+\.md)\)' "$SRC_DIR/SUMMARY.md" | tr -d '()' | while IFS= read -r path; do
+    if [ -f "$SRC_DIR/$path" ]; then
+        mkdir -p "$BOOK_DIR/$(dirname "$path")"
+        cp "$SRC_DIR/$path" "$BOOK_DIR/$path"
+    fi
+done
+echo "Copied .md source files to $BOOK_DIR/"
+
+# llms.txt — index with links to .md files
 cat > "$BOOK_DIR/llms.txt" << EOF
 # ty-find
 
@@ -24,9 +35,7 @@ EOF
 grep -oP '\[([^\]]+)\]\(([^)]+)\)' "$SRC_DIR/SUMMARY.md" | while IFS= read -r match; do
     title=$(echo "$match" | sed 's/\[\([^]]*\)\](.*)/\1/')
     path=$(echo "$match" | sed 's/\[.*\](\(.*\))/\1/')
-    # Convert .md to .html for the URL
-    html_path="${path%.md}.html"
-    echo "- [$title]($SITE_URL/$html_path): $title" >> "$BOOK_DIR/llms.txt"
+    echo "- [$title]($SITE_URL/$path): $title" >> "$BOOK_DIR/llms.txt"
 done
 
 echo "Wrote $BOOK_DIR/llms.txt"

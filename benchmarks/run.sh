@@ -9,6 +9,7 @@ set -euo pipefail
 
 PANDAS_COMMIT="990a2ad7bdca09cd42a4998a60c8ece8677b4a15"
 HYPERFINE_RUNS=3
+HYPERFINE_TIMEOUT=60
 THRESHOLD="1.5"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BASELINE_FILE="$SCRIPT_DIR/baseline.json"
@@ -19,7 +20,7 @@ if [ "${1:-}" = "--save-baseline" ]; then
 fi
 
 # --- Dependency checks ---
-for cmd in ty-find hyperfine jq bc; do
+for cmd in ty-find hyperfine jq bc python3; do
     if ! command -v "$cmd" >/dev/null 2>&1; then
         echo "ERROR: '$cmd' is required but not found on PATH." >&2
         exit 1
@@ -27,26 +28,27 @@ for cmd in ty-find hyperfine jq bc; do
 done
 
 # --- Clone pandas at pinned commit ---
+# Uses git init + fetch to reliably fetch a specific commit regardless of
+# how far it has drifted from the default branch HEAD.
 PANDAS_DIR="${TMPDIR:-/tmp}/ty-find-bench-pandas"
 if [ -d "$PANDAS_DIR/.git" ]; then
-    echo "Pandas checkout already exists at $PANDAS_DIR, skipping clone."
     CURRENT_COMMIT="$(git -C "$PANDAS_DIR" rev-parse HEAD)"
-    if [ "$CURRENT_COMMIT" != "$PANDAS_COMMIT" ]; then
+    if [ "$CURRENT_COMMIT" = "$PANDAS_COMMIT" ]; then
+        echo "Pandas checkout already exists at $PANDAS_DIR, skipping clone."
+    else
         echo "WARNING: Existing checkout is at $CURRENT_COMMIT, expected $PANDAS_COMMIT"
         echo "Removing and re-cloning..."
         rm -rf "$PANDAS_DIR"
-        git clone --depth 1 https://github.com/pandas-dev/pandas.git "$PANDAS_DIR"
-        git -C "$PANDAS_DIR" fetch --depth 1 origin "$PANDAS_COMMIT"
-        git -C "$PANDAS_DIR" checkout "$PANDAS_COMMIT"
+        git init "$PANDAS_DIR"
+        git -C "$PANDAS_DIR" fetch --depth 1 https://github.com/pandas-dev/pandas.git "$PANDAS_COMMIT"
+        git -C "$PANDAS_DIR" checkout FETCH_HEAD
     fi
 else
     echo "Cloning pandas at commit $PANDAS_COMMIT..."
-    git clone --depth 1 https://github.com/pandas-dev/pandas.git "$PANDAS_DIR"
-    CURRENT_COMMIT="$(git -C "$PANDAS_DIR" rev-parse HEAD)"
-    if [ "$CURRENT_COMMIT" != "$PANDAS_COMMIT" ]; then
-        git -C "$PANDAS_DIR" fetch --depth 1 origin "$PANDAS_COMMIT"
-        git -C "$PANDAS_DIR" checkout "$PANDAS_COMMIT"
-    fi
+    rm -rf "$PANDAS_DIR"
+    git init "$PANDAS_DIR"
+    git -C "$PANDAS_DIR" fetch --depth 1 https://github.com/pandas-dev/pandas.git "$PANDAS_COMMIT"
+    git -C "$PANDAS_DIR" checkout FETCH_HEAD
 fi
 
 echo "Using pandas checkout at: $PANDAS_DIR"
@@ -60,6 +62,13 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Use Python for nanosecond timing — portable across Linux and macOS.
+# (date +%s%N is a GNU extension that silently produces garbage on macOS
+# instead of failing, so the || fallback trick doesn't work.)
+nanoseconds() {
+    python3 -c 'import time; print(int(time.time()*1e9))'
+}
+
 extract_median() {
     jq '.results[0].median' "$1"
 }
@@ -69,7 +78,7 @@ run_hyperfine_bench() {
     local cmd="$2"
     local outfile="$TMPDIR_BENCH/${name}.json"
     echo "  Running: $cmd" >&2
-    if hyperfine --warmup 1 --runs "$HYPERFINE_RUNS" --ignore-failure --export-json "$outfile" "$cmd" 2>&1 | \
+    if hyperfine --warmup 1 --runs "$HYPERFINE_RUNS" --time-limit "$HYPERFINE_TIMEOUT" --export-json "$outfile" "$cmd" 2>&1 | \
         sed 's/^/    /' >&2; then
         if [ -f "$outfile" ] && jq -e '.results[0].median' "$outfile" >/dev/null 2>&1; then
             extract_median "$outfile"
@@ -83,9 +92,9 @@ run_hyperfine_bench() {
 measure_single_run() {
     local cmd="$1"
     local start end elapsed result
-    start="$(date +%s%N 2>/dev/null || python3 -c 'import time; print(int(time.time()*1e9))')"
+    start="$(nanoseconds)"
     eval "$cmd" >/dev/null 2>&1 || true
-    end="$(date +%s%N 2>/dev/null || python3 -c 'import time; print(int(time.time()*1e9))')"
+    end="$(nanoseconds)"
     elapsed=$(( end - start ))
     result="$(echo "scale=6; $elapsed / 1000000000" | bc)"
     # bc omits leading zero for values < 1, add it for valid JSON
@@ -102,20 +111,29 @@ get_platform() {
     echo "$os $arch"
 }
 
-# --- Stop daemon for cold-start measurement ---
-echo "=== Stopping daemon for clean benchmarks ==="
+# --- Cold/warm start measurement ---
+# Measure cold start FIRST, before any benchmarks run, so filesystem caches
+# are as cold as possible. Note: this is "cold daemon, possibly warm filesystem
+# cache" — truly cold filesystem measurement would require dropping OS caches
+# (echo 3 > /proc/sys/vm/drop_caches on Linux, requires root), which is
+# impractical in CI.
+echo "=== Measuring startup times ==="
+echo ""
+
+echo "Stopping daemon for cold start measurement..."
 ty-find daemon stop >/dev/null 2>&1 || true
 sleep 1
 
-# --- Run benchmarks ---
-echo ""
-echo "=== Running ty-find benchmarks against pandas ==="
+echo "Measuring cold start..."
+COLD_START="$(measure_single_run "ty-find --workspace $PANDAS_DIR inspect DataFrame")"
+echo "  Cold start: ${COLD_START}s"
+
+echo "Measuring warm start..."
+WARM_START="$(measure_single_run "ty-find --workspace $PANDAS_DIR inspect DataFrame")"
+echo "  Warm start: ${WARM_START}s"
 echo ""
 
-# Store results in temp files since associative arrays and subshells don't mix well
-RESULTS_DIR="$TMPDIR_BENCH/results"
-mkdir -p "$RESULTS_DIR"
-
+# --- Pre-flight: verify each ty-find command works before benchmarking ---
 # Benchmark definitions (pipe-separated: name|ty_cmd|grep_cmd)
 BENCHMARKS=(
     "find-DataFrame|ty-find --workspace $PANDAS_DIR find DataFrame|grep -rn 'class DataFrame' --include='*.py' $PANDAS_DIR"
@@ -123,6 +141,31 @@ BENCHMARKS=(
     "inspect-DataFrame|ty-find --workspace $PANDAS_DIR inspect DataFrame|"
     "workspace-symbols|ty-find --workspace $PANDAS_DIR workspace-symbols --query DataFrame|grep -rn 'DataFrame' --include='*.py' $PANDAS_DIR"
 )
+
+echo "=== Pre-flight: verifying commands ==="
+for bench in "${BENCHMARKS[@]}"; do
+    IFS='|' read -r name ty_cmd _ <<< "$bench"
+    echo -n "  $name: "
+    if eval "$ty_cmd" >/dev/null 2>&1; then
+        echo "OK"
+    else
+        echo "FAILED"
+        echo "ERROR: Pre-flight check failed for '$name': $ty_cmd" >&2
+        echo "Fix the command before benchmarking — results for broken commands are meaningless." >&2
+        exit 1
+    fi
+done
+echo ""
+
+# --- Run benchmarks ---
+# The daemon is already warm from the startup measurements and pre-flight checks
+# above, so the first benchmark run doesn't pay cold-start cost.
+echo "=== Running ty-find benchmarks against pandas ==="
+echo ""
+
+# Store results in temp files since associative arrays and subshells don't mix well
+RESULTS_DIR="$TMPDIR_BENCH/results"
+mkdir -p "$RESULTS_DIR"
 
 for bench in "${BENCHMARKS[@]}"; do
     IFS='|' read -r name ty_cmd grep_cmd <<< "$bench"
@@ -150,23 +193,6 @@ for bench in "${BENCHMARKS[@]}"; do
     fi
     echo ""
 done
-
-# --- Cold/warm start measurement ---
-echo "=== Measuring startup times ==="
-echo ""
-
-echo "Stopping daemon for cold start measurement..."
-ty-find daemon stop >/dev/null 2>&1 || true
-sleep 1
-
-echo "Measuring cold start..."
-COLD_START="$(measure_single_run "ty-find --workspace $PANDAS_DIR inspect DataFrame")"
-echo "  Cold start: ${COLD_START}s"
-
-echo "Measuring warm start..."
-WARM_START="$(measure_single_run "ty-find --workspace $PANDAS_DIR inspect DataFrame")"
-echo "  Warm start: ${WARM_START}s"
-echo ""
 
 # --- Build results JSON ---
 TIMESTAMP="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
@@ -247,6 +273,16 @@ else
         # Skip if either current or baseline is null
         if [ "$current" = "null" ] || [ "$baseline" = "null" ] || [ -z "$baseline" ]; then
             printf "%-25s %12s %12s %8s %8s\n" "$name" "${current}" "${baseline}" "N/A" "SKIP"
+            continue
+        fi
+
+        # Guard against very small baselines producing noisy ratios.
+        # If both values are under 10ms, skip the regression check — the
+        # measurement noise dominates at that scale.
+        baseline_too_small="$(echo "$baseline < 0.010" | bc)"
+        current_too_small="$(echo "$current < 0.010" | bc)"
+        if [ "$baseline_too_small" -eq 1 ] && [ "$current_too_small" -eq 1 ]; then
+            printf "%-25s %12.4f %12.4f %8s %8s\n" "$name" "$current" "$baseline" "~1.0x" "SKIP (<10ms)"
             continue
         fi
 

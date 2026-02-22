@@ -38,18 +38,201 @@ pub async fn handle_definition_command(
     Ok(())
 }
 
+/// Try to parse a string as `file:line:col`. Returns `None` if it doesn't match.
+fn parse_file_position(input: &str) -> Option<(String, u32, u32)> {
+    let last_colon = input.rfind(':')?;
+    let col: u32 = input[last_colon + 1..].parse().ok()?;
+    let rest = &input[..last_colon];
+    let second_colon = rest.rfind(':')?;
+    let line: u32 = rest[second_colon + 1..].parse().ok()?;
+    let file = &rest[..second_colon];
+    if file.is_empty() {
+        return None;
+    }
+    Some((file.to_string(), line, col))
+}
+
+/// A resolved reference query ready to send to the daemon.
+struct ResolvedQuery {
+    /// Display label for output grouping
+    label: String,
+    /// File path for the LSP references request
+    file: String,
+    /// 0-based line
+    line: u32,
+    /// 0-based column
+    column: u32,
+}
+
+/// Resolve symbol names to LSP positions via file search or workspace symbols.
+async fn resolve_symbols_to_queries(
+    symbols: &[String],
+    file: Option<&Path>,
+    workspace_root: &Path,
+    timeout: Duration,
+) -> Result<Vec<ResolvedQuery>> {
+    let mut resolved = Vec::new();
+
+    if let Some(file) = file {
+        let file_str = file.to_string_lossy();
+        let finder = SymbolFinder::new(&file_str)?;
+
+        for symbol in symbols {
+            let positions = finder.find_symbol_positions(symbol);
+            if positions.is_empty() {
+                resolved.push(ResolvedQuery {
+                    label: symbol.clone(),
+                    file: String::new(),
+                    line: 0,
+                    column: 0,
+                });
+            } else {
+                for &(ln, col) in &positions {
+                    resolved.push(ResolvedQuery {
+                        label: symbol.clone(),
+                        file: file_str.to_string(),
+                        line: ln,
+                        column: col,
+                    });
+                }
+            }
+        }
+    } else {
+        for symbol in symbols {
+            let mut client = DaemonClient::connect_with_timeout(timeout).await?;
+            let result = client
+                .execute_workspace_symbols_exact(workspace_root.to_path_buf(), symbol.clone())
+                .await?;
+
+            if result.symbols.is_empty() {
+                resolved.push(ResolvedQuery {
+                    label: symbol.clone(),
+                    file: String::new(),
+                    line: 0,
+                    column: 0,
+                });
+            } else {
+                for sym_info in &result.symbols {
+                    let file_path = sym_info
+                        .location
+                        .uri
+                        .strip_prefix("file://")
+                        .unwrap_or(&sym_info.location.uri)
+                        .to_string();
+                    resolved.push(ResolvedQuery {
+                        label: symbol.clone(),
+                        file: file_path,
+                        line: sym_info.location.range.start.line,
+                        column: sym_info.location.range.start.character,
+                    });
+                }
+            }
+        }
+    }
+
+    Ok(resolved)
+}
+
+/// Dispatch resolved queries in parallel and collect merged, deduplicated results.
+async fn execute_references_parallel(
+    resolved: Vec<ResolvedQuery>,
+    workspace_root: &Path,
+    include_declaration: bool,
+    timeout: Duration,
+) -> Result<Vec<(String, Vec<Location>)>> {
+    let mut handles = Vec::new();
+    for q in resolved {
+        let ws = workspace_root.to_path_buf();
+        handles.push(tokio::spawn(async move {
+            if q.file.is_empty() {
+                return (q.label, Vec::<Location>::new());
+            }
+            let result = async {
+                let mut client = DaemonClient::connect_with_timeout(timeout).await?;
+                client.execute_references(ws, q.file, q.line, q.column, include_declaration).await
+            }
+            .await;
+            match result {
+                Ok(r) => (q.label, r.locations),
+                Err(_) => (q.label, Vec::new()),
+            }
+        }));
+    }
+
+    let mut merged: Vec<(String, Vec<Location>)> = Vec::new();
+    for handle in handles {
+        let (label, locations) = handle.await?;
+        if let Some(existing) = merged.iter_mut().find(|(s, _)| s == &label) {
+            existing.1.extend(locations);
+        } else {
+            merged.push((label, locations));
+        }
+    }
+    for (_, locations) in &mut merged {
+        dedup_locations(locations);
+    }
+    Ok(merged)
+}
+
+/// Collect query strings from CLI args and optionally stdin.
+fn collect_queries(queries: &[String], read_stdin: bool) -> Result<Vec<String>> {
+    let mut all = queries.to_vec();
+    if read_stdin {
+        let stdin = std::io::stdin();
+        for line in std::io::BufRead::lines(stdin.lock()) {
+            let trimmed = line?.trim().to_string();
+            if !trimmed.is_empty() {
+                all.push(trimmed);
+            }
+        }
+    }
+    Ok(all)
+}
+
+/// Classify queries as positions or symbols and resolve to LSP coordinates.
+async fn classify_and_resolve(
+    all_queries: &[String],
+    file: Option<&Path>,
+    workspace_root: &Path,
+    timeout: Duration,
+) -> Result<Vec<ResolvedQuery>> {
+    let mut resolved: Vec<ResolvedQuery> = Vec::new();
+    let mut symbols: Vec<String> = Vec::new();
+
+    for q in all_queries {
+        if let Some((f, l, c)) = parse_file_position(q) {
+            resolved.push(ResolvedQuery {
+                label: q.clone(),
+                file: f,
+                line: l.saturating_sub(1),
+                column: c.saturating_sub(1),
+            });
+        } else {
+            symbols.push(q.clone());
+        }
+    }
+
+    if !symbols.is_empty() {
+        resolved.extend(resolve_symbols_to_queries(&symbols, file, workspace_root, timeout).await?);
+    }
+
+    Ok(resolved)
+}
+
+#[allow(clippy::too_many_arguments)]
 pub async fn handle_references_command(
     workspace_root: &Path,
     file: Option<&Path>,
-    symbols: &[String],
+    queries: &[String],
     position: Option<(u32, u32)>,
+    read_stdin: bool,
     include_declaration: bool,
     formatter: &OutputFormatter,
     timeout: Duration,
 ) -> Result<()> {
     ensure_daemon_running().await?;
 
-    // Position mode: exact file:line:column lookup
+    // Explicit --file -l -c: single position mode
     if let (Some(file), Some((line, col))) = (file, position) {
         let mut client = DaemonClient::connect_with_timeout(timeout).await?;
         let result = client
@@ -67,98 +250,20 @@ pub async fn handle_references_command(
         return Ok(());
     }
 
-    // Symbol mode: need at least one symbol name
-    if symbols.is_empty() {
+    let all_queries = collect_queries(queries, read_stdin)?;
+    if all_queries.is_empty() {
         anyhow::bail!(
-            "Provide either symbol names or --file with --line and --column.\n\
-             Position mode: ty-find references -f file.py -l 10 -c 5\n\
-             Symbol mode:   ty-find references my_func my_class"
+            "Provide symbol names, file:line:col positions, or --file with --line/--column.\n\
+             Position mode:  ty-find references -f file.py -l 10 -c 5\n\
+             Symbol mode:    ty-find references my_func my_class\n\
+             Mixed/pipe:     ty-find references file.py:10:5 my_func\n\
+             Stdin:          ... | ty-find references --stdin"
         );
     }
 
-    // Resolve each symbol to all matching (file, line, column) positions
-    let mut queries: Vec<(String, String, u32, u32)> = Vec::new();
-
-    if let Some(file) = file {
-        let file_str = file.to_string_lossy();
-        let finder = SymbolFinder::new(&file_str)?;
-
-        for symbol in symbols {
-            let positions = finder.find_symbol_positions(symbol);
-            if positions.is_empty() {
-                // Include so output shows "no references"
-                queries.push((symbol.clone(), String::new(), 0, 0));
-            } else {
-                // Include ALL positions, not just the first
-                for &(ln, col) in &positions {
-                    queries.push((symbol.clone(), file_str.to_string(), ln, col));
-                }
-            }
-        }
-    } else {
-        // Workspace-wide: find each symbol's definition location
-        for symbol in symbols {
-            let mut client = DaemonClient::connect_with_timeout(timeout).await?;
-            let result = client
-                .execute_workspace_symbols_exact(workspace_root.to_path_buf(), symbol.clone())
-                .await?;
-
-            if result.symbols.is_empty() {
-                queries.push((symbol.clone(), String::new(), 0, 0));
-            } else {
-                // Include ALL matching definitions, not just the first
-                for sym_info in &result.symbols {
-                    let file_path = sym_info
-                        .location
-                        .uri
-                        .strip_prefix("file://")
-                        .unwrap_or(&sym_info.location.uri)
-                        .to_string();
-                    let ln = sym_info.location.range.start.line;
-                    let col = sym_info.location.range.start.character;
-                    queries.push((symbol.clone(), file_path, ln, col));
-                }
-            }
-        }
-    }
-
-    // Search for references in parallel using tokio tasks
-    let mut handles = Vec::new();
-    for (symbol, file_path, ln, col) in queries {
-        let ws = workspace_root.to_path_buf();
-        let include_decl = include_declaration;
-        handles.push(tokio::spawn(async move {
-            if file_path.is_empty() {
-                return (symbol, Vec::<Location>::new());
-            }
-            let result = async {
-                let mut client = DaemonClient::connect_with_timeout(timeout).await?;
-                client.execute_references(ws, file_path, ln, col, include_decl).await
-            }
-            .await;
-
-            match result {
-                Ok(r) => (symbol, r.locations),
-                Err(_) => (symbol, Vec::new()),
-            }
-        }));
-    }
-
-    // Collect results, merging locations for the same symbol name
-    let mut merged: Vec<(String, Vec<Location>)> = Vec::new();
-    for handle in handles {
-        let (symbol, locations) = handle.await?;
-        if let Some(existing) = merged.iter_mut().find(|(s, _)| s == &symbol) {
-            existing.1.extend(locations);
-        } else {
-            merged.push((symbol, locations));
-        }
-    }
-
-    // Deduplicate within each symbol's results
-    for (_, locations) in &mut merged {
-        dedup_locations(locations);
-    }
+    let resolved = classify_and_resolve(&all_queries, file, workspace_root, timeout).await?;
+    let merged =
+        execute_references_parallel(resolved, workspace_root, include_declaration, timeout).await?;
 
     println!("{}", formatter.format_references_results(&merged));
 
@@ -586,4 +691,40 @@ pub async fn handle_daemon_command(command: DaemonCommands) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_file_position_valid() {
+        assert_eq!(parse_file_position("file.py:10:5"), Some(("file.py".to_string(), 10, 5)));
+        assert_eq!(
+            parse_file_position("src/foo/bar.py:1:1"),
+            Some(("src/foo/bar.py".to_string(), 1, 1))
+        );
+        assert_eq!(
+            parse_file_position("/absolute/path.py:100:20"),
+            Some(("/absolute/path.py".to_string(), 100, 20))
+        );
+    }
+
+    #[test]
+    fn test_parse_file_position_symbol_names() {
+        assert_eq!(parse_file_position("my_function"), None);
+        assert_eq!(parse_file_position("MyClass"), None);
+        assert_eq!(parse_file_position("foo_bar_baz"), None);
+    }
+
+    #[test]
+    fn test_parse_file_position_edge_cases() {
+        // Only one colon
+        assert_eq!(parse_file_position("file.py:10"), None);
+        // Empty file part
+        assert_eq!(parse_file_position(":10:5"), None);
+        // Non-numeric parts
+        assert_eq!(parse_file_position("file.py:abc:5"), None);
+        assert_eq!(parse_file_position("file.py:10:abc"), None);
+    }
 }

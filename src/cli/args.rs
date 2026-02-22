@@ -71,12 +71,12 @@ pub enum Commands {
 
     /// Find all references to a symbol (by position or by name)
     ///
-    /// Position mode: `ty-find references -f file.py -l 10 -c 5`
-    /// Symbol mode:   `ty-find references my_func my_class` (parallel)
+    /// Args can be symbol names or `file:line:col` positions (auto-detected).
+    /// Use `--stdin` to read positions/symbols from a pipe.
     References {
-        /// Symbol name(s) to find references for (parallel search)
+        /// Symbol names or `file:line:col` positions (auto-detected, parallel)
         #[arg(num_args = 0..)]
-        symbols: Vec<String>,
+        queries: Vec<String>,
 
         /// File path (required for position mode, optional for symbol mode)
         #[arg(short, long)]
@@ -89,6 +89,10 @@ pub enum Commands {
         /// Column number (position mode, requires --file and --line)
         #[arg(short, long, requires = "file", requires = "line")]
         column: Option<u32>,
+
+        /// Read queries from stdin (one per line: symbol names or `file:line:col`)
+        #[arg(long)]
+        stdin: bool,
 
         /// Include the declaration in the results
         #[arg(long, default_value_t = true)]

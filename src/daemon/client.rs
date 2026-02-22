@@ -16,7 +16,8 @@ use tokio::net::UnixStream;
 use tokio::time::timeout;
 
 use super::protocol::{
-    DaemonRequest, DaemonResponse, DefinitionParams, DefinitionResult, DocumentSymbolsParams,
+    BatchReferencesParams, BatchReferencesQuery, BatchReferencesResult, DaemonRequest,
+    DaemonResponse, DefinitionParams, DefinitionResult, DocumentSymbolsParams,
     DocumentSymbolsResult, HoverParams, HoverResult, InspectParams, InspectResult, Method,
     PingParams, PingResult, ReferencesParams, ReferencesResult, ShutdownParams, ShutdownResult,
     WorkspaceSymbolsParams, WorkspaceSymbolsResult,
@@ -256,6 +257,17 @@ impl DaemonClient {
             include_declaration,
         };
         self.execute(Method::References, params).await
+    }
+
+    /// Execute a batch references request (multiple queries in one RPC call).
+    pub async fn execute_batch_references(
+        &mut self,
+        workspace: PathBuf,
+        queries: Vec<BatchReferencesQuery>,
+        include_declaration: bool,
+    ) -> Result<BatchReferencesResult> {
+        let params = BatchReferencesParams { workspace, queries, include_declaration };
+        self.execute(Method::BatchReferences, params).await
     }
 
     /// Execute an inspect request (hover, and optionally references, in one call).

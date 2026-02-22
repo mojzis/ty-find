@@ -142,6 +142,9 @@ BENCHMARKS=(
     "inspect-DataFrame|ty-find --workspace $PANDAS_DIR inspect DataFrame|"
     "inspect-multi|ty-find --workspace $PANDAS_DIR inspect DataFrame Series|"
     "workspace-symbols|ty-find --workspace $PANDAS_DIR workspace-symbols --query DataFrame|grep -rn 'DataFrame' --include='*.py' $PANDAS_DIR"
+    "refs-single|ty-find --workspace $PANDAS_DIR references DataFrame|"
+    "refs-multi|ty-find --workspace $PANDAS_DIR references DataFrame Series Index|"
+    "refs-stdin-pipe|printf 'DataFrame\nSeries\nIndex\n' | ty-find --workspace $PANDAS_DIR references --stdin|"
 )
 
 echo "=== Pre-flight: verifying commands ==="

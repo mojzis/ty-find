@@ -17,10 +17,11 @@ use tokio::sync::{broadcast, Mutex};
 
 use crate::daemon::pool::LspClientPool;
 use crate::daemon::protocol::{
-    DaemonError, DaemonRequest, DaemonResponse, DefinitionParams, DefinitionResult,
-    DiagnosticsResult, DocumentSymbolsParams, DocumentSymbolsResult, HoverParams, HoverResult,
-    InspectParams, InspectResult, Method, PingResult, ReferencesParams, ReferencesResult,
-    ShutdownResult, WorkspaceSymbolsParams, WorkspaceSymbolsResult,
+    BatchReferencesEntry, BatchReferencesParams, BatchReferencesResult, DaemonError, DaemonRequest,
+    DaemonResponse, DefinitionParams, DefinitionResult, DiagnosticsResult, DocumentSymbolsParams,
+    DocumentSymbolsResult, HoverParams, HoverResult, InspectParams, InspectResult, Method,
+    PingResult, ReferencesParams, ReferencesResult, ShutdownResult, WorkspaceSymbolsParams,
+    WorkspaceSymbolsResult,
 };
 
 /// The daemon server that handles client connections and LSP requests.
@@ -205,6 +206,7 @@ impl DaemonServer {
             Method::WorkspaceSymbols => self.handle_workspace_symbols(request.params).await,
             Method::DocumentSymbols => self.handle_document_symbols(request.params).await,
             Method::References => self.handle_references(request.params).await,
+            Method::BatchReferences => self.handle_batch_references(request.params).await,
             Method::Inspect => self.handle_inspect(request.params).await,
             Method::Diagnostics => self.handle_diagnostics(request.params).await,
             Method::Ping => self.handle_ping(request.params).await,
@@ -300,6 +302,27 @@ impl DaemonServer {
             .await?;
 
         let result = ReferencesResult { locations };
+        Ok(serde_json::to_value(result)?)
+    }
+
+    /// Handle a batch references request (multiple queries, one connection).
+    async fn handle_batch_references(&self, params: Value) -> Result<Value> {
+        let params: BatchReferencesParams =
+            serde_json::from_value(params).context("Invalid batch references parameters")?;
+
+        let client = { self.lsp_pool.lock().await.get_or_create(params.workspace).await? };
+
+        let mut entries = Vec::with_capacity(params.queries.len());
+        for q in &params.queries {
+            let file_str = q.file.to_string_lossy().to_string();
+            client.open_document(&file_str).await?;
+            let locations = client
+                .find_references(&file_str, q.line, q.column, params.include_declaration)
+                .await?;
+            entries.push(BatchReferencesEntry { label: q.label.clone(), locations });
+        }
+
+        let result = BatchReferencesResult { entries };
         Ok(serde_json::to_value(result)?)
     }
 

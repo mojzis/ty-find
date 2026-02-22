@@ -6,6 +6,7 @@ use std::time::Duration;
 use crate::cli::args::DaemonCommands;
 use crate::cli::output::{InspectEntry, OutputFormatter};
 use crate::daemon::client::{ensure_daemon_running, spawn_daemon, DaemonClient};
+use crate::daemon::protocol::BatchReferencesQuery;
 use crate::daemon::server::DaemonServer;
 use crate::lsp::client::TyLspClient;
 use crate::lsp::protocol::Location;
@@ -133,41 +134,59 @@ async fn resolve_symbols_to_queries(
     Ok(resolved)
 }
 
-/// Dispatch resolved queries in parallel and collect merged, deduplicated results.
-async fn execute_references_parallel(
+/// Send resolved queries to the daemon in a single batch RPC and merge results by label.
+async fn execute_references_batch(
     resolved: Vec<ResolvedQuery>,
     workspace_root: &Path,
     include_declaration: bool,
     timeout: Duration,
 ) -> Result<Vec<(String, Vec<Location>)>> {
-    let mut handles = Vec::new();
+    // Split into queries the daemon can handle (have a file) and empty ones
+    let mut empty_labels: Vec<String> = Vec::new();
+    let mut batch_queries: Vec<BatchReferencesQuery> = Vec::new();
+
     for q in resolved {
-        let ws = workspace_root.to_path_buf();
-        handles.push(tokio::spawn(async move {
-            if q.file.is_empty() {
-                return (q.label, Vec::<Location>::new());
-            }
-            let result = async {
-                let mut client = DaemonClient::connect_with_timeout(timeout).await?;
-                client.execute_references(ws, q.file, q.line, q.column, include_declaration).await
-            }
-            .await;
-            match result {
-                Ok(r) => (q.label, r.locations),
-                Err(_) => (q.label, Vec::new()),
-            }
-        }));
+        if q.file.is_empty() {
+            empty_labels.push(q.label);
+        } else {
+            batch_queries.push(BatchReferencesQuery {
+                label: q.label,
+                file: PathBuf::from(q.file),
+                line: q.line,
+                column: q.column,
+            });
+        }
     }
 
     let mut merged: Vec<(String, Vec<Location>)> = Vec::new();
-    for handle in handles {
-        let (label, locations) = handle.await?;
-        if let Some(existing) = merged.iter_mut().find(|(s, _)| s == &label) {
-            existing.1.extend(locations);
-        } else {
-            merged.push((label, locations));
+
+    // Add empty results for unresolved symbols
+    for label in empty_labels {
+        if !merged.iter().any(|(s, _)| s == &label) {
+            merged.push((label, Vec::new()));
         }
     }
+
+    // Send the batch to the daemon in one call
+    if !batch_queries.is_empty() {
+        let mut client = DaemonClient::connect_with_timeout(timeout).await?;
+        let result = client
+            .execute_batch_references(
+                workspace_root.to_path_buf(),
+                batch_queries,
+                include_declaration,
+            )
+            .await?;
+
+        for entry in result.entries {
+            if let Some(existing) = merged.iter_mut().find(|(s, _)| s == &entry.label) {
+                existing.1.extend(entry.locations);
+            } else {
+                merged.push((entry.label, entry.locations));
+            }
+        }
+    }
+
     for (_, locations) in &mut merged {
         dedup_locations(locations);
     }
@@ -263,7 +282,7 @@ pub async fn handle_references_command(
 
     let resolved = classify_and_resolve(&all_queries, file, workspace_root, timeout).await?;
     let merged =
-        execute_references_parallel(resolved, workspace_root, include_declaration, timeout).await?;
+        execute_references_batch(resolved, workspace_root, include_declaration, timeout).await?;
 
     println!("{}", formatter.format_references_results(&merged));
 

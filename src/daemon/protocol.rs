@@ -245,6 +245,9 @@ pub enum Method {
     /// Find all references to a symbol at a position
     References,
 
+    /// Find references for multiple positions in one call (batched server-side)
+    BatchReferences,
+
     /// Inspect a symbol: hover + references in one call (parallelized server-side)
     Inspect,
 
@@ -267,6 +270,7 @@ impl Method {
             Self::WorkspaceSymbols => "workspace_symbols",
             Self::DocumentSymbols => "document_symbols",
             Self::References => "references",
+            Self::BatchReferences => "batch_references",
             Self::Inspect => "inspect",
             Self::Diagnostics => "diagnostics",
             Self::Ping => "ping",
@@ -370,6 +374,39 @@ pub struct ReferencesParams {
     pub include_declaration: bool,
 }
 
+/// A single query in a batch references request.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct BatchReferencesQuery {
+    /// Display label for output grouping (e.g. symbol name or `file:line:col`)
+    pub label: String,
+
+    /// File path (absolute or relative to workspace)
+    pub file: PathBuf,
+
+    /// Line number (0-based)
+    pub line: u32,
+
+    /// Column number (0-based)
+    pub column: u32,
+}
+
+/// Parameters for batch references request.
+///
+/// Sends multiple reference queries in one RPC call. The daemon processes
+/// them sequentially on the same LSP client, avoiding per-query connection
+/// overhead.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct BatchReferencesParams {
+    /// Workspace root directory
+    pub workspace: PathBuf,
+
+    /// Queries to resolve
+    pub queries: Vec<BatchReferencesQuery>,
+
+    /// Whether to include the declaration in results
+    pub include_declaration: bool,
+}
+
 /// Parameters for inspect request.
 ///
 /// Runs hover and optionally references on the daemon side.
@@ -456,6 +493,23 @@ pub struct DocumentSymbolsResult {
 pub struct ReferencesResult {
     /// List of reference locations
     pub locations: Vec<Location>,
+}
+
+/// A single result entry in a batch references response.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct BatchReferencesEntry {
+    /// Display label matching the query
+    pub label: String,
+
+    /// Reference locations found
+    pub locations: Vec<Location>,
+}
+
+/// Result of a batch references request.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct BatchReferencesResult {
+    /// Results for each query, in the same order as the request
+    pub entries: Vec<BatchReferencesEntry>,
 }
 
 /// Result of an inspect request (hover + references combined).

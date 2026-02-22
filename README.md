@@ -12,17 +12,19 @@ Use `ty-find` for type-aware Python code navigation - more accurate than grep fo
 Requires `ty` on PATH (`uv add --dev ty`).
 
 **Commands** (use relative paths from repo root):
-ty-find references path/to/file.py -l LINE -c COL   # Find all usages of symbol
-ty-find definition path/to/file.py -l LINE -c COL   # Go to definition
-ty-find hover path/to/file.py -l LINE -c COL        # Get type info
-ty-find find path/to/file.py SymbolName              # Find symbol by name in file
-ty-find workspace-symbols --query "ClassName"        # Search symbols across codebase
-ty-find document-symbols path/to/file.py             # Get file outline
+ty-find inspect SymbolName                               # Definition + type info + references in one shot
+ty-find find SymbolName                                  # Find symbol definition across workspace
+ty-find references path/to/file.py -l LINE -c COL       # Find all usages of symbol at position
+ty-find definition path/to/file.py -l LINE -c COL       # Go to definition at position
+ty-find hover path/to/file.py -l LINE -c COL            # Get type info at position
+ty-find workspace-symbols --query "ClassName"            # Search symbols across codebase
+ty-find document-symbols path/to/file.py                 # Get file outline
 
 **When to use:**
+- Quick overview of any symbol: `ty-find inspect SymbolName` (one command for everything)
 - Before renaming/refactoring: `ty-find references` to find all usages
 - Understanding unfamiliar code: `ty-find hover` for type info
-- Finding class/function definitions: `ty-find workspace-symbols`
+- Finding class/function definitions: `ty-find find SymbolName`
 
 **Output formats:** Add `--format json` before subcommand for programmatic use.
 ```
@@ -68,6 +70,31 @@ cargo install --path .
 
 ## Usage
 
+### Inspect (Definition + Type Info + References)
+
+All-in-one command — searches the workspace by symbol name, no file needed:
+
+```bash
+ty-find inspect calculate_sum
+
+# Narrow to a specific file
+ty-find inspect calculate_sum --file src/math.py
+
+# JSON output for scripting
+ty-find --format json inspect UserService
+```
+
+### Find Symbol by Name
+
+Searches the workspace for a symbol's definition:
+
+```bash
+ty-find find calculate_sum
+
+# Narrow to a specific file (text-based search + goto_definition)
+ty-find find function_name --file myfile.py
+```
+
 ### Hover (Type Information)
 
 ```bash
@@ -99,12 +126,6 @@ ty-find workspace-symbols --query "UserService"
 
 ```bash
 ty-find document-symbols src/services/user.py
-```
-
-### Find Symbol by Name
-
-```bash
-ty-find find myfile.py function_name
 ```
 
 ### Interactive Mode

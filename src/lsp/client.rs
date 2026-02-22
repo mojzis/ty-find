@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -16,7 +16,9 @@ pub struct TyLspClient {
 
 impl TyLspClient {
     pub async fn new(workspace_root: &str) -> Result<Self> {
-        let server = TyLspServer::start(workspace_root).await?;
+        let server = TyLspServer::start(workspace_root)
+            .await
+            .context("Failed to start ty LSP server")?;
         let client = Self {
             server: Arc::new(Mutex::new(server)),
             request_id: AtomicU64::new(1),
@@ -25,8 +27,16 @@ impl TyLspClient {
 
         // Must start reading responses before sending initialize,
         // otherwise the initialize response is never consumed and we deadlock.
-        client.start_response_handler().await?;
-        client.initialize(workspace_root).await?;
+        client
+            .start_response_handler()
+            .await
+            .context("Failed to start LSP response handler")?;
+        tracing::debug!("Sending LSP initialize request...");
+        client
+            .initialize(workspace_root)
+            .await
+            .context("Failed to initialize LSP session")?;
+        tracing::debug!("LSP client initialized successfully");
         Ok(client)
     }
 
@@ -247,9 +257,24 @@ impl TyLspClient {
             params,
         };
 
+        tracing::debug!("Sending LSP request: {} (id: {})", method, id);
         self.send_message(&request).await?;
 
-        let response = rx.await?;
+        let response = rx
+            .await
+            .context("LSP response channel closed unexpectedly")?;
+
+        if let Some(ref error) = response.error {
+            tracing::debug!(
+                "LSP error response for {} (id: {}): {:?}",
+                method,
+                id,
+                error
+            );
+        } else {
+            tracing::debug!("LSP response received for {} (id: {})", method, id);
+        }
+
         Ok(response)
     }
 
@@ -294,7 +319,10 @@ impl TyLspClient {
             loop {
                 buffer.clear();
                 match stdout.read_line(&mut buffer).await {
-                    Ok(0) => break,
+                    Ok(0) => {
+                        tracing::debug!("LSP server stdout closed (EOF)");
+                        break;
+                    }
                     Ok(_) => {
                         if buffer.starts_with("Content-Length:") {
                             if let Some(len_str) =
@@ -318,12 +346,20 @@ impl TyLspClient {
                                                 }
                                             }
                                         }
+                                    } else {
+                                        tracing::debug!(
+                                            "Failed to parse LSP response: {}",
+                                            response_str.chars().take(200).collect::<String>()
+                                        );
                                     }
                                 }
                             }
                         }
                     }
-                    Err(_) => break,
+                    Err(e) => {
+                        tracing::debug!("LSP server stdout read error: {}", e);
+                        break;
+                    }
                 }
             }
         });

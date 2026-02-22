@@ -17,7 +17,7 @@ use workspace::detection::WorkspaceDetector;
 use workspace::navigation::SymbolFinder;
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() {
     let cli = Cli::parse();
 
     if cli.verbose {
@@ -26,6 +26,28 @@ async fn main() -> Result<()> {
             .init();
     }
 
+    if let Err(e) = run(cli).await {
+        // Print the full error chain so users see root causes
+        eprintln!("Error: {}", format_error_chain(&e));
+        std::process::exit(1);
+    }
+}
+
+/// Format the full anyhow error chain for display.
+fn format_error_chain(error: &anyhow::Error) -> String {
+    let chain: Vec<String> = error.chain().map(|e| e.to_string()).collect();
+    if chain.len() == 1 {
+        chain[0].clone()
+    } else {
+        let mut msg = chain[0].clone();
+        for cause in &chain[1..] {
+            msg.push_str(&format!("\n  Caused by: {}", cause));
+        }
+        msg
+    }
+}
+
+async fn run(cli: Cli) -> Result<()> {
     let workspace_root = if let Some(ws) = cli.workspace {
         ws.canonicalize()?
     } else {

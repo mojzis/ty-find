@@ -59,7 +59,7 @@ pub struct LSPResponse {
     pub error: Option<LSPError>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct LSPError {
     pub code: i32,
     pub message: String,

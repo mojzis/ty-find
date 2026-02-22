@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::process::Stdio;
 use tokio::io::BufReader;
 use tokio::process::{Child, Command};
@@ -12,11 +12,24 @@ pub struct TyLspServer {
 #[allow(dead_code)]
 impl TyLspServer {
     pub async fn start(workspace_root: &str) -> Result<Self> {
-        let ty_check = Command::new("ty").arg("--version").output().await?;
+        tracing::debug!("Checking ty availability...");
+        let ty_check = Command::new("ty").arg("--version").output().await.context(
+            "Failed to run 'ty --version'. Is ty installed? Install it with: uv add --dev ty",
+        )?;
 
         if !ty_check.status.success() {
-            anyhow::bail!("ty is not installed or not available in PATH");
+            let stderr = String::from_utf8_lossy(&ty_check.stderr);
+            anyhow::bail!(
+                "ty is not installed or not available in PATH. \
+                 Install it with: uv add --dev ty\n\
+                 ty --version stderr: {}",
+                stderr.trim()
+            );
         }
+
+        let ty_version = String::from_utf8_lossy(&ty_check.stdout);
+        tracing::debug!("Found ty: {}", ty_version.trim());
+        tracing::debug!("Starting ty LSP server in workspace: {}", workspace_root);
 
         let process = Command::new("ty")
             .arg("server")
@@ -24,7 +37,15 @@ impl TyLspServer {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .spawn()?;
+            .spawn()
+            .with_context(|| {
+                format!(
+                    "Failed to spawn 'ty server' in workspace '{}'",
+                    workspace_root
+                )
+            })?;
+
+        tracing::debug!("ty LSP server process started (pid: {:?})", process.id());
 
         Ok(Self {
             process,

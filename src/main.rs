@@ -107,13 +107,14 @@ async fn run(cli: Cli) -> Result<()> {
             commands::handle_document_symbols_command(&workspace_root, &file, &formatter, timeout)
                 .await?;
         }
-        Commands::Inspect { file, symbols } => {
+        Commands::Inspect { file, symbols, references } => {
             commands::handle_inspect_command(
                 &workspace_root,
                 file.as_deref(),
                 &symbols,
                 &formatter,
                 timeout,
+                references,
             )
             .await?;
         }

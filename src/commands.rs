@@ -139,12 +139,15 @@ pub async fn handle_inspect_command(
     symbols: &[String],
     formatter: &OutputFormatter,
     timeout: Duration,
+    include_references: bool,
 ) -> Result<()> {
     ensure_daemon_running().await?;
 
     let mut results: Vec<InspectResult> = Vec::new();
     for symbol in symbols {
-        let result = inspect_single_symbol(workspace_root, file, symbol, timeout).await?;
+        let result =
+            inspect_single_symbol(workspace_root, file, symbol, timeout, include_references)
+                .await?;
         results.push(result);
     }
 
@@ -172,6 +175,7 @@ async fn inspect_single_symbol(
     file: Option<&Path>,
     symbol: &str,
     timeout: Duration,
+    include_references: bool,
 ) -> Result<InspectResult> {
     // Step 1: Find the symbol's location(s)
     let (definition_file, def_line, def_col, all_definitions) = if let Some(file) = file {
@@ -236,23 +240,23 @@ async fn inspect_single_symbol(
         (file_path.to_string(), def_line, def_col, all_definitions)
     };
 
-    // Step 2: Get hover info at the symbol's location
-    let mut hover_client = DaemonClient::connect_with_timeout(timeout).await?;
-    let hover_result = hover_client
-        .execute_hover(workspace_root.to_path_buf(), definition_file.clone(), def_line, def_col)
-        .await?;
-
-    // Step 3: Get references at the symbol's location
-    let mut refs_client = DaemonClient::connect_with_timeout(timeout).await?;
-    let refs_result = refs_client
-        .execute_references(workspace_root.to_path_buf(), definition_file, def_line, def_col, true)
+    // Steps 2 & 3: Get hover info (and optionally references) via single daemon call
+    let mut client = DaemonClient::connect_with_timeout(timeout).await?;
+    let inspect = client
+        .execute_inspect(
+            workspace_root.to_path_buf(),
+            definition_file,
+            def_line,
+            def_col,
+            include_references,
+        )
         .await?;
 
     Ok(InspectResult {
         symbol: symbol.to_string(),
         definitions: all_definitions,
-        hover: hover_result.hover,
-        references: refs_result.locations,
+        hover: inspect.hover,
+        references: inspect.references,
     })
 }
 

@@ -19,8 +19,8 @@ use crate::daemon::pool::LspClientPool;
 use crate::daemon::protocol::{
     DaemonError, DaemonRequest, DaemonResponse, DefinitionParams, DefinitionResult,
     DiagnosticsResult, DocumentSymbolsParams, DocumentSymbolsResult, HoverParams, HoverResult,
-    Method, PingResult, ReferencesParams, ReferencesResult, ShutdownResult, WorkspaceSymbolsParams,
-    WorkspaceSymbolsResult,
+    InspectParams, InspectResult, Method, PingResult, ReferencesParams, ReferencesResult,
+    ShutdownResult, WorkspaceSymbolsParams, WorkspaceSymbolsResult,
 };
 
 /// The daemon server that handles client connections and LSP requests.
@@ -205,6 +205,7 @@ impl DaemonServer {
             Method::WorkspaceSymbols => self.handle_workspace_symbols(request.params).await,
             Method::DocumentSymbols => self.handle_document_symbols(request.params).await,
             Method::References => self.handle_references(request.params).await,
+            Method::Inspect => self.handle_inspect(request.params).await,
             Method::Diagnostics => self.handle_diagnostics(request.params).await,
             Method::Ping => self.handle_ping(request.params).await,
             Method::Shutdown => self.handle_shutdown(request.params).await,
@@ -294,6 +295,31 @@ impl DaemonServer {
             .await?;
 
         let result = ReferencesResult { locations };
+        Ok(serde_json::to_value(result)?)
+    }
+
+    /// Handle an inspect request (hover, and optionally references in parallel).
+    async fn handle_inspect(&self, params: Value) -> Result<Value> {
+        let params: InspectParams =
+            serde_json::from_value(params).context("Invalid inspect parameters")?;
+
+        let client = { self.lsp_pool.lock().await.get_or_create(params.workspace).await? };
+
+        let file_str = params.file.to_string_lossy().to_string();
+        client.open_document(&file_str).await?;
+
+        let result = if params.include_references {
+            // Run hover and references in parallel on the same LSP client
+            let (hover, references) = tokio::join!(
+                client.hover(&file_str, params.line, params.column),
+                client.find_references(&file_str, params.line, params.column, true),
+            );
+            InspectResult { hover: hover?, references: references? }
+        } else {
+            let hover = client.hover(&file_str, params.line, params.column).await?;
+            InspectResult { hover, references: Vec::new() }
+        };
+
         Ok(serde_json::to_value(result)?)
     }
 

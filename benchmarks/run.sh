@@ -120,7 +120,9 @@ mkdir -p "$RESULTS_DIR"
 BENCHMARKS=(
     "find-DataFrame|ty-find --workspace $PANDAS_DIR find DataFrame|grep -rn 'class DataFrame' --include='*.py' $PANDAS_DIR"
     "find-Series|ty-find --workspace $PANDAS_DIR find Series|grep -rn 'class Series' --include='*.py' $PANDAS_DIR"
+    "find-multi|ty-find --workspace $PANDAS_DIR find DataFrame Series Index|"
     "inspect-DataFrame|ty-find --workspace $PANDAS_DIR inspect DataFrame|"
+    "inspect-multi|ty-find --workspace $PANDAS_DIR inspect DataFrame Series|"
     "workspace-symbols|ty-find --workspace $PANDAS_DIR workspace-symbols --query DataFrame|grep -rn 'DataFrame' --include='*.py' $PANDAS_DIR"
 )
 

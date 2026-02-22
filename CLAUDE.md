@@ -32,8 +32,6 @@ cargo test
 # Run integration tests (requires ty on PATH)
 cargo test --test test_basic
 
-# Check Python packaging works
-python test_installation.py
 ```
 
 ### Python Packaging (maturin)
@@ -100,8 +98,7 @@ If formatting fails, fix it with `cargo fmt` and re-run the checks.
 
 **Dual Build System**:
 - `Cargo.toml` defines the Rust binary with CLI dependencies (clap, tokio, serde)
-- `pyproject.toml` uses maturin backend to package the Rust binary as a Python wheel
-- `ty_find/__init__.py` provides Python entry point that executes the Rust binary
+- `pyproject.toml` uses maturin backend (`bindings = "bin"`) to package the Rust binary as a Python wheel
 
 **Command Processing**:
 - Three main commands: `definition` (find at specific line/column), `find` (search symbol), `interactive` (REPL mode)

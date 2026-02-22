@@ -188,13 +188,6 @@ RUST_LOG=ty_find=debug ty-find daemon start
 ty-find daemon stop && ty-find daemon start
 ```
 
-## Documentation
-
-- [Implementation Summary](docs/implementation-summary.md)
-- [Daemon Architecture](docs/daemon-architecture.md)
-- [CLI-First Approach](plans/cli-first-approach.md)
-- [Project Roadmap](plans/project-assessment-and-roadmap.md)
-
 ## Contributing
 
 Contributions welcome! Please open an issue to discuss major changes.

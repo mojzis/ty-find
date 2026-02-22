@@ -26,7 +26,7 @@ jobs:
         check: [advisories, bans, licenses, sources]
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Run cargo-deny (${{ matrix.check }})
         uses: EmbarkStudios/cargo-deny-action@v2

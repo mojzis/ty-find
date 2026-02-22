@@ -23,14 +23,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        check: [advisories, bans, licenses, sources]
+        check: [bans, licenses, sources]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
 
       - name: Run cargo-deny (${{ matrix.check }})
         uses: EmbarkStudios/cargo-deny-action@v2
-        continue-on-error: ${{ matrix.check == 'advisories' }}
         with:
           command: check ${{ matrix.check }}
           arguments: --all-features

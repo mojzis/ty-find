@@ -6,7 +6,7 @@ language = "en"
 src = "src"
 
 [build]
-build-dir = "book"
+build-dir = "book/html"
 
 [output.html]
 site-url = "/ty-find/"

@@ -1,4 +1,4 @@
-.PHONY: review fmt-check lint test audit deny coverage mutants review-quick
+.PHONY: review fmt-check lint test audit deny coverage mutants review-quick docs docs-serve docs-clean
 
 # Full review — run before pushing or merging
 review: fmt-check lint test audit deny
@@ -58,3 +58,26 @@ mutants:
 	else \
 		echo "⚠️  cargo-mutants not installed. Run: cargo install cargo-mutants"; \
 	fi
+
+docs:
+	@echo "📖 Building documentation..."
+	@if command -v mdbook > /dev/null 2>&1; then \
+		mdbook build docs; \
+		bash docs/generate-llms-txt.sh; \
+		echo "Docs built at docs/book/html/index.html"; \
+	else \
+		echo "⚠️  mdbook not installed. Run: cargo install mdbook"; \
+	fi
+
+docs-serve:
+	@echo "📖 Serving documentation with live reload..."
+	@if command -v mdbook > /dev/null 2>&1; then \
+		mdbook serve docs --open; \
+	else \
+		echo "⚠️  mdbook not installed. Run: cargo install mdbook"; \
+	fi
+
+docs-clean:
+	@echo "🧹 Cleaning built documentation..."
+	@rm -rf docs/book
+	@echo "Cleaned docs/book/"

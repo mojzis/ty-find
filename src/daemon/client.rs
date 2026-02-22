@@ -22,8 +22,8 @@ use super::protocol::{
     WorkspaceSymbolsResult,
 };
 
-/// Default timeout for daemon operations (5 seconds).
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
+/// Default timeout for daemon operations (30 seconds).
+pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Timeout for daemon startup (2 seconds).
 const DAEMON_STARTUP_TIMEOUT: Duration = Duration::from_secs(2);
@@ -64,13 +64,21 @@ pub struct DaemonClient {
 
     /// Connection to the daemon.
     stream: UnixStream,
+
+    /// Timeout for daemon operations.
+    timeout: Duration,
 }
 
 impl DaemonClient {
-    /// Connect to an existing daemon.
+    /// Connect to an existing daemon with the default timeout.
     ///
     /// Returns an error if the daemon is not running or the socket doesn't exist.
     pub async fn connect() -> Result<Self> {
+        Self::connect_with_timeout(DEFAULT_TIMEOUT).await
+    }
+
+    /// Connect to an existing daemon with a custom timeout.
+    pub async fn connect_with_timeout(timeout: Duration) -> Result<Self> {
         let socket_path = get_socket_path()?;
 
         let stream = UnixStream::connect(&socket_path)
@@ -79,7 +87,7 @@ impl DaemonClient {
 
         tracing::debug!("Connected to daemon at {}", socket_path.display());
 
-        Ok(Self { socket_path, stream })
+        Ok(Self { socket_path, stream, timeout })
     }
 
     /// Send a JSON-RPC request to the daemon and wait for response.
@@ -94,7 +102,7 @@ impl DaemonClient {
         let message = format!("Content-Length: {}\r\n\r\n{request_json}", request_json.len());
 
         // Send request with timeout
-        timeout(DEFAULT_TIMEOUT, async {
+        timeout(self.timeout, async {
             self.stream
                 .write_all(message.as_bytes())
                 .await

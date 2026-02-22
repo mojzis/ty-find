@@ -1,6 +1,7 @@
 use anyhow::Result;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use crate::cli::args::DaemonCommands;
 use crate::cli::output::{InspectEntry, OutputFormatter};
@@ -44,9 +45,10 @@ pub async fn handle_references_command(
     column: u32,
     include_declaration: bool,
     formatter: &OutputFormatter,
+    timeout: Duration,
 ) -> Result<()> {
     ensure_daemon_running().await?;
-    let mut client = DaemonClient::connect().await?;
+    let mut client = DaemonClient::connect_with_timeout(timeout).await?;
 
     let result = client
         .execute_references(
@@ -69,6 +71,7 @@ pub async fn handle_find_command(
     file: Option<&Path>,
     symbols: &[String],
     formatter: &OutputFormatter,
+    timeout: Duration,
 ) -> Result<()> {
     let mut results: Vec<(String, Vec<Location>)> = Vec::new();
 
@@ -98,7 +101,7 @@ pub async fn handle_find_command(
         }
     } else {
         for symbol in symbols {
-            let locations = find_symbol_via_workspace(workspace_root, symbol).await?;
+            let locations = find_symbol_via_workspace(workspace_root, symbol, timeout).await?;
             results.push((symbol.clone(), locations));
         }
     }
@@ -109,9 +112,13 @@ pub async fn handle_find_command(
 }
 
 /// Find a symbol's location(s) using workspace symbols search.
-async fn find_symbol_via_workspace(workspace_root: &Path, symbol: &str) -> Result<Vec<Location>> {
+async fn find_symbol_via_workspace(
+    workspace_root: &Path,
+    symbol: &str,
+    timeout: Duration,
+) -> Result<Vec<Location>> {
     ensure_daemon_running().await?;
-    let mut client = DaemonClient::connect().await?;
+    let mut client = DaemonClient::connect_with_timeout(timeout).await?;
 
     let result =
         client.execute_workspace_symbols(workspace_root.to_path_buf(), symbol.to_string()).await?;
@@ -131,13 +138,13 @@ pub async fn handle_inspect_command(
     file: Option<&Path>,
     symbols: &[String],
     formatter: &OutputFormatter,
+    timeout: Duration,
 ) -> Result<()> {
     ensure_daemon_running().await?;
 
     let mut results: Vec<InspectResult> = Vec::new();
-
     for symbol in symbols {
-        let result = inspect_single_symbol(workspace_root, file, symbol).await?;
+        let result = inspect_single_symbol(workspace_root, file, symbol, timeout).await?;
         results.push(result);
     }
 
@@ -164,6 +171,7 @@ async fn inspect_single_symbol(
     workspace_root: &Path,
     file: Option<&Path>,
     symbol: &str,
+    timeout: Duration,
 ) -> Result<InspectResult> {
     // Step 1: Find the symbol's location(s)
     let (definition_file, def_line, def_col, all_definitions) = if let Some(file) = file {
@@ -184,7 +192,7 @@ async fn inspect_single_symbol(
 
         let mut all_definitions = Vec::new();
         for (line, column) in &positions {
-            let mut client = DaemonClient::connect().await?;
+            let mut client = DaemonClient::connect_with_timeout(timeout).await?;
             let result = client
                 .execute_definition(
                     workspace_root.to_path_buf(),
@@ -201,7 +209,7 @@ async fn inspect_single_symbol(
 
         (file_str.to_string(), first_line, first_col, all_definitions)
     } else {
-        let mut client = DaemonClient::connect().await?;
+        let mut client = DaemonClient::connect_with_timeout(timeout).await?;
         let result = client
             .execute_workspace_symbols(workspace_root.to_path_buf(), symbol.to_string())
             .await?;
@@ -229,13 +237,13 @@ async fn inspect_single_symbol(
     };
 
     // Step 2: Get hover info at the symbol's location
-    let mut hover_client = DaemonClient::connect().await?;
+    let mut hover_client = DaemonClient::connect_with_timeout(timeout).await?;
     let hover_result = hover_client
         .execute_hover(workspace_root.to_path_buf(), definition_file.clone(), def_line, def_col)
         .await?;
 
     // Step 3: Get references at the symbol's location
-    let mut refs_client = DaemonClient::connect().await?;
+    let mut refs_client = DaemonClient::connect_with_timeout(timeout).await?;
     let refs_result = refs_client
         .execute_references(workspace_root.to_path_buf(), definition_file, def_line, def_col, true)
         .await?;
@@ -281,8 +289,14 @@ pub async fn handle_interactive_command(
                 let file = PathBuf::from(parts[1]);
                 let symbols: Vec<String> = parts[2..].iter().map(|s| (*s).to_string()).collect();
 
-                if let Err(e) =
-                    handle_find_command(workspace_root, Some(&file), &symbols, formatter).await
+                if let Err(e) = handle_find_command(
+                    workspace_root,
+                    Some(&file),
+                    &symbols,
+                    formatter,
+                    crate::daemon::client::DEFAULT_TIMEOUT,
+                )
+                .await
                 {
                     eprintln!("Error: {e}");
                 }
@@ -328,9 +342,10 @@ pub async fn handle_hover_command(
     line: u32,
     column: u32,
     formatter: &OutputFormatter,
+    timeout: Duration,
 ) -> Result<()> {
     ensure_daemon_running().await?;
-    let mut client = DaemonClient::connect().await?;
+    let mut client = DaemonClient::connect_with_timeout(timeout).await?;
 
     let result = client
         .execute_hover(
@@ -357,9 +372,10 @@ pub async fn handle_workspace_symbols_command(
     workspace_root: &Path,
     query: &str,
     formatter: &OutputFormatter,
+    timeout: Duration,
 ) -> Result<()> {
     ensure_daemon_running().await?;
-    let mut client = DaemonClient::connect().await?;
+    let mut client = DaemonClient::connect_with_timeout(timeout).await?;
 
     let result =
         client.execute_workspace_symbols(workspace_root.to_path_buf(), query.to_string()).await?;
@@ -378,9 +394,10 @@ pub async fn handle_document_symbols_command(
     workspace_root: &Path,
     file: &Path,
     formatter: &OutputFormatter,
+    timeout: Duration,
 ) -> Result<()> {
     ensure_daemon_running().await?;
-    let mut client = DaemonClient::connect().await?;
+    let mut client = DaemonClient::connect_with_timeout(timeout).await?;
 
     let result = client
         .execute_document_symbols(workspace_root.to_path_buf(), file.to_string_lossy().to_string())

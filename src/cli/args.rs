@@ -25,6 +25,10 @@ pub struct Cli {
 
     #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
     pub format: OutputFormat,
+
+    /// Timeout in seconds for daemon operations (default: 30)
+    #[arg(long, value_name = "SECONDS")]
+    pub timeout: Option<u64>,
 }
 
 #[derive(Subcommand)]

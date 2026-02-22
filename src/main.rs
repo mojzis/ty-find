@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use std::fmt::Write;
+use std::time::Duration;
 
 mod cli;
 mod commands;
@@ -10,6 +11,7 @@ mod workspace;
 
 use cli::args::{Cli, Commands};
 use cli::output::OutputFormatter;
+use daemon::client::DEFAULT_TIMEOUT;
 use workspace::detection::WorkspaceDetector;
 
 #[tokio::main]
@@ -49,6 +51,7 @@ async fn run(cli: Cli) -> Result<()> {
     };
 
     let formatter = OutputFormatter::new(cli.format);
+    let timeout = cli.timeout.map_or(DEFAULT_TIMEOUT, Duration::from_secs);
 
     match cli.command {
         Commands::Definition { file, line, column } => {
@@ -56,8 +59,14 @@ async fn run(cli: Cli) -> Result<()> {
                 .await?;
         }
         Commands::Find { file, symbols } => {
-            commands::handle_find_command(&workspace_root, file.as_deref(), &symbols, &formatter)
-                .await?;
+            commands::handle_find_command(
+                &workspace_root,
+                file.as_deref(),
+                &symbols,
+                &formatter,
+                timeout,
+            )
+            .await?;
         }
         Commands::Interactive { file } => {
             commands::handle_interactive_command(&workspace_root, file, &formatter).await?;
@@ -70,18 +79,33 @@ async fn run(cli: Cli) -> Result<()> {
                 column,
                 include_declaration,
                 &formatter,
+                timeout,
             )
             .await?;
         }
         Commands::Hover { file, line, column } => {
-            commands::handle_hover_command(&workspace_root, &file, line, column, &formatter)
-                .await?;
+            commands::handle_hover_command(
+                &workspace_root,
+                &file,
+                line,
+                column,
+                &formatter,
+                timeout,
+            )
+            .await?;
         }
         Commands::WorkspaceSymbols { query } => {
-            commands::handle_workspace_symbols_command(&workspace_root, &query, &formatter).await?;
+            commands::handle_workspace_symbols_command(
+                &workspace_root,
+                &query,
+                &formatter,
+                timeout,
+            )
+            .await?;
         }
         Commands::DocumentSymbols { file } => {
-            commands::handle_document_symbols_command(&workspace_root, &file, &formatter).await?;
+            commands::handle_document_symbols_command(&workspace_root, &file, &formatter, timeout)
+                .await?;
         }
         Commands::Inspect { file, symbols } => {
             commands::handle_inspect_command(
@@ -89,6 +113,7 @@ async fn run(cli: Cli) -> Result<()> {
                 file.as_deref(),
                 &symbols,
                 &formatter,
+                timeout,
             )
             .await?;
         }

@@ -9,6 +9,8 @@ ty-find is a command-line tool that interfaces with ty's LSP server to provide g
 ## Prerequisites
 
 - **ty** must be installed and on PATH: `uv add --dev ty` (required for all LSP functionality and integration tests)
+- If `ty` is not on PATH, the tool will automatically fall back to running it via `uvx ty`
+- **If ty is missing**, install it before running tests: `uv add --dev ty`
 
 ## Common Commands
 
@@ -116,7 +118,7 @@ The project uses maturin to bridge Rust and Python ecosystems:
 - maturin automatically builds Rust binary during Python package installation
 
 ### Dependencies
-- **ty LSP server** must be available in PATH (users install via `uv add --dev ty`)
+- **ty LSP server** must be available in PATH or via `uvx` (users install via `uv add --dev ty`)
 - **Rust toolchain** required for building from source
 - **tokio** for async LSP communication and process management
 - **clap** for CLI parsing with subcommands and multiple output formats

@@ -4,9 +4,23 @@ use std::fs;
 use std::process;
 use tempfile::TempDir;
 
-/// Ensure `ty` is available on PATH. Panics with install instructions if missing.
+/// Ensure `ty` is available, either directly on PATH or via `uvx`.
+/// Panics with install instructions if neither works.
 fn require_ty() {
-    let available = process::Command::new("ty")
+    let direct = process::Command::new("ty")
+        .arg("--version")
+        .stdout(process::Stdio::null())
+        .stderr(process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+
+    if direct {
+        return;
+    }
+
+    let via_uvx = process::Command::new("uvx")
+        .arg("ty")
         .arg("--version")
         .stdout(process::Stdio::null())
         .stderr(process::Stdio::null())
@@ -15,8 +29,8 @@ fn require_ty() {
         .unwrap_or(false);
 
     assert!(
-        available,
-        "ty is not installed. Install it with: pip install ty"
+        via_uvx,
+        "ty is not installed and uvx fallback failed. Install it with: uv add --dev ty"
     );
 }
 

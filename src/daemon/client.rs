@@ -7,6 +7,7 @@
 #![allow(dead_code)]
 
 use anyhow::{Context, Result};
+use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -17,7 +18,7 @@ use tokio::time::timeout;
 use super::protocol::{
     DaemonRequest, DaemonResponse, DefinitionParams, DefinitionResult, DocumentSymbolsParams,
     DocumentSymbolsResult, HoverParams, HoverResult, Method, PingParams, PingResult,
-    ReferencesParams, ReferencesResult, ShutdownParams, WorkspaceSymbolsParams,
+    ReferencesParams, ReferencesResult, ShutdownParams, ShutdownResult, WorkspaceSymbolsParams,
     WorkspaceSymbolsResult,
 };
 
@@ -152,6 +153,29 @@ impl DaemonClient {
         Ok(response)
     }
 
+    /// Send a typed request and deserialize the response.
+    ///
+    /// Handles the common pattern: serialize params → send → check error → deserialize result.
+    async fn execute<P: serde::Serialize, R: DeserializeOwned>(
+        &mut self,
+        method: Method,
+        params: P,
+    ) -> Result<R> {
+        let params_value = serde_json::to_value(params)
+            .with_context(|| format!("Failed to serialize {} params", method.as_str()))?;
+
+        let response = self.send_request(method, params_value).await?;
+
+        if let Some(error) = response.error {
+            anyhow::bail!("Daemon error: {}", error.message);
+        }
+
+        let result = response.result.context("Response missing result field")?;
+
+        serde_json::from_value(result)
+            .with_context(|| format!("Failed to deserialize {} result", method.as_str()))
+    }
+
     /// Execute a hover request.
     pub async fn execute_hover(
         &mut self,
@@ -161,19 +185,7 @@ impl DaemonClient {
         column: u32,
     ) -> Result<HoverResult> {
         let params = HoverParams { workspace, file: PathBuf::from(file), line, column };
-
-        let params_value =
-            serde_json::to_value(params).context("Failed to serialize hover params")?;
-
-        let response = self.send_request(Method::Hover, params_value).await?;
-
-        if let Some(error) = response.error {
-            anyhow::bail!("Daemon error: {}", error.message);
-        }
-
-        let result = response.result.context("Response missing result field")?;
-
-        serde_json::from_value(result).context("Failed to deserialize hover result")
+        self.execute(Method::Hover, params).await
     }
 
     /// Execute a definition request.
@@ -185,19 +197,7 @@ impl DaemonClient {
         column: u32,
     ) -> Result<DefinitionResult> {
         let params = DefinitionParams { workspace, file: PathBuf::from(file), line, column };
-
-        let params_value =
-            serde_json::to_value(params).context("Failed to serialize definition params")?;
-
-        let response = self.send_request(Method::Definition, params_value).await?;
-
-        if let Some(error) = response.error {
-            anyhow::bail!("Daemon error: {}", error.message);
-        }
-
-        let result = response.result.context("Response missing result field")?;
-
-        serde_json::from_value(result).context("Failed to deserialize definition result")
+        self.execute(Method::Definition, params).await
     }
 
     /// Execute a workspace symbols request.
@@ -207,19 +207,7 @@ impl DaemonClient {
         query: String,
     ) -> Result<WorkspaceSymbolsResult> {
         let params = WorkspaceSymbolsParams { workspace, query, limit: None };
-
-        let params_value =
-            serde_json::to_value(params).context("Failed to serialize workspace symbols params")?;
-
-        let response = self.send_request(Method::WorkspaceSymbols, params_value).await?;
-
-        if let Some(error) = response.error {
-            anyhow::bail!("Daemon error: {}", error.message);
-        }
-
-        let result = response.result.context("Response missing result field")?;
-
-        serde_json::from_value(result).context("Failed to deserialize workspace symbols result")
+        self.execute(Method::WorkspaceSymbols, params).await
     }
 
     /// Execute a document symbols request.
@@ -229,19 +217,7 @@ impl DaemonClient {
         file: String,
     ) -> Result<DocumentSymbolsResult> {
         let params = DocumentSymbolsParams { workspace, file: PathBuf::from(file) };
-
-        let params_value =
-            serde_json::to_value(params).context("Failed to serialize document symbols params")?;
-
-        let response = self.send_request(Method::DocumentSymbols, params_value).await?;
-
-        if let Some(error) = response.error {
-            anyhow::bail!("Daemon error: {}", error.message);
-        }
-
-        let result = response.result.context("Response missing result field")?;
-
-        serde_json::from_value(result).context("Failed to deserialize document symbols result")
+        self.execute(Method::DocumentSymbols, params).await
     }
 
     /// Execute a references request.
@@ -260,52 +236,17 @@ impl DaemonClient {
             column,
             include_declaration,
         };
-
-        let params_value =
-            serde_json::to_value(params).context("Failed to serialize references params")?;
-
-        let response = self.send_request(Method::References, params_value).await?;
-
-        if let Some(error) = response.error {
-            anyhow::bail!("Daemon error: {}", error.message);
-        }
-
-        let result = response.result.context("Response missing result field")?;
-
-        serde_json::from_value(result).context("Failed to deserialize references result")
+        self.execute(Method::References, params).await
     }
 
     /// Send a ping request to check daemon health.
     pub async fn ping(&mut self) -> Result<PingResult> {
-        let params = PingParams {};
-
-        let params_value =
-            serde_json::to_value(params).context("Failed to serialize ping params")?;
-
-        let response = self.send_request(Method::Ping, params_value).await?;
-
-        if let Some(error) = response.error {
-            anyhow::bail!("Daemon error: {}", error.message);
-        }
-
-        let result = response.result.context("Response missing result field")?;
-
-        serde_json::from_value(result).context("Failed to deserialize ping result")
+        self.execute(Method::Ping, PingParams {}).await
     }
 
     /// Send a shutdown request to gracefully stop the daemon.
     pub async fn shutdown(&mut self) -> Result<()> {
-        let params = ShutdownParams {};
-
-        let params_value =
-            serde_json::to_value(params).context("Failed to serialize shutdown params")?;
-
-        let response = self.send_request(Method::Shutdown, params_value).await?;
-
-        if let Some(error) = response.error {
-            anyhow::bail!("Daemon error: {}", error.message);
-        }
-
+        let _: ShutdownResult = self.execute(Method::Shutdown, ShutdownParams {}).await?;
         tracing::info!("Daemon shutdown requested");
         Ok(())
     }
@@ -358,7 +299,7 @@ pub async fn ensure_daemon_running() -> Result<()> {
 }
 
 /// Spawn the daemon process in the background.
-fn spawn_daemon() -> Result<()> {
+pub fn spawn_daemon() -> Result<()> {
     use std::process::{Command, Stdio};
 
     // Get the current executable path

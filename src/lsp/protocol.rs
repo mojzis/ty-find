@@ -311,27 +311,57 @@ mod tests {
     fn test_hover_contents_markup() {
         let json = r#"{"kind": "markdown", "value": "```python\ndef foo(): ...\n```"}"#;
         let contents: HoverContents = serde_json::from_str(json).unwrap();
-        assert!(matches!(contents, HoverContents::Markup(_)));
+        match contents {
+            HoverContents::Markup(markup) => {
+                assert!(matches!(markup.kind, MarkupKind::Markdown));
+                assert_eq!(markup.value, "```python\ndef foo(): ...\n```");
+            }
+            other => panic!("Expected Markup, got {other:?}"),
+        }
     }
 
     #[test]
     fn test_hover_contents_marked_string() {
         let json = r#"{"language": "python", "value": "def foo(): ..."}"#;
         let contents: HoverContents = serde_json::from_str(json).unwrap();
-        assert!(matches!(contents, HoverContents::MarkedString(_)));
+        match contents {
+            HoverContents::MarkedString(ms) => {
+                assert_eq!(ms.language, "python");
+                assert_eq!(ms.value, "def foo(): ...");
+            }
+            other => panic!("Expected MarkedString, got {other:?}"),
+        }
     }
 
     #[test]
     fn test_hover_contents_scalar() {
         let json = r#""some hover text""#;
         let contents: HoverContents = serde_json::from_str(json).unwrap();
-        assert!(matches!(contents, HoverContents::Scalar(_)));
+        match contents {
+            HoverContents::Scalar(s) => assert_eq!(s, "some hover text"),
+            other => panic!("Expected Scalar, got {other:?}"),
+        }
     }
 
     #[test]
     fn test_hover_contents_array_mixed() {
         let json = r#"[{"language": "python", "value": "def foo(): ..."}, "plain text"]"#;
         let contents: HoverContents = serde_json::from_str(json).unwrap();
-        assert!(matches!(contents, HoverContents::Array(_)));
+        match contents {
+            HoverContents::Array(arr) => {
+                assert_eq!(arr.len(), 2);
+                let MarkedStringOrString::MarkedString(ms) = &arr[0] else {
+                    panic!("Expected MarkedString, got {:?}", arr[0]);
+                };
+                assert_eq!(ms.language, "python");
+                assert_eq!(ms.value, "def foo(): ...");
+
+                let MarkedStringOrString::String(s) = &arr[1] else {
+                    panic!("Expected String, got {:?}", arr[1]);
+                };
+                assert_eq!(s, "plain text");
+            }
+            other => panic!("Expected Array, got {other:?}"),
+        }
     }
 }

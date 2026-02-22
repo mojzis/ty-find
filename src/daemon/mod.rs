@@ -11,7 +11,7 @@ pub mod server;
 
 // Re-export main types for convenience
 #[allow(unused_imports)]
-pub use client::{ensure_daemon_running, get_socket_path, DaemonClient};
+pub use client::{ensure_daemon_running, get_socket_path, spawn_daemon, DaemonClient};
 #[allow(unused_imports)]
 pub use pool::LspClientPool;
 #[allow(unused_imports)]

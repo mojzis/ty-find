@@ -122,3 +122,27 @@ The project uses maturin to bridge Rust and Python ecosystems:
 - **Rust toolchain** required for building from source
 - **tokio** for async LSP communication and process management
 - **clap** for CLI parsing with subcommands and multiple output formats
+
+## Review Before Completing Work
+
+Before marking any task as complete, run the review process:
+
+1. **Automated checks** (runs automatically via TaskCompleted hook):
+   - `cargo fmt --all -- --check`
+   - `cargo clippy --all-targets --all-features -- -D warnings`
+
+2. **Deep review** (use the rust-review skill for significant changes):
+   - The `rust-review` skill runs automatically when finishing work or can be invoked with `/rust-review`
+   - Address all 🔴 Must Fix items before completing
+   - Address 🟡 Should Fix items unless there's a documented reason not to
+
+3. **Full review** (run before pushing):
+   - `make review` — runs fmt, clippy, tests, audit, and deny
+
+### What the rust-review skill checks (beyond clippy)
+- Error handling quality (context propagation, error type specificity)
+- Async/Tokio correctness (lock holding, blocking in async, JoinHandle handling)
+- Duplicated logic (extract shared patterns, especially LSP message construction)
+- Test quality (meaningful assertions, edge cases, not just "runs without panic")
+- Performance patterns (unnecessary clones, allocation, ownership)
+- Idiomatic Rust (iterator chains, proper trait impls, thin main.rs)

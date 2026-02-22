@@ -13,6 +13,12 @@ pub struct OutputFormatter {
     cwd: PathBuf,
 }
 
+/// Read a single line of source code from a file (1-based line number).
+fn read_source_line(file_path: &str, line: u32) -> Option<String> {
+    let content = std::fs::read_to_string(file_path).ok()?;
+    content.lines().nth((line - 1) as usize).map(|s| s.trim().to_string())
+}
+
 impl OutputFormatter {
     pub fn new(format: OutputFormat) -> Self {
         Self { format, cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")) }
@@ -41,11 +47,8 @@ impl OutputFormatter {
 
             let _ = writeln!(output, "{}. {file_path}:{line}:{column}", i + 1);
 
-            if let Ok(content) = std::fs::read_to_string(&file_path) {
-                let lines: Vec<&str> = content.lines().collect();
-                if let Some(line_content) = lines.get((line - 1) as usize) {
-                    let _ = writeln!(output, "   {}", line_content.trim());
-                }
+            if let Some(src) = read_source_line(&file_path, line) {
+                let _ = writeln!(output, "   {src}");
             }
             output.push('\n');
         }
@@ -167,11 +170,8 @@ impl OutputFormatter {
 
                     let _ = writeln!(output, "{}. {file_path}:{line}:{column}", i + 1);
 
-                    if let Ok(content) = std::fs::read_to_string(&file_path) {
-                        let lines: Vec<&str> = content.lines().collect();
-                        if let Some(line_content) = lines.get((line - 1) as usize) {
-                            let _ = writeln!(output, "   {}", line_content.trim());
-                        }
+                    if let Some(src) = read_source_line(&file_path, line) {
+                        let _ = writeln!(output, "   {src}");
                     }
                     output.push('\n');
                 }
@@ -314,11 +314,8 @@ impl OutputFormatter {
                         let column = location.range.start.character + 1;
                         let _ = writeln!(output, "{}. {file_path}:{line}:{column}", i + 1);
 
-                        if let Ok(content) = std::fs::read_to_string(&file_path) {
-                            let lines: Vec<&str> = content.lines().collect();
-                            if let Some(line_content) = lines.get((line - 1) as usize) {
-                                let _ = writeln!(output, "   {}", line_content.trim());
-                            }
+                        if let Some(src) = read_source_line(&file_path, line) {
+                            let _ = writeln!(output, "   {src}");
                         }
                     }
                 }
@@ -346,11 +343,8 @@ impl OutputFormatter {
                         let column = location.range.start.character + 1;
                         let _ = writeln!(output, "{}. {file_path}:{line}:{column}", i + 1);
 
-                        if let Ok(content) = std::fs::read_to_string(&file_path) {
-                            let lines: Vec<&str> = content.lines().collect();
-                            if let Some(line_content) = lines.get((line - 1) as usize) {
-                                let _ = writeln!(output, "   {}", line_content.trim());
-                            }
+                        if let Some(src) = read_source_line(&file_path, line) {
+                            let _ = writeln!(output, "   {src}");
                         }
                     }
                 }
@@ -494,5 +488,200 @@ fn format_document_symbols_csv(symbols: &[DocumentSymbol], output: &mut String) 
         if let Some(children) = &symbol.children {
             format_document_symbols_csv(children, output);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lsp::protocol::{
+        HoverContents, MarkupContent, MarkupKind, Position, Range, SymbolKind,
+    };
+
+    fn make_location(uri: &str, line: u32, character: u32) -> Location {
+        Location {
+            uri: uri.to_string(),
+            range: Range {
+                start: Position { line, character },
+                end: Position { line, character: character + 5 },
+            },
+        }
+    }
+
+    #[test]
+    fn test_format_definitions_empty() {
+        let formatter = OutputFormatter::new(OutputFormat::Human);
+        let result = formatter.format_definitions(&[], "test:1:1");
+        assert_eq!(result, "No definitions found for: test:1:1");
+    }
+
+    #[test]
+    fn test_format_definitions_single() {
+        let formatter = OutputFormatter::new(OutputFormat::Human);
+        let locations = [make_location("file:///nonexistent.py", 5, 10)];
+        let result = formatter.format_definitions(&locations, "test:6:11");
+
+        assert!(result.contains("Found 1 definition(s)"));
+        assert!(result.contains("nonexistent.py:6:11"));
+    }
+
+    #[test]
+    fn test_format_definitions_json() {
+        let formatter = OutputFormatter::new(OutputFormat::Json);
+        let locations = [make_location("file:///test.py", 0, 0)];
+        let result = formatter.format_definitions(&locations, "test");
+
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert!(parsed.is_array());
+        assert_eq!(parsed[0]["uri"], "file:///test.py");
+    }
+
+    #[test]
+    fn test_format_definitions_csv() {
+        let formatter = OutputFormatter::new(OutputFormat::Csv);
+        let locations = [make_location("file:///test.py", 4, 2)];
+        let result = formatter.format_definitions(&locations, "test");
+
+        assert!(result.starts_with("file,line,column\n"));
+        assert!(result.contains("5,3")); // 0-based -> 1-based
+    }
+
+    #[test]
+    fn test_format_find_results_single_symbol() {
+        let formatter = OutputFormatter::new(OutputFormat::Human);
+        let locations = vec![make_location("file:///test.py", 0, 0)];
+        let results = vec![("foo".to_string(), locations)];
+        let result = formatter.format_find_results(&results);
+
+        assert!(result.contains("Found 1 definition(s) for: 'foo'"));
+    }
+
+    #[test]
+    fn test_format_find_results_symbol_not_found() {
+        let formatter = OutputFormatter::new(OutputFormat::Human);
+        let results = vec![("missing".to_string(), vec![])];
+        let result = formatter.format_find_results(&results);
+
+        assert_eq!(result, "No definitions found for: 'missing'");
+    }
+
+    #[test]
+    fn test_format_find_results_multiple_symbols() {
+        let formatter = OutputFormatter::new(OutputFormat::Human);
+        let results = vec![
+            ("foo".to_string(), vec![make_location("file:///test.py", 0, 0)]),
+            ("bar".to_string(), vec![]),
+        ];
+        let result = formatter.format_find_results(&results);
+
+        assert!(result.contains("=== foo ==="));
+        assert!(result.contains("=== bar ==="));
+        assert!(result.contains("No definitions found."));
+    }
+
+    #[test]
+    fn test_format_references_empty() {
+        let formatter = OutputFormatter::new(OutputFormat::Human);
+        let result = formatter.format_references(&[], "test:1:1");
+        assert_eq!(result, "No references found for: test:1:1");
+    }
+
+    #[test]
+    fn test_format_hover_markup() {
+        let formatter = OutputFormatter::new(OutputFormat::Human);
+        let hover = Hover {
+            contents: HoverContents::Markup(MarkupContent {
+                kind: MarkupKind::Markdown,
+                value: "def foo() -> int".to_string(),
+            }),
+            range: None,
+        };
+        let result = formatter.format_hover(&hover, "test:1:1");
+
+        assert!(result.contains("Hover information for: test:1:1"));
+        assert!(result.contains("def foo() -> int"));
+    }
+
+    #[test]
+    fn test_format_hover_json() {
+        let formatter = OutputFormatter::new(OutputFormat::Json);
+        let hover = Hover { contents: HoverContents::Scalar("hello".to_string()), range: None };
+        let result = formatter.format_hover(&hover, "test");
+
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert!(parsed.is_object());
+        assert!(parsed.get("contents").is_some());
+    }
+
+    #[test]
+    fn test_format_workspace_symbols() {
+        let formatter = OutputFormatter::new(OutputFormat::Human);
+        let symbols = vec![SymbolInformation {
+            name: "MyClass".to_string(),
+            kind: SymbolKind::Class,
+            tags: None,
+            deprecated: None,
+            location: make_location("file:///test.py", 0, 0),
+            container_name: None,
+        }];
+        let result = formatter.format_workspace_symbols(&symbols);
+
+        assert!(result.contains("MyClass"));
+        assert!(result.contains("Class"));
+    }
+
+    #[test]
+    fn test_uri_to_path_with_file_prefix() {
+        let formatter = OutputFormatter::new(OutputFormat::Human);
+        let result = formatter.uri_to_path("file:///some/path/test.py");
+        // Should strip the file:// prefix
+        assert!(!result.starts_with("file://"));
+        assert!(result.contains("test.py"));
+    }
+
+    #[test]
+    fn test_uri_to_path_without_file_prefix() {
+        let formatter = OutputFormatter::new(OutputFormat::Human);
+        let result = formatter.uri_to_path("https://example.com");
+        assert_eq!(result, "https://example.com");
+    }
+
+    #[test]
+    fn test_format_inspect_empty_results() {
+        let formatter = OutputFormatter::new(OutputFormat::Human);
+        let result = formatter.format_inspect("missing", &[], None, &[]);
+
+        assert!(result.contains("=== Inspect: missing ==="));
+        assert!(result.contains("No definitions found."));
+        assert!(result.contains("No hover information available."));
+        assert!(result.contains("No references found."));
+    }
+
+    #[test]
+    fn test_format_inspect_json() {
+        let formatter = OutputFormatter::new(OutputFormat::Json);
+        let defs = [make_location("file:///test.py", 0, 0)];
+        let result = formatter.format_inspect("foo", &defs, None, &[]);
+
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["symbol"], "foo");
+        assert!(parsed["definitions"].is_array());
+    }
+
+    #[test]
+    fn test_read_source_line_valid() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.py");
+        std::fs::write(&file, "line 1\n  line 2\nline 3\n").unwrap();
+
+        assert_eq!(read_source_line(file.to_str().unwrap(), 1), Some("line 1".to_string()));
+        assert_eq!(read_source_line(file.to_str().unwrap(), 2), Some("line 2".to_string()));
+        assert_eq!(read_source_line(file.to_str().unwrap(), 3), Some("line 3".to_string()));
+        assert_eq!(read_source_line(file.to_str().unwrap(), 4), None);
+    }
+
+    #[test]
+    fn test_read_source_line_nonexistent_file() {
+        assert_eq!(read_source_line("/nonexistent/file.py", 1), None);
     }
 }

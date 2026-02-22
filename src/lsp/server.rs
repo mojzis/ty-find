@@ -101,11 +101,11 @@ impl TyLspServer {
         Ok(Self { process, workspace_root: workspace_root.to_string() })
     }
 
-    pub fn stdin(&mut self) -> &mut tokio::process::ChildStdin {
-        self.process.stdin.as_mut().expect("ty LSP server stdin not available (already taken)")
+    pub fn take_stdin(&mut self) -> tokio::process::ChildStdin {
+        self.process.stdin.take().expect("ty LSP server stdin not available (already taken)")
     }
 
-    pub fn stdout(&mut self) -> BufReader<tokio::process::ChildStdout> {
+    pub fn take_stdout(&mut self) -> BufReader<tokio::process::ChildStdout> {
         BufReader::new(
             self.process.stdout.take().expect("ty LSP server stdout not available (already taken)"),
         )

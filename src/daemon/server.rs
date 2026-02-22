@@ -52,21 +52,10 @@ impl DaemonServer {
     }
 
     /// Get the socket path for the current user.
-    #[allow(unsafe_code)]
+    ///
+    /// Delegates to the canonical implementation in [`super::client::get_socket_path`].
     pub fn get_socket_path() -> PathBuf {
-        #[cfg(unix)]
-        {
-            // SAFETY: `libc::getuid()` is a simple syscall that returns the real
-            // user ID. It has no preconditions and cannot cause UB.
-            let uid = unsafe { libc::getuid() };
-            PathBuf::from(format!("/tmp/ty-find-{uid}.sock"))
-        }
-
-        #[cfg(not(unix))]
-        {
-            // Fallback for non-Unix systems (e.g., Windows)
-            PathBuf::from("/tmp/ty-find.sock")
-        }
+        super::client::get_socket_path().expect("Failed to determine socket path (non-Unix?)")
     }
 
     /// Start the daemon server and listen for connections.
@@ -94,10 +83,10 @@ impl DaemonServer {
 
         let server = Arc::new(self);
 
-        // NOTE: Using LocalSet because the LSP client uses std::sync::Mutex
-        // which is not Send across await points. This is a limitation of the
-        // current LSP client implementation. Ideally, TyLspClient should be
-        // updated to use tokio::sync::Mutex instead.
+        // NOTE: Using LocalSet because LspClientPool uses std::sync::Mutex
+        // internally and spawn_local avoids Send requirements. TyLspClient
+        // itself is now Send (stdin uses tokio::sync::Mutex), but the pool's
+        // internal locking pattern is simpler with LocalSet.
         let local = tokio::task::LocalSet::new();
 
         // Spawn idle timeout task
@@ -381,50 +370,6 @@ impl DaemonServer {
 
         Ok(())
     }
-
-    /// Spawn the daemon as a background process.
-    pub fn spawn_background() -> Result<()> {
-        let socket_path = Self::get_socket_path();
-
-        // Check if daemon is already running
-        if socket_path.exists() {
-            tracing::debug!("Daemon socket already exists, assuming daemon is running");
-            return Ok(());
-        }
-
-        tracing::info!("Spawning daemon in background");
-
-        // Spawn a new process to run the daemon
-        #[cfg(unix)]
-        {
-            use std::process::Command;
-
-            // Get the current executable path
-            let exe = std::env::current_exe().context("Failed to get current executable path")?;
-
-            // Spawn daemon process in background with --foreground so the
-            // child actually runs the server instead of spawning yet another process.
-            Command::new(exe)
-                .arg("daemon")
-                .arg("start")
-                .arg("--foreground")
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .spawn()
-                .context("Failed to spawn daemon process")?;
-
-            // Wait a bit for daemon to start
-            std::thread::sleep(Duration::from_millis(500));
-        }
-
-        #[cfg(not(unix))]
-        {
-            anyhow::bail!("Background daemon spawning is not supported on this platform");
-        }
-
-        Ok(())
-    }
 }
 
 /// Send a framed error response to the client.
@@ -463,11 +408,12 @@ mod tests {
         let server = DaemonServer::new(socket_path);
 
         let params = serde_json::json!({});
-        let result = server.handle_ping(params).await;
+        let value = server.handle_ping(params).await.expect("ping should succeed");
 
-        assert!(result.is_ok());
-        let value = result.expect("ping should succeed");
-        assert!(value.get("status").is_some());
-        assert!(value.get("uptime").is_some());
+        assert_eq!(value["status"], "running");
+        assert_eq!(value["active_workspaces"], 0);
+        assert_eq!(value["cache_size"], 0);
+        // Uptime should be a small number since the server was just created
+        assert!(value["uptime"].as_u64().unwrap() < 5);
     }
 }

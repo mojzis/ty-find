@@ -62,30 +62,30 @@ fn render_overview(cmd: &Command) -> String {
     let global_opts: Vec<_> = cmd.get_opts().collect();
     if !global_opts.is_empty() {
         let _ = writeln!(out, "## Global Options\n");
-        let _ = writeln!(out, "| Option | Description |");
-        let _ = writeln!(out, "|--------|-------------|");
         for opt in &global_opts {
             let long = opt.get_long().map_or_else(String::new, |l| format!("--{l}"));
             let short = opt.get_short().map_or_else(String::new, |s| format!("-{s}, "));
             let desc = opt.get_help().map_or_else(String::new, help_text);
-            let _ = writeln!(out, "| `{short}{long}` | {desc} |");
+            let _ = writeln!(out, "**`{short}{long}`**");
+            if desc.is_empty() {
+                let _ = writeln!(out);
+            } else {
+                let _ = writeln!(out, ": {desc}\n");
+            }
         }
-        let _ = writeln!(out);
     }
 
-    // Commands table
+    // Commands list
     let _ = writeln!(out, "## Commands\n");
-    let _ = writeln!(out, "| Command | Description |");
-    let _ = writeln!(out, "|---------|-------------|");
     for sub in cmd.get_subcommands() {
         if sub.is_hide_set() {
             continue;
         }
         let name = sub.get_name();
         let about = sub.get_about().map_or_else(String::new, help_text);
-        let _ = writeln!(out, "| [{name}]({name}.md) | {about} |");
+        let _ = writeln!(out, "**[{name}]({name}.md)**");
+        let _ = writeln!(out, ": {about}\n");
     }
-    let _ = writeln!(out);
 
     out
 }
@@ -128,44 +128,38 @@ fn render_subcommand(cmd: &Command, name: &str) -> String {
     let positionals: Vec<_> = cmd.get_positionals().collect();
     if !positionals.is_empty() {
         let _ = writeln!(out, "## Arguments\n");
-        let _ = writeln!(out, "| Argument | Description |");
-        let _ = writeln!(out, "|----------|-------------|");
         for arg in &positionals {
             let arg_name = arg.get_id();
             let desc = arg.get_help().map_or_else(String::new, help_text);
             let required = if arg.is_required_set() { " *(required)*" } else { "" };
-            let _ = writeln!(out, "| `<{arg_name}>` | {desc}{required} |");
+            let _ = writeln!(out, "**`<{arg_name}>`**{required}");
+            let _ = writeln!(out, ": {desc}\n");
         }
-        let _ = writeln!(out);
     }
 
     // Named options
     let opts: Vec<_> = cmd.get_opts().collect();
     if !opts.is_empty() {
         let _ = writeln!(out, "## Options\n");
-        let _ = writeln!(out, "| Option | Description |");
-        let _ = writeln!(out, "|--------|-------------|");
         for opt in &opts {
             let long = opt.get_long().map_or_else(String::new, |l| format!("--{l}"));
             let short = opt.get_short().map_or_else(String::new, |s| format!("-{s}, "));
             let desc = opt.get_help().map_or_else(String::new, help_text);
-            let _ = writeln!(out, "| `{short}{long}` | {desc} |");
+            let _ = writeln!(out, "**`{short}{long}`**");
+            let _ = writeln!(out, ": {desc}\n");
         }
-        let _ = writeln!(out);
     }
 
     // Nested subcommands (e.g., daemon start/stop/status)
     let subs: Vec<_> = cmd.get_subcommands().filter(|s| !s.is_hide_set()).collect();
     if !subs.is_empty() {
         let _ = writeln!(out, "## Subcommands\n");
-        let _ = writeln!(out, "| Subcommand | Description |");
-        let _ = writeln!(out, "|------------|-------------|");
         for sub in &subs {
             let sub_name = sub.get_name();
             let about = sub.get_about().map_or_else(String::new, help_text);
-            let _ = writeln!(out, "| `{sub_name}` | {about} |");
+            let _ = writeln!(out, "**`{sub_name}`**");
+            let _ = writeln!(out, ": {about}\n");
         }
-        let _ = writeln!(out);
     }
 
     // Examples section

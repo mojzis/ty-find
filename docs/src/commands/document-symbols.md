@@ -1,6 +1,9 @@
 # document-symbols
 
-List all symbols in a file
+List all functions, classes, and variables defined in a file — like a table of contents for your code.
+
+Examples:
+  ty-find document-symbols src/services/user.py
 
 ## Usage
 
@@ -10,9 +13,8 @@ ty-find document-symbols <FILE>
 
 ## Arguments
 
-| Argument | Description |
-|----------|-------------|
-| `<file>` |  *(required)* |
+**`<file>`** *(required)*
+: 
 
 ## Examples
 

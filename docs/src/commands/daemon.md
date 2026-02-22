@@ -1,6 +1,6 @@
 # daemon
 
-Manage the background ty LSP server daemon
+Manage the background LSP server (auto-starts on first use)
 
 ## Usage
 
@@ -10,11 +10,14 @@ ty-find daemon
 
 ## Subcommands
 
-| Subcommand | Description |
-|------------|-------------|
-| `start` | Start the background LSP server |
-| `stop` | Stop the background LSP server |
-| `status` | Show the daemon's running status |
+**`start`**
+: Start the background LSP server
+
+**`stop`**
+: Stop the background LSP server
+
+**`status`**
+: Show the daemon's running status
 
 ## Examples
 

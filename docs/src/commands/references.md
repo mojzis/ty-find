@@ -1,6 +1,10 @@
 # references
 
-Find all references to a symbol at a specific file location
+Find every place a symbol is used across the codebase. Useful before renaming or removing code to understand the impact.
+
+Examples:
+  ty-find references myfile.py -l 10 -c 5
+  ty-find references myfile.py -l 10 -c 5 --no-include-declaration
 
 ## Usage
 
@@ -10,17 +14,19 @@ ty-find references <FILE> [OPTIONS]
 
 ## Arguments
 
-| Argument | Description |
-|----------|-------------|
-| `<file>` |  *(required)* |
+**`<file>`** *(required)*
+: 
 
 ## Options
 
-| Option | Description |
-|--------|-------------|
-| `-l, --line` |  |
-| `-c, --column` |  |
-| `--include-declaration` | Include the declaration in the results |
+**`-l, --line`**
+: 
+
+**`-c, --column`**
+: 
+
+**`--include-declaration`**
+: Include the declaration in the results
 
 ## Examples
 

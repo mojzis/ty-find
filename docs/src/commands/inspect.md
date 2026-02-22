@@ -1,6 +1,12 @@
 # inspect
 
-Inspect symbols: find definition, hover info, and references in one shot
+Get the full picture of a symbol — where it's defined, its type signature, and optionally all usages. Searches the whole project by name, no file path needed.
+
+Examples:
+  ty-find inspect MyClass
+  ty-find inspect calculate_sum UserService    # multiple symbols at once
+  ty-find inspect MyClass --references         # also show all usages
+  ty-find inspect MyClass --file src/models.py # narrow to one file
 
 ## Usage
 
@@ -10,15 +16,16 @@ ty-find inspect <SYMBOLS> [OPTIONS]
 
 ## Arguments
 
-| Argument | Description |
-|----------|-------------|
-| `<symbols>` | Symbol name(s) to inspect (supports multiple symbols) *(required)* |
+**`<symbols>`** *(required)*
+: Symbol name(s) to inspect (supports multiple symbols)
 
 ## Options
 
-| Option | Description |
-|--------|-------------|
-| `-f, --file` | Optional file to narrow the search (uses workspace symbols if omitted) |
+**`-f, --file`**
+: Narrow the search to a specific file (searches whole project if omitted)
+
+**`-r, --references`**
+: Also find all references (can be slow on large codebases)
 
 ## Examples
 

@@ -1,9 +1,10 @@
 use anyhow::{Context, Result};
+use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::oneshot;
 
 use crate::lsp::protocol::{
@@ -14,24 +15,49 @@ use crate::lsp::protocol::{
 use crate::lsp::server::TyLspServer;
 
 pub struct TyLspClient {
-    server: Arc<Mutex<TyLspServer>>,
+    /// Kept alive so the child process is killed when the client is dropped.
+    _server: TyLspServer,
+    stdin: tokio::sync::Mutex<tokio::process::ChildStdin>,
     request_id: AtomicU64,
     pending_requests: Arc<Mutex<HashMap<u64, oneshot::Sender<LSPResponse>>>>,
 }
 
+/// Build a `file://` URI from a file path, canonicalizing it first.
+async fn file_uri(file_path: &str) -> Result<String> {
+    let canonical = tokio::fs::canonicalize(file_path)
+        .await
+        .with_context(|| format!("Failed to resolve path: {file_path}"))?;
+    Ok(format!("file://{}", canonical.display()))
+}
+
+/// Parse an LSP response that returns an array of items.
+fn parse_response_array<T: DeserializeOwned>(response: LSPResponse) -> Result<Vec<T>> {
+    match response.result {
+        Some(Value::Array(arr)) => {
+            serde_json::from_value(Value::Array(arr)).context("Failed to parse LSP response array")
+        }
+        _ => Ok(vec![]),
+    }
+}
+
 impl TyLspClient {
     pub async fn new(workspace_root: &str) -> Result<Self> {
-        let server =
+        let mut server =
             TyLspServer::start(workspace_root).await.context("Failed to start ty LSP server")?;
+
+        let stdin = server.take_stdin();
+        let stdout = server.take_stdout();
+
         let client = Self {
-            server: Arc::new(Mutex::new(server)),
+            _server: server,
+            stdin: tokio::sync::Mutex::new(stdin),
             request_id: AtomicU64::new(1),
             pending_requests: Arc::new(Mutex::new(HashMap::new())),
         };
 
         // Must start reading responses before sending initialize,
         // otherwise the initialize response is never consumed and we deadlock.
-        client.start_response_handler();
+        client.start_response_handler(stdout);
         tracing::debug!("Sending LSP initialize request...");
         client.initialize(workspace_root).await.context("Failed to initialize LSP session")?;
         tracing::debug!("LSP client initialized successfully");
@@ -77,9 +103,10 @@ impl TyLspClient {
     }
 
     pub async fn open_document(&self, file_path: &str) -> Result<()> {
-        let canonical = std::fs::canonicalize(file_path)?;
-        let uri = format!("file://{}", canonical.display());
-        let text = std::fs::read_to_string(&canonical)?;
+        let uri = file_uri(file_path).await?;
+        let text = tokio::fs::read_to_string(file_path)
+            .await
+            .with_context(|| format!("Failed to read file: {file_path}"))?;
 
         self.send_notification(
             "textDocument/didOpen",
@@ -101,7 +128,7 @@ impl TyLspClient {
         line: u32,
         character: u32,
     ) -> Result<Vec<Location>> {
-        let uri = format!("file://{}", std::fs::canonicalize(file_path)?.display());
+        let uri = file_uri(file_path).await?;
 
         let params = GotoDefinitionParams {
             text_document_position_params: TextDocumentPositionParams {
@@ -115,15 +142,16 @@ impl TyLspClient {
         let response =
             self.send_request("textDocument/definition", serde_json::to_value(params)?).await?;
 
-        if let Some(result) = response.result {
-            let locations: Vec<Location> = match result {
-                Value::Array(arr) => serde_json::from_value(Value::Array(arr))?,
-                Value::Object(_) => vec![serde_json::from_value(result)?],
-                _ => vec![],
-            };
-            Ok(locations)
-        } else {
-            Ok(vec![])
+        // Definition can return a single Location or an array of Locations
+        match response.result {
+            Some(Value::Array(arr)) => serde_json::from_value(Value::Array(arr))
+                .context("Failed to parse definition locations"),
+            Some(value @ Value::Object(_)) => {
+                let loc: Location =
+                    serde_json::from_value(value).context("Failed to parse definition location")?;
+                Ok(vec![loc])
+            }
+            _ => Ok(vec![]),
         }
     }
 
@@ -134,7 +162,7 @@ impl TyLspClient {
         character: u32,
         include_declaration: bool,
     ) -> Result<Vec<Location>> {
-        let uri = format!("file://{}", std::fs::canonicalize(file_path)?.display());
+        let uri = file_uri(file_path).await?;
 
         let params = ReferenceParams {
             text_document_position_params: TextDocumentPositionParams {
@@ -149,19 +177,11 @@ impl TyLspClient {
         let response =
             self.send_request("textDocument/references", serde_json::to_value(params)?).await?;
 
-        if let Some(result) = response.result {
-            let locations: Vec<Location> = match result {
-                Value::Array(arr) => serde_json::from_value(Value::Array(arr))?,
-                _ => vec![],
-            };
-            Ok(locations)
-        } else {
-            Ok(vec![])
-        }
+        parse_response_array(response)
     }
 
     pub async fn hover(&self, file_path: &str, line: u32, character: u32) -> Result<Option<Hover>> {
-        let uri = format!("file://{}", std::fs::canonicalize(file_path)?.display());
+        let uri = file_uri(file_path).await?;
 
         let params = HoverParams {
             text_document_position_params: TextDocumentPositionParams {
@@ -174,15 +194,13 @@ impl TyLspClient {
         let response =
             self.send_request("textDocument/hover", serde_json::to_value(params)?).await?;
 
-        if let Some(result) = response.result {
-            if result.is_null() {
-                Ok(None)
-            } else {
-                let hover: Hover = serde_json::from_value(result)?;
+        match response.result {
+            Some(value) if !value.is_null() => {
+                let hover: Hover =
+                    serde_json::from_value(value).context("Failed to parse hover response")?;
                 Ok(Some(hover))
             }
-        } else {
-            Ok(None)
+            _ => Ok(None),
         }
     }
 
@@ -195,19 +213,11 @@ impl TyLspClient {
 
         let response = self.send_request("workspace/symbol", serde_json::to_value(params)?).await?;
 
-        if let Some(result) = response.result {
-            let symbols: Vec<SymbolInformation> = match result {
-                Value::Array(arr) => serde_json::from_value(Value::Array(arr))?,
-                _ => vec![],
-            };
-            Ok(symbols)
-        } else {
-            Ok(vec![])
-        }
+        parse_response_array(response)
     }
 
     pub async fn document_symbols(&self, file_path: &str) -> Result<Vec<DocumentSymbol>> {
-        let uri = format!("file://{}", std::fs::canonicalize(file_path)?.display());
+        let uri = file_uri(file_path).await?;
 
         let params = DocumentSymbolParams {
             text_document: TextDocumentIdentifier { uri },
@@ -218,15 +228,7 @@ impl TyLspClient {
         let response =
             self.send_request("textDocument/documentSymbol", serde_json::to_value(params)?).await?;
 
-        if let Some(result) = response.result {
-            let symbols: Vec<DocumentSymbol> = match result {
-                Value::Array(arr) => serde_json::from_value(Value::Array(arr))?,
-                _ => vec![],
-            };
-            Ok(symbols)
-        } else {
-            Ok(vec![])
-        }
+        parse_response_array(response)
     }
 
     async fn send_request(&self, method: &str, params: Value) -> Result<LSPResponse> {
@@ -275,26 +277,22 @@ impl TyLspClient {
         self.send_raw_message(&content).await
     }
 
-    #[allow(clippy::await_holding_lock)]
     async fn send_raw_message(&self, content: &str) -> Result<()> {
         let message = format!("Content-Length: {}\r\n\r\n{content}", content.len());
-        let mut server = self.server.lock().expect("server mutex poisoned");
-        let stdin = server.stdin();
+        let mut stdin = self.stdin.lock().await;
         stdin.write_all(message.as_bytes()).await?;
         stdin.flush().await?;
         Ok(())
     }
 
-    fn start_response_handler(&self) {
-        let server = Arc::clone(&self.server);
+    fn start_response_handler(&self, stdout: BufReader<tokio::process::ChildStdout>) {
         let pending_requests = Arc::clone(&self.pending_requests);
 
+        // JoinHandle intentionally not stored — the task exits naturally when
+        // the server's stdout closes (EOF), which happens when TyLspServer is
+        // dropped and the child process is killed.
         tokio::spawn(async move {
-            let mut stdout = {
-                let mut server_guard = server.lock().expect("server mutex poisoned");
-                server_guard.stdout()
-            };
-
+            let mut stdout = stdout;
             let mut buffer = String::new();
             let mut content_length: Option<usize> = None;
 

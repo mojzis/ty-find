@@ -1,6 +1,10 @@
 # hover
 
-Show hover information at a specific file location
+Show the type signature and documentation for the symbol at a specific position in a file. Useful for understanding what a variable holds, what a function returns, or what a class provides.
+
+Examples:
+  ty-find hover src/main.py -l 45 -c 12
+  ty-find --format json hover src/main.py -l 45 -c 12   # JSON for scripting
 
 ## Usage
 
@@ -10,16 +14,16 @@ ty-find hover <FILE> [OPTIONS]
 
 ## Arguments
 
-| Argument | Description |
-|----------|-------------|
-| `<file>` |  *(required)* |
+**`<file>`** *(required)*
+: 
 
 ## Options
 
-| Option | Description |
-|--------|-------------|
-| `-l, --line` |  |
-| `-c, --column` |  |
+**`-l, --line`**
+: 
+
+**`-c, --column`**
+: 
 
 ## Examples
 

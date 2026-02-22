@@ -1,6 +1,6 @@
 # Commands Overview
 
-Find Python function definitions using ty's LSP server
+Navigate Python code with type-aware precision (powered by ty's LSP server)
 
 ## Usage
 
@@ -10,23 +10,41 @@ ty-find [OPTIONS] <COMMAND>
 
 ## Global Options
 
-| Option | Description |
-|--------|-------------|
-| `--workspace` |  |
-| `-v, --verbose` |  |
-| `--format` |  |
+**`--workspace`**
+
+**`-v, --verbose`**
+
+**`--format`**
+
+**`--timeout`**
+: Timeout in seconds for daemon operations (default: 30)
 
 ## Commands
 
-| Command | Description |
-|---------|-------------|
-| [definition](definition.md) | Go to definition at a specific file location |
-| [find](find.md) | Find symbol definitions by name (searches workspace if no file given) |
-| [interactive](interactive.md) | Interactive REPL for exploring definitions |
-| [hover](hover.md) | Show hover information at a specific file location |
-| [references](references.md) | Find all references to a symbol at a specific file location |
-| [workspace-symbols](workspace-symbols.md) | Search for symbols across the workspace |
-| [document-symbols](document-symbols.md) | List all symbols in a file |
-| [inspect](inspect.md) | Inspect symbols: find definition, hover info, and references in one shot |
-| [daemon](daemon.md) | Manage the background ty LSP server daemon |
+**[inspect](inspect.md)**
+: Get the full picture of a symbol: definition, type signature, and usages
+
+**[find](find.md)**
+: Jump to where a function, class, or variable is defined by name
+
+**[hover](hover.md)**
+: Show type signature and documentation at a specific file location
+
+**[definition](definition.md)**
+: Jump to definition from a specific file location (line + column)
+
+**[references](references.md)**
+: Find every place a symbol is used across the codebase
+
+**[document-symbols](document-symbols.md)**
+: List all functions, classes, and variables defined in a file
+
+**[workspace-symbols](workspace-symbols.md)**
+: Search for symbols by name across the whole project
+
+**[interactive](interactive.md)**
+: Interactive REPL for exploring definitions
+
+**[daemon](daemon.md)**
+: Manage the background LSP server (auto-starts on first use)
 

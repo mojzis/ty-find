@@ -10,9 +10,8 @@ ty-find interactive [FILE]
 
 ## Arguments
 
-| Argument | Description |
-|----------|-------------|
-| `<file>` |  |
+**`<file>`**
+: 
 
 ## Examples
 

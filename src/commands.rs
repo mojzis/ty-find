@@ -120,17 +120,22 @@ async fn find_symbol_via_workspace(
     ensure_daemon_running().await?;
     let mut client = DaemonClient::connect_with_timeout(timeout).await?;
 
+    // Use exact_name filter so the daemon only returns symbols with matching names,
+    // avoiding serialization of thousands of fuzzy matches.
+    let result = client
+        .execute_workspace_symbols_exact(workspace_root.to_path_buf(), symbol.to_string())
+        .await?;
+
+    // If exact matches found, use them; otherwise fall back to fuzzy search.
+    if !result.symbols.is_empty() {
+        return Ok(result.symbols.into_iter().map(|s| s.location).collect());
+    }
+
+    // Fallback: fuzzy search (no exact_name filter)
+    let mut client = DaemonClient::connect_with_timeout(timeout).await?;
     let result =
         client.execute_workspace_symbols(workspace_root.to_path_buf(), symbol.to_string()).await?;
-
-    // Prefer exact name matches; fall back to all results if none match exactly.
-    let has_exact = result.symbols.iter().any(|s| s.name == symbol);
-    Ok(result
-        .symbols
-        .iter()
-        .filter(|s| !has_exact || s.name == symbol)
-        .map(|s| s.location.clone())
-        .collect())
+    Ok(result.symbols.into_iter().map(|s| s.location).collect())
 }
 
 pub async fn handle_inspect_command(
@@ -213,14 +218,13 @@ async fn inspect_single_symbol(
 
         (file_str.to_string(), first_line, first_col, all_definitions)
     } else {
+        // Use exact_name filter to avoid transferring thousands of fuzzy matches
         let mut client = DaemonClient::connect_with_timeout(timeout).await?;
         let result = client
-            .execute_workspace_symbols(workspace_root.to_path_buf(), symbol.to_string())
+            .execute_workspace_symbols_exact(workspace_root.to_path_buf(), symbol.to_string())
             .await?;
 
-        let exact_matches: Vec<_> =
-            result.symbols.iter().filter(|s| s.name == symbol).cloned().collect();
-        let matched = if exact_matches.is_empty() { &result.symbols } else { &exact_matches };
+        let matched = &result.symbols;
 
         if matched.is_empty() {
             return Ok(InspectResult {

@@ -1,44 +1,44 @@
 {
   "metadata": {
     "pandas_commit": "990a2ad7bdca09cd42a4998a60c8ece8677b4a15",
-    "timestamp": "2026-02-22T22:02:04Z",
+    "timestamp": "2026-02-22T22:09:52Z",
     "hyperfine_runs": 3,
     "platform": "Linux x86_64"
   },
   "benchmarks": {
     "find-DataFrame": {
-      "ty_find_median_s": 0.03588494074,
-      "grep_median_s": 0.23499290490000002,
+      "ty_find_median_s": 0.030334483160000005,
+      "grep_median_s": 0.2233153757,
       "command": "ty-find find DataFrame"
     },
     "find-Series": {
-      "ty_find_median_s": 0.12222628602,
-      "grep_median_s": 0.23711459066,
+      "ty_find_median_s": 0.06036241012000001,
+      "grep_median_s": 0.24208655258,
       "command": "ty-find find Series"
     },
     "find-multi": {
-      "ty_find_median_s": 0.1919368079,
+      "ty_find_median_s": 0.10209563158,
       "grep_median_s": null,
       "command": "ty-find find DataFrame Series Index"
     },
     "inspect-DataFrame": {
-      "ty_find_median_s": 0.05154395656000001,
+      "ty_find_median_s": 0.04386925288,
       "grep_median_s": null,
       "command": "ty-find inspect DataFrame"
     },
     "inspect-multi": {
-      "ty_find_median_s": 0.30834077306,
+      "ty_find_median_s": 0.09210966144,
       "grep_median_s": null,
       "command": "ty-find inspect DataFrame Series"
     },
     "workspace-symbols": {
-      "ty_find_median_s": 0.02933624166,
-      "grep_median_s": 0.20491716336000002,
+      "ty_find_median_s": 0.03993076342,
+      "grep_median_s": 0.22067302612,
       "command": "ty-find workspace-symbols --query DataFrame"
     }
   },
   "startup": {
-    "cold_start_s": 1.575223,
-    "warm_start_s": 0.202379
+    "cold_start_s": 1.092729,
+    "warm_start_s": 0.075309
   }
 }

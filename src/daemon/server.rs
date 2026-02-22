@@ -257,6 +257,11 @@ impl DaemonServer {
 
         let mut symbols = client.workspace_symbols(&params.query).await?;
 
+        // Filter by exact name if specified (avoids serializing thousands of fuzzy matches)
+        if let Some(ref exact_name) = params.exact_name {
+            symbols.retain(|s| s.name == *exact_name);
+        }
+
         // Apply limit if specified
         if let Some(limit) = params.limit {
             symbols.truncate(limit);

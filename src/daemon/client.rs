@@ -214,7 +214,18 @@ impl DaemonClient {
         workspace: PathBuf,
         query: String,
     ) -> Result<WorkspaceSymbolsResult> {
-        let params = WorkspaceSymbolsParams { workspace, query, limit: None };
+        let params = WorkspaceSymbolsParams { workspace, query, limit: None, exact_name: None };
+        self.execute(Method::WorkspaceSymbols, params).await
+    }
+
+    /// Execute a workspace symbols request filtered to exact name matches.
+    pub async fn execute_workspace_symbols_exact(
+        &mut self,
+        workspace: PathBuf,
+        query: String,
+    ) -> Result<WorkspaceSymbolsResult> {
+        let exact_name = Some(query.clone());
+        let params = WorkspaceSymbolsParams { workspace, query, limit: None, exact_name };
         self.execute(Method::WorkspaceSymbols, params).await
     }
 

@@ -329,6 +329,12 @@ pub struct WorkspaceSymbolsParams {
     /// Maximum number of results to return (optional)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub limit: Option<usize>,
+
+    /// If set, only return symbols whose name exactly matches this string.
+    /// The query is still sent to the LSP server for fuzzy matching, but
+    /// results are filtered daemon-side before serialization.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exact_name: Option<String>,
 }
 
 /// Parameters for document symbols request.

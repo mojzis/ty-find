@@ -71,11 +71,13 @@ async fn run(cli: Cli) -> Result<()> {
         Commands::Interactive { file } => {
             commands::handle_interactive_command(&workspace_root, file, &formatter).await?;
         }
-        Commands::References { symbols, file, include_declaration } => {
+        Commands::References { symbols, file, line, column, include_declaration } => {
+            let position = line.zip(column);
             commands::handle_references_command(
                 &workspace_root,
                 file.as_deref(),
                 &symbols,
+                position,
                 include_declaration,
                 &formatter,
                 timeout,

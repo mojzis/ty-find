@@ -69,15 +69,26 @@ pub enum Commands {
         column: u32,
     },
 
-    /// Find all references to symbols by name (searches in parallel)
+    /// Find all references to a symbol (by position or by name)
+    ///
+    /// Position mode: `ty-find references -f file.py -l 10 -c 5`
+    /// Symbol mode:   `ty-find references my_func my_class` (parallel)
     References {
-        /// Symbol name(s) to find references for (supports multiple symbols)
-        #[arg(required = true, num_args = 1..)]
+        /// Symbol name(s) to find references for (parallel search)
+        #[arg(num_args = 0..)]
         symbols: Vec<String>,
 
-        /// Optional file to narrow the search (uses workspace symbols if omitted)
+        /// File path (required for position mode, optional for symbol mode)
         #[arg(short, long)]
         file: Option<PathBuf>,
+
+        /// Line number (position mode, requires --file and --column)
+        #[arg(short, long, requires = "file", requires = "column")]
+        line: Option<u32>,
+
+        /// Column number (position mode, requires --file and --line)
+        #[arg(short, long, requires = "file", requires = "line")]
+        column: Option<u32>,
 
         /// Include the declaration in the results
         #[arg(long, default_value_t = true)]

@@ -1,36 +1,45 @@
 # references
 
-Find all references to symbols by name (searches in parallel)
+Find all references to a symbol (by position or by name)
 
 ## Usage
 
 ```
-ty-find references <SYMBOLS>... [OPTIONS]
+# Position mode (exact)
+ty-find references -f <FILE> -l <LINE> -c <COLUMN>
+
+# Symbol mode (parallel search)
+ty-find references <SYMBOLS>... [-f <FILE>]
 ```
 
 ## Arguments
 
 | Argument | Description |
 |----------|-------------|
-| `<SYMBOLS>...` | Symbol name(s) to find references for (supports multiple symbols) *(required)* |
+| `<SYMBOLS>...` | Symbol name(s) to find references for (symbol mode) |
 
 ## Options
 
 | Option | Description |
 |--------|-------------|
-| `-f, --file` | Optional file to narrow the search (uses workspace symbols if omitted) |
+| `-f, --file` | File path (required for position mode, optional for symbol mode) |
+| `-l, --line` | Line number (position mode, requires --file and --column) |
+| `-c, --column` | Column number (position mode, requires --file and --line) |
 | `--include-declaration` | Include the declaration in the results |
 
 ## Examples
 
 ```bash
-# Find all references to a single symbol
+# Position mode: exact location (pipeable from document-symbols)
+ty-find references -f main.py -l 10 -c 5
+
+# Symbol mode: find references by name
 ty-find references my_function
 
-# Find references for multiple symbols in parallel
+# Symbol mode: multiple symbols searched in parallel
 ty-find references my_function MyClass calculate_sum
 
-# Narrow the search to a specific file
+# Symbol mode: narrow the search to a specific file
 ty-find references my_function -f main.py
 ```
 

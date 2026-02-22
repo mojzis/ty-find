@@ -42,14 +42,42 @@ pub async fn handle_references_command(
     workspace_root: &Path,
     file: Option<&Path>,
     symbols: &[String],
+    position: Option<(u32, u32)>,
     include_declaration: bool,
     formatter: &OutputFormatter,
     timeout: Duration,
 ) -> Result<()> {
     ensure_daemon_running().await?;
 
-    // Resolve each symbol to a (file, line, column) position
-    let mut symbol_positions: Vec<(String, String, u32, u32)> = Vec::new();
+    // Position mode: exact file:line:column lookup
+    if let (Some(file), Some((line, col))) = (file, position) {
+        let mut client = DaemonClient::connect_with_timeout(timeout).await?;
+        let result = client
+            .execute_references(
+                workspace_root.to_path_buf(),
+                file.to_string_lossy().to_string(),
+                line.saturating_sub(1),
+                col.saturating_sub(1),
+                include_declaration,
+            )
+            .await?;
+
+        let query_info = format!("{}:{line}:{col}", file.display());
+        println!("{}", formatter.format_references(&result.locations, &query_info));
+        return Ok(());
+    }
+
+    // Symbol mode: need at least one symbol name
+    if symbols.is_empty() {
+        anyhow::bail!(
+            "Provide either symbol names or --file with --line and --column.\n\
+             Position mode: ty-find references -f file.py -l 10 -c 5\n\
+             Symbol mode:   ty-find references my_func my_class"
+        );
+    }
+
+    // Resolve each symbol to all matching (file, line, column) positions
+    let mut queries: Vec<(String, String, u32, u32)> = Vec::new();
 
     if let Some(file) = file {
         let file_str = file.to_string_lossy();
@@ -57,49 +85,55 @@ pub async fn handle_references_command(
 
         for symbol in symbols {
             let positions = finder.find_symbol_positions(symbol);
-            if let Some(&(line, col)) = positions.first() {
-                symbol_positions.push((symbol.clone(), file_str.to_string(), line, col));
+            if positions.is_empty() {
+                // Include so output shows "no references"
+                queries.push((symbol.clone(), String::new(), 0, 0));
             } else {
-                // Symbol not found in file; still include it so the output shows "no references"
-                symbol_positions.push((symbol.clone(), file_str.to_string(), 0, 0));
+                // Include ALL positions, not just the first
+                for &(ln, col) in &positions {
+                    queries.push((symbol.clone(), file_str.to_string(), ln, col));
+                }
             }
         }
     } else {
-        // Workspace-wide: find each symbol's definition location first
+        // Workspace-wide: find each symbol's definition location
         for symbol in symbols {
             let mut client = DaemonClient::connect_with_timeout(timeout).await?;
             let result = client
                 .execute_workspace_symbols_exact(workspace_root.to_path_buf(), symbol.clone())
                 .await?;
 
-            if let Some(first) = result.symbols.first() {
-                let file_path = first
-                    .location
-                    .uri
-                    .strip_prefix("file://")
-                    .unwrap_or(&first.location.uri)
-                    .to_string();
-                let line = first.location.range.start.line;
-                let col = first.location.range.start.character;
-                symbol_positions.push((symbol.clone(), file_path, line, col));
+            if result.symbols.is_empty() {
+                queries.push((symbol.clone(), String::new(), 0, 0));
             } else {
-                symbol_positions.push((symbol.clone(), String::new(), 0, 0));
+                // Include ALL matching definitions, not just the first
+                for sym_info in &result.symbols {
+                    let file_path = sym_info
+                        .location
+                        .uri
+                        .strip_prefix("file://")
+                        .unwrap_or(&sym_info.location.uri)
+                        .to_string();
+                    let ln = sym_info.location.range.start.line;
+                    let col = sym_info.location.range.start.character;
+                    queries.push((symbol.clone(), file_path, ln, col));
+                }
             }
         }
     }
 
     // Search for references in parallel using tokio tasks
     let mut handles = Vec::new();
-    for (symbol, file_path, line, col) in symbol_positions {
+    for (symbol, file_path, ln, col) in queries {
         let ws = workspace_root.to_path_buf();
         let include_decl = include_declaration;
         handles.push(tokio::spawn(async move {
             if file_path.is_empty() {
-                return (symbol, Vec::new());
+                return (symbol, Vec::<Location>::new());
             }
             let result = async {
                 let mut client = DaemonClient::connect_with_timeout(timeout).await?;
-                client.execute_references(ws, file_path, line, col, include_decl).await
+                client.execute_references(ws, file_path, ln, col, include_decl).await
             }
             .await;
 
@@ -110,13 +144,23 @@ pub async fn handle_references_command(
         }));
     }
 
-    let mut results: Vec<(String, Vec<Location>)> = Vec::new();
+    // Collect results, merging locations for the same symbol name
+    let mut merged: Vec<(String, Vec<Location>)> = Vec::new();
     for handle in handles {
         let (symbol, locations) = handle.await?;
-        results.push((symbol, locations));
+        if let Some(existing) = merged.iter_mut().find(|(s, _)| s == &symbol) {
+            existing.1.extend(locations);
+        } else {
+            merged.push((symbol, locations));
+        }
     }
 
-    println!("{}", formatter.format_references_results(&results));
+    // Deduplicate within each symbol's results
+    for (_, locations) in &mut merged {
+        dedup_locations(locations);
+    }
+
+    println!("{}", formatter.format_references_results(&merged));
 
     Ok(())
 }

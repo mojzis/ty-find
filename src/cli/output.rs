@@ -264,6 +264,109 @@ impl OutputFormatter {
         }
     }
 
+    pub fn format_inspect(
+        &self,
+        symbol: &str,
+        definitions: &[Location],
+        hover: Option<&Hover>,
+        references: &[Location],
+    ) -> String {
+        match self.format {
+            OutputFormat::Human => {
+                let mut output = format!("=== Inspect: {} ===\n\n", symbol);
+
+                // Definition section
+                output.push_str("--- Definition ---\n");
+                if definitions.is_empty() {
+                    output.push_str("No definitions found.\n");
+                } else {
+                    for (i, location) in definitions.iter().enumerate() {
+                        let file_path = self.uri_to_path(&location.uri);
+                        let line = location.range.start.line + 1;
+                        let column = location.range.start.character + 1;
+                        output.push_str(&format!("{}. {}:{}:{}\n", i + 1, file_path, line, column));
+
+                        if let Ok(content) = std::fs::read_to_string(&file_path) {
+                            let lines: Vec<&str> = content.lines().collect();
+                            if let Some(line_content) = lines.get((line - 1) as usize) {
+                                output.push_str(&format!("   {}\n", line_content.trim()));
+                            }
+                        }
+                    }
+                }
+                output.push('\n');
+
+                // Hover section
+                output.push_str("--- Type Info ---\n");
+                if let Some(hover) = hover {
+                    output.push_str(&Self::extract_hover_text(&hover.contents));
+                    output.push('\n');
+                } else {
+                    output.push_str("No hover information available.\n");
+                }
+                output.push('\n');
+
+                // References section
+                output.push_str("--- References ---\n");
+                if references.is_empty() {
+                    output.push_str("No references found.\n");
+                } else {
+                    output.push_str(&format!("{} reference(s):\n", references.len()));
+                    for (i, location) in references.iter().enumerate() {
+                        let file_path = self.uri_to_path(&location.uri);
+                        let line = location.range.start.line + 1;
+                        let column = location.range.start.character + 1;
+                        output.push_str(&format!("{}. {}:{}:{}\n", i + 1, file_path, line, column));
+
+                        if let Ok(content) = std::fs::read_to_string(&file_path) {
+                            let lines: Vec<&str> = content.lines().collect();
+                            if let Some(line_content) = lines.get((line - 1) as usize) {
+                                output.push_str(&format!("   {}\n", line_content.trim()));
+                            }
+                        }
+                    }
+                }
+
+                output
+            }
+            OutputFormat::Json => {
+                let json_val = serde_json::json!({
+                    "symbol": symbol,
+                    "definitions": definitions,
+                    "hover": hover,
+                    "references": references,
+                });
+                serde_json::to_string_pretty(&json_val).unwrap_or_else(|_| "{}".to_string())
+            }
+            OutputFormat::Csv => {
+                let mut output = String::from("section,file,line,column\n");
+                for location in definitions {
+                    let file_path = self.uri_to_path(&location.uri);
+                    let line = location.range.start.line + 1;
+                    let column = location.range.start.character + 1;
+                    output.push_str(&format!("definition,{},{},{}\n", file_path, line, column));
+                }
+                for location in references {
+                    let file_path = self.uri_to_path(&location.uri);
+                    let line = location.range.start.line + 1;
+                    let column = location.range.start.character + 1;
+                    output.push_str(&format!("reference,{},{},{}\n", file_path, line, column));
+                }
+                output
+            }
+            OutputFormat::Paths => {
+                let mut paths: Vec<String> = definitions
+                    .iter()
+                    .chain(references.iter())
+                    .map(|loc| self.uri_to_path(&loc.uri))
+                    .collect();
+                paths.sort();
+                paths.dedup();
+                paths.join("\n")
+            }
+        }
+    }
+
     #[allow(clippy::only_used_in_recursion)]
     fn format_document_symbols_csv(&self, symbols: &[DocumentSymbol], output: &mut String) {
         for symbol in symbols {

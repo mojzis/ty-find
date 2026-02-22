@@ -42,7 +42,7 @@ async fn main() -> Result<()> {
             handle_definition_command(&workspace_root, &file, line, column, &formatter).await?;
         }
         Commands::Find { file, symbol } => {
-            handle_find_command(&workspace_root, &file, &symbol, &formatter).await?;
+            handle_find_command(&workspace_root, file.as_deref(), &symbol, &formatter).await?;
         }
         Commands::Interactive { file } => {
             handle_interactive_command(&workspace_root, file, &formatter).await?;
@@ -71,6 +71,9 @@ async fn main() -> Result<()> {
         }
         Commands::DocumentSymbols { file } => {
             handle_document_symbols_command(&workspace_root, &file, &formatter).await?;
+        }
+        Commands::Inspect { file, symbol } => {
+            handle_inspect_command(&workspace_root, file.as_deref(), &symbol, &formatter).await?;
         }
         Commands::Daemon { command } => {
             handle_daemon_command(command).await?;
@@ -134,45 +137,206 @@ async fn handle_references_command(
 
 async fn handle_find_command(
     workspace_root: &Path,
-    file: &Path,
+    file: Option<&Path>,
     symbol: &str,
     formatter: &OutputFormatter,
 ) -> Result<()> {
-    let client = TyLspClient::new(&workspace_root.to_string_lossy()).await?;
-    let file_str = file.to_string_lossy();
-    let finder = SymbolFinder::new(&file_str)?;
+    if let Some(file) = file {
+        // File provided: use text-based search + goto_definition (original behavior)
+        let client = TyLspClient::new(&workspace_root.to_string_lossy()).await?;
+        let file_str = file.to_string_lossy();
+        let finder = SymbolFinder::new(&file_str)?;
 
-    client.open_document(&file_str).await?;
+        client.open_document(&file_str).await?;
 
-    let positions = finder.find_symbol_positions(symbol);
+        let positions = finder.find_symbol_positions(symbol);
 
-    if positions.is_empty() {
-        println!("Symbol '{}' not found in {}", symbol, file.display());
-        return Ok(());
-    }
+        if positions.is_empty() {
+            println!("Symbol '{}' not found in {}", symbol, file.display());
+            return Ok(());
+        }
 
-    // Collect all definition locations across all occurrences
-    let mut all_locations = Vec::new();
-    for (line, column) in positions {
-        let locations = client
-            .goto_definition(&file.to_string_lossy(), line, column)
-            .await?;
-        for loc in locations {
-            if !all_locations
-                .iter()
-                .any(|l: &crate::lsp::protocol::Location| {
-                    l.uri == loc.uri && l.range.start.line == loc.range.start.line
-                })
-            {
-                all_locations.push(loc);
+        let mut all_locations = Vec::new();
+        for (line, column) in positions {
+            let locations = client
+                .goto_definition(&file.to_string_lossy(), line, column)
+                .await?;
+            for loc in locations {
+                if !all_locations
+                    .iter()
+                    .any(|l: &crate::lsp::protocol::Location| {
+                        l.uri == loc.uri && l.range.start.line == loc.range.start.line
+                    })
+                {
+                    all_locations.push(loc);
+                }
             }
         }
+
+        let query_info = format!("'{}' in {}", symbol, file.display());
+        println!(
+            "{}",
+            formatter.format_definitions(&all_locations, &query_info)
+        );
+    } else {
+        // No file: use workspace symbols to find across the entire workspace
+        let locations = find_symbol_via_workspace(workspace_root, symbol).await?;
+
+        if locations.is_empty() {
+            println!("No symbols found matching '{}'", symbol);
+            return Ok(());
+        }
+
+        let query_info = format!("'{}'", symbol);
+        println!("{}", formatter.format_definitions(&locations, &query_info));
     }
 
-    let query_info = format!("'{}' in {}", symbol, file.display());
+    Ok(())
+}
+
+/// Find a symbol's location(s) using workspace symbols search.
+/// Returns locations derived from SymbolInformation results.
+async fn find_symbol_via_workspace(
+    workspace_root: &Path,
+    symbol: &str,
+) -> Result<Vec<crate::lsp::protocol::Location>> {
+    ensure_daemon_running().await?;
+    let mut client = DaemonClient::connect().await?;
+
+    let result = client
+        .execute_workspace_symbols(workspace_root.to_path_buf(), symbol.to_string())
+        .await?;
+
+    // Convert SymbolInformation to Locations, preferring exact name matches
+    let exact: Vec<_> = result.symbols.iter().filter(|s| s.name == symbol).collect();
+
+    let symbols = if exact.is_empty() {
+        &result.symbols
+    } else {
+        &exact.into_iter().cloned().collect::<Vec<_>>()
+    };
+
+    Ok(symbols.iter().map(|s| s.location.clone()).collect())
+}
+
+async fn handle_inspect_command(
+    workspace_root: &Path,
+    file: Option<&Path>,
+    symbol: &str,
+    formatter: &OutputFormatter,
+) -> Result<()> {
+    ensure_daemon_running().await?;
+
+    // Step 1: Find the symbol's location(s)
+    let (definition_file, def_line, def_col, all_definitions) = if let Some(file) = file {
+        // File provided: use text-based search + goto_definition
+        let file_str = file.to_string_lossy();
+        let finder = SymbolFinder::new(&file_str)?;
+        let positions = finder.find_symbol_positions(symbol);
+
+        if positions.is_empty() {
+            println!("Symbol '{}' not found in {}", symbol, file.display());
+            return Ok(());
+        }
+
+        let (first_line, first_col) = positions[0];
+
+        // Get definitions via daemon
+        let mut all_definitions = Vec::new();
+        for (line, column) in &positions {
+            let mut client = DaemonClient::connect().await?;
+            let result = client
+                .execute_definition(
+                    workspace_root.to_path_buf(),
+                    file_str.to_string(),
+                    *line,
+                    *column,
+                )
+                .await?;
+            if let Some(loc) = result.location {
+                if !all_definitions
+                    .iter()
+                    .any(|l: &crate::lsp::protocol::Location| {
+                        l.uri == loc.uri && l.range.start.line == loc.range.start.line
+                    })
+                {
+                    all_definitions.push(loc);
+                }
+            }
+        }
+
+        (file_str.to_string(), first_line, first_col, all_definitions)
+    } else {
+        // No file: use workspace symbols
+        let mut client = DaemonClient::connect().await?;
+        let result = client
+            .execute_workspace_symbols(workspace_root.to_path_buf(), symbol.to_string())
+            .await?;
+
+        // Prefer exact name matches
+        let exact: Vec<_> = result.symbols.iter().filter(|s| s.name == symbol).collect();
+        let matched = if exact.is_empty() {
+            &result.symbols
+        } else {
+            // Borrow from exact
+            &result
+                .symbols
+                .iter()
+                .filter(|s| s.name == symbol)
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+
+        if matched.is_empty() {
+            println!("No symbols found matching '{}'", symbol);
+            return Ok(());
+        }
+
+        let first = &matched[0];
+        let file_path = first
+            .location
+            .uri
+            .strip_prefix("file://")
+            .unwrap_or(&first.location.uri);
+        let def_line = first.location.range.start.line;
+        let def_col = first.location.range.start.character;
+        let all_definitions: Vec<crate::lsp::protocol::Location> =
+            matched.iter().map(|s| s.location.clone()).collect();
+
+        (file_path.to_string(), def_line, def_col, all_definitions)
+    };
+
+    // Step 2: Get hover info at the symbol's location
+    let mut client = DaemonClient::connect().await?;
+    let hover_result = client
+        .execute_hover(
+            workspace_root.to_path_buf(),
+            definition_file.clone(),
+            def_line,
+            def_col,
+        )
+        .await?;
+
+    // Step 3: Get references at the symbol's location
+    let mut client = DaemonClient::connect().await?;
+    let refs_result = client
+        .execute_references(
+            workspace_root.to_path_buf(),
+            definition_file,
+            def_line,
+            def_col,
+            true,
+        )
+        .await?;
+
     println!(
         "{}",
-        formatter.format_definitions(&all_locations, &query_info)
+        formatter.format_inspect(
+            symbol,
+            &all_definitions,
+            hover_result.hover.as_ref(),
+            &refs_result.locations,
+        )
     );
 
     Ok(())
@@ -210,7 +374,8 @@ async fn handle_interactive_command(
                 let file = PathBuf::from(parts[1]);
                 let symbol = parts[2];
 
-                if let Err(e) = handle_find_command(workspace_root, &file, symbol, formatter).await
+                if let Err(e) =
+                    handle_find_command(workspace_root, Some(&file), symbol, formatter).await
                 {
                     eprintln!("Error: {}", e);
                 }

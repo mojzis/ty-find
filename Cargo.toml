@@ -46,3 +46,36 @@ lto = true
 codegen-units = 1
 panic = "abort"
 strip = true
+
+[lints.rust]
+# deny rather than forbid so we can #[allow] the libc::getuid() calls
+unsafe_code = "deny"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+
+# Cherry-picked restriction lints
+dbg_macro = "warn"
+todo = "warn"
+unimplemented = "warn"
+unwrap_used = "warn"
+undocumented_unsafe_blocks = "warn"
+clone_on_ref_ptr = "warn"
+exit = "warn"
+await_holding_lock = "warn"
+large_futures = "warn"
+
+# Pedantic allows (too noisy for this codebase)
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+cast_precision_loss = "allow"
+struct_excessive_bools = "allow"
+
+# Nursery allows (unstable/buggy lints)
+missing_const_for_fn = "allow"
+significant_drop_tightening = "allow"
+option_if_let_else = "allow"
+future_not_send = "allow"

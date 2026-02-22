@@ -1,11 +1,12 @@
-# cargo-deny configuration
-# https://embarkstudios.github.io/cargo-deny/
-
 [advisories]
-db-path = "~/.cargo/advisory-db"
-db-urls = ["https://github.com/rustsec/advisory-db"]
+vulnerability = "deny"
+unmaintained = "warn"
+unsound = "deny"
+yanked = "deny"
 
 [licenses]
+unlicensed = "deny"
+confidence-threshold = 0.93
 allow = [
     "MIT",
     "Apache-2.0",
@@ -19,10 +20,8 @@ allow = [
 
 [bans]
 multiple-versions = "warn"
-wildcards = "allow"
+wildcards = "deny"
 
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
-allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-allow-git = []

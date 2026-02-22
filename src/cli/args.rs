@@ -40,10 +40,11 @@ pub enum Commands {
         column: u32,
     },
 
-    /// Find a symbol's definition by name (searches workspace if no file given)
+    /// Find symbol definitions by name (searches workspace if no file given)
     Find {
-        /// Symbol name to find
-        symbol: String,
+        /// Symbol name(s) to find (supports multiple symbols)
+        #[arg(required = true, num_args = 1..)]
+        symbols: Vec<String>,
 
         /// Optional file to search in (uses workspace symbols if omitted)
         #[arg(short, long)]
@@ -88,10 +89,11 @@ pub enum Commands {
     /// List all symbols in a file
     DocumentSymbols { file: PathBuf },
 
-    /// Inspect a symbol: find definition, hover info, and references in one shot
+    /// Inspect symbols: find definition, hover info, and references in one shot
     Inspect {
-        /// Symbol name to inspect
-        symbol: String,
+        /// Symbol name(s) to inspect (supports multiple symbols)
+        #[arg(required = true, num_args = 1..)]
+        symbols: Vec<String>,
 
         /// Optional file to narrow the search (uses workspace symbols if omitted)
         #[arg(short, long)]

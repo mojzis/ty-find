@@ -5,6 +5,9 @@ use crate::lsp::protocol::{
 use serde_json;
 use std::path::{Path, PathBuf};
 
+/// A single inspect result: (symbol_name, definitions, hover, references).
+pub type InspectEntry<'a> = (&'a str, &'a [Location], Option<&'a Hover>, &'a [Location]);
+
 pub struct OutputFormatter {
     format: OutputFormat,
     cwd: PathBuf,
@@ -92,6 +95,69 @@ impl OutputFormatter {
         match path.strip_prefix(&self.cwd) {
             Ok(rel) => rel.display().to_string(),
             Err(_) => abs_path,
+        }
+    }
+
+    /// Format results for one or more symbol find queries, grouped by symbol.
+    pub fn format_find_results(&self, results: &[(String, Vec<Location>)]) -> String {
+        if results.len() == 1 {
+            let (symbol, locations) = &results[0];
+            if locations.is_empty() {
+                return format!("No definitions found for: '{}'", symbol);
+            }
+            let query_info = format!("'{}'", symbol);
+            return self.format_definitions(locations, &query_info);
+        }
+
+        match self.format {
+            OutputFormat::Human => {
+                let mut output = String::new();
+                for (symbol, locations) in results {
+                    output.push_str(&format!("=== {} ===\n", symbol));
+                    if locations.is_empty() {
+                        output.push_str("No definitions found.\n");
+                    } else {
+                        output.push_str(&self.format_human(locations, &format!("'{}'", symbol)));
+                    }
+                    output.push('\n');
+                }
+                output.trim_end().to_string()
+            }
+            OutputFormat::Json => {
+                let grouped: Vec<serde_json::Value> = results
+                    .iter()
+                    .map(|(symbol, locations)| {
+                        serde_json::json!({
+                            "symbol": symbol,
+                            "definitions": locations,
+                        })
+                    })
+                    .collect();
+                serde_json::to_string_pretty(&grouped).unwrap_or_else(|_| "[]".to_string())
+            }
+            OutputFormat::Csv => {
+                let mut output = String::from("symbol,file,line,column\n");
+                for (symbol, locations) in results {
+                    for location in locations {
+                        let file_path = self.uri_to_path(&location.uri);
+                        let line = location.range.start.line + 1;
+                        let column = location.range.start.character + 1;
+                        output.push_str(&format!("{},{},{},{}\n", symbol, file_path, line, column));
+                    }
+                }
+                output
+            }
+            OutputFormat::Paths => {
+                let mut paths: Vec<String> = results
+                    .iter()
+                    .flat_map(|(_, locations)| {
+                        locations.iter().map(|loc| self.uri_to_path(&loc.uri))
+                    })
+                    .collect();
+                paths.sort();
+                paths.dedup();
+                paths.join("\n")
+            }
         }
     }
 
@@ -359,6 +425,77 @@ impl OutputFormatter {
                     .iter()
                     .chain(references.iter())
                     .map(|loc| self.uri_to_path(&loc.uri))
+                    .collect();
+                paths.sort();
+                paths.dedup();
+                paths.join("\n")
+            }
+        }
+    }
+
+    /// Format results for one or more symbol inspect queries, grouped by symbol.
+    pub fn format_inspect_results(&self, results: &[InspectEntry<'_>]) -> String {
+        if results.len() == 1 {
+            let (symbol, definitions, hover, references) = &results[0];
+            return self.format_inspect(symbol, definitions, *hover, references);
+        }
+
+        match self.format {
+            OutputFormat::Human => {
+                let mut output = String::new();
+                for (symbol, definitions, hover, references) in results {
+                    output.push_str(&self.format_inspect(symbol, definitions, *hover, references));
+                    output.push('\n');
+                }
+                output.trim_end().to_string()
+            }
+            OutputFormat::Json => {
+                let grouped: Vec<serde_json::Value> = results
+                    .iter()
+                    .map(|(symbol, definitions, hover, references)| {
+                        serde_json::json!({
+                            "symbol": symbol,
+                            "definitions": definitions,
+                            "hover": hover,
+                            "references": references,
+                        })
+                    })
+                    .collect();
+                serde_json::to_string_pretty(&grouped).unwrap_or_else(|_| "[]".to_string())
+            }
+            OutputFormat::Csv => {
+                let mut output = String::from("symbol,section,file,line,column\n");
+                for (symbol, definitions, _, references) in results {
+                    for location in *definitions {
+                        let file_path = self.uri_to_path(&location.uri);
+                        let line = location.range.start.line + 1;
+                        let column = location.range.start.character + 1;
+                        output.push_str(&format!(
+                            "{},definition,{},{},{}\n",
+                            symbol, file_path, line, column
+                        ));
+                    }
+                    for location in *references {
+                        let file_path = self.uri_to_path(&location.uri);
+                        let line = location.range.start.line + 1;
+                        let column = location.range.start.character + 1;
+                        output.push_str(&format!(
+                            "{},reference,{},{},{}\n",
+                            symbol, file_path, line, column
+                        ));
+                    }
+                }
+                output
+            }
+            OutputFormat::Paths => {
+                let mut paths: Vec<String> = results
+                    .iter()
+                    .flat_map(|(_, definitions, _, references)| {
+                        definitions
+                            .iter()
+                            .chain(references.iter())
+                            .map(|loc| self.uri_to_path(&loc.uri))
+                    })
                     .collect();
                 paths.sort();
                 paths.dedup();

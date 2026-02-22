@@ -51,3 +51,7 @@ calculate_sum
 # See all commands
 $ ty-find --help
 ```
+
+## For AI agents
+
+Machine-readable documentation is available at [`llms.txt`](llms.txt) and [`llms-full.txt`](llms-full.txt), following the [llms.txt](https://llmstxt.org) convention.

@@ -6,7 +6,12 @@ use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 use tokio::sync::oneshot;
 
-use crate::lsp::{protocol::*, server::TyLspServer};
+use crate::lsp::protocol::{
+    DocumentSymbol, DocumentSymbolParams, GotoDefinitionParams, Hover, HoverParams, LSPRequest,
+    LSPResponse, Location, Position, ReferenceContext, ReferenceParams, SymbolInformation,
+    TextDocumentIdentifier, TextDocumentPositionParams, WorkspaceSymbolParams,
+};
+use crate::lsp::server::TyLspServer;
 
 pub struct TyLspClient {
     server: Arc<Mutex<TyLspServer>>,
@@ -16,9 +21,8 @@ pub struct TyLspClient {
 
 impl TyLspClient {
     pub async fn new(workspace_root: &str) -> Result<Self> {
-        let server = TyLspServer::start(workspace_root)
-            .await
-            .context("Failed to start ty LSP server")?;
+        let server =
+            TyLspServer::start(workspace_root).await.context("Failed to start ty LSP server")?;
         let client = Self {
             server: Arc::new(Mutex::new(server)),
             request_id: AtomicU64::new(1),
@@ -27,15 +31,9 @@ impl TyLspClient {
 
         // Must start reading responses before sending initialize,
         // otherwise the initialize response is never consumed and we deadlock.
-        client
-            .start_response_handler()
-            .await
-            .context("Failed to start LSP response handler")?;
+        client.start_response_handler();
         tracing::debug!("Sending LSP initialize request...");
-        client
-            .initialize(workspace_root)
-            .await
-            .context("Failed to initialize LSP session")?;
+        client.initialize(workspace_root).await.context("Failed to initialize LSP session")?;
         tracing::debug!("LSP client initialized successfully");
         Ok(client)
     }
@@ -44,7 +42,7 @@ impl TyLspClient {
         let init_params = serde_json::json!({
             "processId": std::process::id(),
             "rootPath": workspace_root,
-            "rootUri": format!("file://{}", workspace_root),
+            "rootUri": format!("file://{workspace_root}"),
             "capabilities": {
                 "textDocument": {
                     "definition": {
@@ -73,8 +71,7 @@ impl TyLspClient {
 
         let _response = self.send_request("initialize", init_params).await?;
 
-        self.send_notification("initialized", serde_json::json!({}))
-            .await?;
+        self.send_notification("initialized", serde_json::json!({})).await?;
 
         Ok(())
     }
@@ -115,9 +112,8 @@ impl TyLspClient {
             partial_result_token: None,
         };
 
-        let response = self
-            .send_request("textDocument/definition", serde_json::to_value(params)?)
-            .await?;
+        let response =
+            self.send_request("textDocument/definition", serde_json::to_value(params)?).await?;
 
         if let Some(result) = response.result {
             let locations: Vec<Location> = match result {
@@ -145,21 +141,17 @@ impl TyLspClient {
                 text_document: TextDocumentIdentifier { uri },
                 position: Position { line, character },
             },
-            context: ReferenceContext {
-                include_declaration,
-            },
+            context: ReferenceContext { include_declaration },
             work_done_token: None,
             partial_result_token: None,
         };
 
-        let response = self
-            .send_request("textDocument/references", serde_json::to_value(params)?)
-            .await?;
+        let response =
+            self.send_request("textDocument/references", serde_json::to_value(params)?).await?;
 
         if let Some(result) = response.result {
             let locations: Vec<Location> = match result {
                 Value::Array(arr) => serde_json::from_value(Value::Array(arr))?,
-                Value::Null => vec![],
                 _ => vec![],
             };
             Ok(locations)
@@ -179,9 +171,8 @@ impl TyLspClient {
             work_done_token: None,
         };
 
-        let response = self
-            .send_request("textDocument/hover", serde_json::to_value(params)?)
-            .await?;
+        let response =
+            self.send_request("textDocument/hover", serde_json::to_value(params)?).await?;
 
         if let Some(result) = response.result {
             if result.is_null() {
@@ -202,9 +193,7 @@ impl TyLspClient {
             partial_result_token: None,
         };
 
-        let response = self
-            .send_request("workspace/symbol", serde_json::to_value(params)?)
-            .await?;
+        let response = self.send_request("workspace/symbol", serde_json::to_value(params)?).await?;
 
         if let Some(result) = response.result {
             let symbols: Vec<SymbolInformation> = match result {
@@ -226,9 +215,8 @@ impl TyLspClient {
             partial_result_token: None,
         };
 
-        let response = self
-            .send_request("textDocument/documentSymbol", serde_json::to_value(params)?)
-            .await?;
+        let response =
+            self.send_request("textDocument/documentSymbol", serde_json::to_value(params)?).await?;
 
         if let Some(result) = response.result {
             let symbols: Vec<DocumentSymbol> = match result {
@@ -246,7 +234,8 @@ impl TyLspClient {
         let (tx, rx) = oneshot::channel();
 
         {
-            let mut pending = self.pending_requests.lock().unwrap();
+            let mut pending =
+                self.pending_requests.lock().expect("pending_requests mutex poisoned");
             pending.insert(id, tx);
         }
 
@@ -257,22 +246,15 @@ impl TyLspClient {
             params,
         };
 
-        tracing::debug!("Sending LSP request: {} (id: {})", method, id);
+        tracing::debug!("Sending LSP request: {method} (id: {id})");
         self.send_message(&request).await?;
 
-        let response = rx
-            .await
-            .context("LSP response channel closed unexpectedly")?;
+        let response = rx.await.context("LSP response channel closed unexpectedly")?;
 
         if let Some(ref error) = response.error {
-            tracing::debug!(
-                "LSP error response for {} (id: {}): {:?}",
-                method,
-                id,
-                error
-            );
+            tracing::debug!("LSP error response for {method} (id: {id}): {error:?}");
         } else {
-            tracing::debug!("LSP response received for {} (id: {})", method, id);
+            tracing::debug!("LSP response received for {method} (id: {id})");
         }
 
         Ok(response)
@@ -295,21 +277,21 @@ impl TyLspClient {
 
     #[allow(clippy::await_holding_lock)]
     async fn send_raw_message(&self, content: &str) -> Result<()> {
-        let message = format!("Content-Length: {}\r\n\r\n{}", content.len(), content);
-        let mut server = self.server.lock().unwrap();
+        let message = format!("Content-Length: {}\r\n\r\n{content}", content.len());
+        let mut server = self.server.lock().expect("server mutex poisoned");
         let stdin = server.stdin();
         stdin.write_all(message.as_bytes()).await?;
         stdin.flush().await?;
         Ok(())
     }
 
-    async fn start_response_handler(&self) -> Result<()> {
+    fn start_response_handler(&self) {
         let server = Arc::clone(&self.server);
         let pending_requests = Arc::clone(&self.pending_requests);
 
         tokio::spawn(async move {
             let mut stdout = {
-                let mut server_guard = server.lock().unwrap();
+                let mut server_guard = server.lock().expect("server mutex poisoned");
                 server_guard.stdout()
             };
 
@@ -326,44 +308,45 @@ impl TyLspClient {
                     Ok(_) => {
                         if buffer.starts_with("Content-Length:") {
                             if let Some(len_str) =
-                                buffer.strip_prefix("Content-Length:").map(|s| s.trim())
+                                buffer.strip_prefix("Content-Length:").map(str::trim)
                             {
                                 content_length = len_str.parse().ok();
                             }
-                        } else if buffer.trim().is_empty() && content_length.is_some() {
-                            let len = content_length.take().unwrap();
-                            let mut content = vec![0; len];
-                            if stdout.read_exact(&mut content).await.is_ok() {
-                                if let Ok(response_str) = String::from_utf8(content) {
-                                    if let Ok(response) =
-                                        serde_json::from_str::<LSPResponse>(&response_str)
-                                    {
-                                        if let Value::Number(id_num) = &response.id {
-                                            if let Some(id) = id_num.as_u64() {
-                                                let mut pending = pending_requests.lock().unwrap();
-                                                if let Some(sender) = pending.remove(&id) {
-                                                    let _ = sender.send(response);
+                        } else if buffer.trim().is_empty() {
+                            if let Some(len) = content_length.take() {
+                                let mut content = vec![0; len];
+                                if stdout.read_exact(&mut content).await.is_ok() {
+                                    if let Ok(response_str) = String::from_utf8(content) {
+                                        if let Ok(response) =
+                                            serde_json::from_str::<LSPResponse>(&response_str)
+                                        {
+                                            if let Value::Number(id_num) = &response.id {
+                                                if let Some(id) = id_num.as_u64() {
+                                                    let mut pending = pending_requests
+                                                        .lock()
+                                                        .expect("pending_requests mutex poisoned");
+                                                    if let Some(sender) = pending.remove(&id) {
+                                                        let _ = sender.send(response);
+                                                    }
                                                 }
                                             }
+                                        } else {
+                                            tracing::debug!(
+                                                "Failed to parse LSP response: {}",
+                                                response_str.chars().take(200).collect::<String>()
+                                            );
                                         }
-                                    } else {
-                                        tracing::debug!(
-                                            "Failed to parse LSP response: {}",
-                                            response_str.chars().take(200).collect::<String>()
-                                        );
                                     }
                                 }
                             }
                         }
                     }
                     Err(e) => {
-                        tracing::debug!("LSP server stdout read error: {}", e);
+                        tracing::debug!("LSP server stdout read error: {e}");
                         break;
                     }
                 }
             }
         });
-
-        Ok(())
     }
 }

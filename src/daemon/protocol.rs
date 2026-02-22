@@ -61,12 +61,7 @@ impl DaemonRequest {
 
     /// Create a request with a specific ID.
     pub fn with_id(id: u64, method: Method, params: Value) -> Self {
-        Self {
-            jsonrpc: "2.0".to_string(),
-            id,
-            method,
-            params,
-        }
+        Self { jsonrpc: "2.0".to_string(), id, method, params }
     }
 }
 
@@ -118,22 +113,12 @@ pub struct DaemonResponse {
 impl DaemonResponse {
     /// Create a successful response.
     pub fn success(id: u64, result: Value) -> Self {
-        Self {
-            jsonrpc: "2.0".to_string(),
-            id,
-            result: Some(result),
-            error: None,
-        }
+        Self { jsonrpc: "2.0".to_string(), id, result: Some(result), error: None }
     }
 
     /// Create an error response.
     pub fn error(id: u64, error: DaemonError) -> Self {
-        Self {
-            jsonrpc: "2.0".to_string(),
-            id,
-            result: None,
-            error: Some(error),
-        }
+        Self { jsonrpc: "2.0".to_string(), id, result: None, error: Some(error) }
     }
 
     /// Check if this response represents an error.
@@ -167,20 +152,12 @@ pub struct DaemonError {
 impl DaemonError {
     /// Create a new daemon error.
     pub fn new(code: i32, message: impl Into<String>) -> Self {
-        Self {
-            code,
-            message: message.into(),
-            data: None,
-        }
+        Self { code, message: message.into(), data: None }
     }
 
     /// Create an error with additional data.
     pub fn with_data(code: i32, message: impl Into<String>, data: Value) -> Self {
-        Self {
-            code,
-            message: message.into(),
-            data: Some(data),
-        }
+        Self { code, message: message.into(), data: Some(data) }
     }
 
     // Standard JSON-RPC errors
@@ -197,7 +174,8 @@ impl DaemonError {
 
     /// Method not found (-32601): Unknown method
     pub fn method_not_found(method: impl Into<String>) -> Self {
-        Self::new(-32601, format!("Method not found: {}", method.into()))
+        let method = method.into();
+        Self::new(-32601, format!("Method not found: {method}"))
     }
 
     /// Invalid params (-32602): Invalid method parameters
@@ -221,16 +199,13 @@ impl DaemonError {
     /// Workspace not found error (-32001)
     pub fn workspace_not_found(workspace: impl Into<String>) -> Self {
         let workspace = workspace.into();
-        Self::with_data(
-            -32001,
-            "Workspace not found",
-            serde_json::json!({"workspace": workspace}),
-        )
+        Self::with_data(-32001, "Workspace not found", serde_json::json!({"workspace": workspace}))
     }
 
     /// LSP server error (-32002)
     pub fn lsp_error(msg: impl Into<String>) -> Self {
-        Self::new(-32002, format!("LSP error: {}", msg.into()))
+        let msg = msg.into();
+        Self::new(-32002, format!("LSP error: {msg}"))
     }
 
     /// Timeout error (-32003)
@@ -245,11 +220,7 @@ impl DaemonError {
     /// Symbol not found error (-32004)
     pub fn symbol_not_found(symbol: impl Into<String>) -> Self {
         let symbol = symbol.into();
-        Self::with_data(
-            -32004,
-            "Symbol not found",
-            serde_json::json!({"symbol": symbol}),
-        )
+        Self::with_data(-32004, "Symbol not found", serde_json::json!({"symbol": symbol}))
     }
 }
 
@@ -286,16 +257,16 @@ pub enum Method {
 
 impl Method {
     /// Get the method name as a string.
-    pub fn as_str(&self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
-            Method::Hover => "hover",
-            Method::Definition => "definition",
-            Method::WorkspaceSymbols => "workspace_symbols",
-            Method::DocumentSymbols => "document_symbols",
-            Method::References => "references",
-            Method::Diagnostics => "diagnostics",
-            Method::Ping => "ping",
-            Method::Shutdown => "shutdown",
+            Self::Hover => "hover",
+            Self::Definition => "definition",
+            Self::WorkspaceSymbols => "workspace_symbols",
+            Self::DocumentSymbols => "document_symbols",
+            Self::References => "references",
+            Self::Diagnostics => "diagnostics",
+            Self::Ping => "ping",
+            Self::Shutdown => "shutdown",
         }
     }
 }
@@ -582,10 +553,7 @@ mod tests {
     #[test]
     fn test_method_serialization() {
         assert_eq!(serde_json::to_string(&Method::Hover).unwrap(), "\"hover\"");
-        assert_eq!(
-            serde_json::to_string(&Method::Definition).unwrap(),
-            "\"definition\""
-        );
+        assert_eq!(serde_json::to_string(&Method::Definition).unwrap(), "\"definition\"");
         assert_eq!(
             serde_json::to_string(&Method::WorkspaceSymbols).unwrap(),
             "\"workspace_symbols\""

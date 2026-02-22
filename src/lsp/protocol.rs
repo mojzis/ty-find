@@ -82,15 +82,15 @@ pub enum HoverContents {
     Scalar(String),
 }
 
-/// A MarkedString is either a plain string or a language-tagged code block.
-/// LSP spec: MarkedString = string | { language: string; value: string }
+/// A `MarkedString` is either a plain string or a language-tagged code block.
+/// LSP spec: `MarkedString` = string | { language: string; value: string }
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct MarkedString {
     pub language: String,
     pub value: String,
 }
 
-/// Represents either a plain string or a MarkedString object in arrays.
+/// Represents either a plain string or a `MarkedString` object in arrays.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(untagged)]
 pub enum MarkedStringOrString {
@@ -140,7 +140,7 @@ pub struct DocumentSymbol {
     #[serde(rename = "selectionRange")]
     pub selection_range: Range,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub children: Option<Vec<DocumentSymbol>>,
+    pub children: Option<Vec<Self>>,
 }
 
 #[derive(Serialize_repr, Deserialize_repr, Clone, Debug)]
@@ -234,7 +234,7 @@ mod tests {
 
     #[test]
     fn test_symbol_kind_deserialize_from_integer() {
-        let json = r#"12"#;
+        let json = r"12";
         let kind: SymbolKind = serde_json::from_str(json).unwrap();
         assert!(matches!(kind, SymbolKind::Function));
     }
@@ -301,7 +301,7 @@ mod tests {
 
     #[test]
     fn test_symbol_tag_deserialize_from_integer() {
-        let json = r#"[1]"#;
+        let json = r"[1]";
         let tags: Vec<SymbolTag> = serde_json::from_str(json).unwrap();
         assert_eq!(tags.len(), 1);
         assert!(matches!(tags[0], SymbolTag::Deprecated));

@@ -12,8 +12,8 @@ enum TyCommand {
 impl TyCommand {
     fn build(&self) -> Command {
         match self {
-            TyCommand::Direct => Command::new("ty"),
-            TyCommand::Uvx => {
+            Self::Direct => Command::new("ty"),
+            Self::Uvx => {
                 let mut cmd = Command::new("uvx");
                 cmd.arg("ty");
                 cmd
@@ -23,8 +23,8 @@ impl TyCommand {
 
     fn label(&self) -> &'static str {
         match self {
-            TyCommand::Direct => "ty",
-            TyCommand::Uvx => "uvx ty",
+            Self::Direct => "ty",
+            Self::Uvx => "uvx ty",
         }
     }
 }
@@ -52,15 +52,10 @@ impl TyLspServer {
         tracing::debug!("ty not found on PATH, trying uvx...");
 
         // Fall back to `uvx ty`
-        let uvx_output = Command::new("uvx")
-            .arg("ty")
-            .arg("--version")
-            .output()
-            .await
-            .context(
-                "Neither 'ty' nor 'uvx' found on PATH. \
+        let uvx_output = Command::new("uvx").arg("ty").arg("--version").output().await.context(
+            "Neither 'ty' nor 'uvx' found on PATH. \
                  Install ty with: uv add --dev ty",
-            )?;
+        )?;
 
         if uvx_output.status.success() {
             let version = String::from_utf8_lossy(&uvx_output.stdout);
@@ -82,9 +77,8 @@ impl TyLspServer {
         let ty_cmd = Self::resolve_ty_command().await?;
 
         tracing::debug!(
-            "Starting ty LSP server via '{}' in workspace: {}",
+            "Starting ty LSP server via '{}' in workspace: {workspace_root}",
             ty_cmd.label(),
-            workspace_root
         );
 
         let process = ty_cmd
@@ -97,26 +91,24 @@ impl TyLspServer {
             .spawn()
             .with_context(|| {
                 format!(
-                    "Failed to spawn '{} server' in workspace '{}'",
+                    "Failed to spawn '{} server' in workspace '{workspace_root}'",
                     ty_cmd.label(),
-                    workspace_root
                 )
             })?;
 
         tracing::debug!("ty LSP server process started (pid: {:?})", process.id());
 
-        Ok(Self {
-            process,
-            workspace_root: workspace_root.to_string(),
-        })
+        Ok(Self { process, workspace_root: workspace_root.to_string() })
     }
 
     pub fn stdin(&mut self) -> &mut tokio::process::ChildStdin {
-        self.process.stdin.as_mut().unwrap()
+        self.process.stdin.as_mut().expect("ty LSP server stdin not available (already taken)")
     }
 
     pub fn stdout(&mut self) -> BufReader<tokio::process::ChildStdout> {
-        BufReader::new(self.process.stdout.take().unwrap())
+        BufReader::new(
+            self.process.stdout.take().expect("ty LSP server stdout not available (already taken)"),
+        )
     }
 
     pub async fn shutdown(&mut self) -> Result<()> {

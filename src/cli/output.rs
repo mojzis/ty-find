@@ -2,10 +2,10 @@ use crate::cli::args::OutputFormat;
 use crate::lsp::protocol::{
     DocumentSymbol, Hover, HoverContents, Location, MarkedStringOrString, SymbolInformation,
 };
-use serde_json;
+use std::fmt::Write;
 use std::path::{Path, PathBuf};
 
-/// A single inspect result: (symbol_name, definitions, hover, references).
+/// A single inspect result: (`symbol_name`, definitions, hover, references).
 pub type InspectEntry<'a> = (&'a str, &'a [Location], Option<&'a Hover>, &'a [Location]);
 
 pub struct OutputFormatter {
@@ -15,16 +15,13 @@ pub struct OutputFormatter {
 
 impl OutputFormatter {
     pub fn new(format: OutputFormat) -> Self {
-        Self {
-            format,
-            cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
-        }
+        Self { format, cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")) }
     }
 
     pub fn format_definitions(&self, locations: &[Location], query_info: &str) -> String {
         match self.format {
             OutputFormat::Human => self.format_human(locations, query_info),
-            OutputFormat::Json => self.format_json(locations),
+            OutputFormat::Json => Self::format_json(locations),
             OutputFormat::Csv => self.format_csv(locations),
             OutputFormat::Paths => self.format_paths(locations),
         }
@@ -32,26 +29,22 @@ impl OutputFormatter {
 
     fn format_human(&self, locations: &[Location], query_info: &str) -> String {
         if locations.is_empty() {
-            return format!("No definitions found for: {}", query_info);
+            return format!("No definitions found for: {query_info}");
         }
 
-        let mut output = format!(
-            "Found {} definition(s) for: {}\n\n",
-            locations.len(),
-            query_info
-        );
+        let mut output = format!("Found {} definition(s) for: {query_info}\n\n", locations.len());
 
         for (i, location) in locations.iter().enumerate() {
             let file_path = self.uri_to_path(&location.uri);
             let line = location.range.start.line + 1;
             let column = location.range.start.character + 1;
 
-            output.push_str(&format!("{}. {}:{}:{}\n", i + 1, file_path, line, column));
+            let _ = writeln!(output, "{}. {file_path}:{line}:{column}", i + 1);
 
             if let Ok(content) = std::fs::read_to_string(&file_path) {
                 let lines: Vec<&str> = content.lines().collect();
                 if let Some(line_content) = lines.get((line - 1) as usize) {
-                    output.push_str(&format!("   {}\n", line_content.trim()));
+                    let _ = writeln!(output, "   {}", line_content.trim());
                 }
             }
             output.push('\n');
@@ -60,7 +53,7 @@ impl OutputFormatter {
         output
     }
 
-    fn format_json(&self, locations: &[Location]) -> String {
+    fn format_json(locations: &[Location]) -> String {
         serde_json::to_string_pretty(locations).unwrap_or_else(|_| "[]".to_string())
     }
 
@@ -70,17 +63,13 @@ impl OutputFormatter {
             let file_path = self.uri_to_path(&location.uri);
             let line = location.range.start.line + 1;
             let column = location.range.start.character + 1;
-            output.push_str(&format!("{},{},{}\n", file_path, line, column));
+            let _ = writeln!(output, "{file_path},{line},{column}");
         }
         output
     }
 
     fn format_paths(&self, locations: &[Location]) -> String {
-        locations
-            .iter()
-            .map(|loc| self.uri_to_path(&loc.uri))
-            .collect::<Vec<_>>()
-            .join("\n")
+        locations.iter().map(|loc| self.uri_to_path(&loc.uri)).collect::<Vec<_>>().join("\n")
     }
 
     fn uri_to_path(&self, uri: &str) -> String {
@@ -103,9 +92,9 @@ impl OutputFormatter {
         if results.len() == 1 {
             let (symbol, locations) = &results[0];
             if locations.is_empty() {
-                return format!("No definitions found for: '{}'", symbol);
+                return format!("No definitions found for: '{symbol}'");
             }
-            let query_info = format!("'{}'", symbol);
+            let query_info = format!("'{symbol}'");
             return self.format_definitions(locations, &query_info);
         }
 
@@ -113,11 +102,11 @@ impl OutputFormatter {
             OutputFormat::Human => {
                 let mut output = String::new();
                 for (symbol, locations) in results {
-                    output.push_str(&format!("=== {} ===\n", symbol));
+                    let _ = writeln!(output, "=== {symbol} ===");
                     if locations.is_empty() {
                         output.push_str("No definitions found.\n");
                     } else {
-                        output.push_str(&self.format_human(locations, &format!("'{}'", symbol)));
+                        output.push_str(&self.format_human(locations, &format!("'{symbol}'")));
                     }
                     output.push('\n');
                 }
@@ -142,7 +131,7 @@ impl OutputFormatter {
                         let file_path = self.uri_to_path(&location.uri);
                         let line = location.range.start.line + 1;
                         let column = location.range.start.character + 1;
-                        output.push_str(&format!("{},{},{},{}\n", symbol, file_path, line, column));
+                        let _ = writeln!(output, "{symbol},{file_path},{line},{column}");
                     }
                 }
                 output
@@ -165,26 +154,23 @@ impl OutputFormatter {
         match self.format {
             OutputFormat::Human => {
                 if locations.is_empty() {
-                    return format!("No references found for: {}", query_info);
+                    return format!("No references found for: {query_info}");
                 }
 
-                let mut output = format!(
-                    "Found {} reference(s) for: {}\n\n",
-                    locations.len(),
-                    query_info
-                );
+                let mut output =
+                    format!("Found {} reference(s) for: {query_info}\n\n", locations.len());
 
                 for (i, location) in locations.iter().enumerate() {
                     let file_path = self.uri_to_path(&location.uri);
                     let line = location.range.start.line + 1;
                     let column = location.range.start.character + 1;
 
-                    output.push_str(&format!("{}. {}:{}:{}\n", i + 1, file_path, line, column));
+                    let _ = writeln!(output, "{}. {file_path}:{line}:{column}", i + 1);
 
                     if let Ok(content) = std::fs::read_to_string(&file_path) {
                         let lines: Vec<&str> = content.lines().collect();
                         if let Some(line_content) = lines.get((line - 1) as usize) {
-                            output.push_str(&format!("   {}\n", line_content.trim()));
+                            let _ = writeln!(output, "   {}", line_content.trim());
                         }
                     }
                     output.push('\n');
@@ -192,7 +178,7 @@ impl OutputFormatter {
 
                 output
             }
-            OutputFormat::Json => self.format_json(locations),
+            OutputFormat::Json => Self::format_json(locations),
             OutputFormat::Csv => self.format_csv(locations),
             OutputFormat::Paths => self.format_paths(locations),
         }
@@ -201,7 +187,7 @@ impl OutputFormatter {
     pub fn format_hover(&self, hover: &Hover, query_info: &str) -> String {
         match self.format {
             OutputFormat::Human => {
-                let mut output = format!("Hover information for: {}\n\n", query_info);
+                let mut output = format!("Hover information for: {query_info}\n\n");
 
                 let content_str = Self::extract_hover_text(&hover.contents);
 
@@ -230,15 +216,13 @@ impl OutputFormatter {
                     let line = symbol.location.range.start.line + 1;
                     let column = symbol.location.range.start.character + 1;
 
-                    output.push_str(&format!(
-                        "{}. {} ({:?})\n   {}:{}:{}\n\n",
+                    let _ = write!(
+                        output,
+                        "{}. {} ({:?})\n   {file_path}:{line}:{column}\n\n",
                         i + 1,
                         symbol.name,
                         symbol.kind,
-                        file_path,
-                        line,
-                        column
-                    ));
+                    );
                 }
 
                 output
@@ -252,10 +236,11 @@ impl OutputFormatter {
                     let file_path = self.uri_to_path(&symbol.location.uri);
                     let line = symbol.location.range.start.line + 1;
                     let column = symbol.location.range.start.character + 1;
-                    output.push_str(&format!(
-                        "{},{:?},{},{},{}\n",
-                        symbol.name, symbol.kind, file_path, line, column
-                    ));
+                    let _ = writeln!(
+                        output,
+                        "{},{:?},{file_path},{line},{column}",
+                        symbol.name, symbol.kind,
+                    );
                 }
                 output
             }
@@ -271,7 +256,7 @@ impl OutputFormatter {
         match self.format {
             OutputFormat::Human => {
                 let mut output = String::new();
-                self.format_document_symbols_recursive(symbols, 0, &mut output);
+                format_document_symbols_recursive(symbols, 0, &mut output);
                 output
             }
             OutputFormat::Json => {
@@ -279,37 +264,14 @@ impl OutputFormatter {
             }
             OutputFormat::Csv => {
                 let mut output = String::from("name,kind,line,column\n");
-                self.format_document_symbols_csv(symbols, &mut output);
+                format_document_symbols_csv(symbols, &mut output);
                 output
             }
             OutputFormat::Paths => {
                 // Paths format doesn't make sense for document symbols, fall back to human
                 let mut output = String::new();
-                self.format_document_symbols_recursive(symbols, 0, &mut output);
+                format_document_symbols_recursive(symbols, 0, &mut output);
                 output
-            }
-        }
-    }
-
-    #[allow(clippy::only_used_in_recursion)]
-    fn format_document_symbols_recursive(
-        &self,
-        symbols: &[DocumentSymbol],
-        indent: usize,
-        output: &mut String,
-    ) {
-        for symbol in symbols {
-            let line = symbol.range.start.line + 1;
-            let column = symbol.range.start.character + 1;
-            let indent_str = "  ".repeat(indent);
-
-            output.push_str(&format!(
-                "{}{} ({:?}) - line {}, col {}\n",
-                indent_str, symbol.name, symbol.kind, line, column
-            ));
-
-            if let Some(children) = &symbol.children {
-                self.format_document_symbols_recursive(children, indent + 1, output);
             }
         }
     }
@@ -339,7 +301,7 @@ impl OutputFormatter {
     ) -> String {
         match self.format {
             OutputFormat::Human => {
-                let mut output = format!("=== Inspect: {} ===\n\n", symbol);
+                let mut output = format!("=== Inspect: {symbol} ===\n\n");
 
                 // Definition section
                 output.push_str("--- Definition ---\n");
@@ -350,12 +312,12 @@ impl OutputFormatter {
                         let file_path = self.uri_to_path(&location.uri);
                         let line = location.range.start.line + 1;
                         let column = location.range.start.character + 1;
-                        output.push_str(&format!("{}. {}:{}:{}\n", i + 1, file_path, line, column));
+                        let _ = writeln!(output, "{}. {file_path}:{line}:{column}", i + 1);
 
                         if let Ok(content) = std::fs::read_to_string(&file_path) {
                             let lines: Vec<&str> = content.lines().collect();
                             if let Some(line_content) = lines.get((line - 1) as usize) {
-                                output.push_str(&format!("   {}\n", line_content.trim()));
+                                let _ = writeln!(output, "   {}", line_content.trim());
                             }
                         }
                     }
@@ -377,17 +339,17 @@ impl OutputFormatter {
                 if references.is_empty() {
                     output.push_str("No references found.\n");
                 } else {
-                    output.push_str(&format!("{} reference(s):\n", references.len()));
+                    let _ = writeln!(output, "{} reference(s):", references.len());
                     for (i, location) in references.iter().enumerate() {
                         let file_path = self.uri_to_path(&location.uri);
                         let line = location.range.start.line + 1;
                         let column = location.range.start.character + 1;
-                        output.push_str(&format!("{}. {}:{}:{}\n", i + 1, file_path, line, column));
+                        let _ = writeln!(output, "{}. {file_path}:{line}:{column}", i + 1);
 
                         if let Ok(content) = std::fs::read_to_string(&file_path) {
                             let lines: Vec<&str> = content.lines().collect();
                             if let Some(line_content) = lines.get((line - 1) as usize) {
-                                output.push_str(&format!("   {}\n", line_content.trim()));
+                                let _ = writeln!(output, "   {}", line_content.trim());
                             }
                         }
                     }
@@ -410,13 +372,13 @@ impl OutputFormatter {
                     let file_path = self.uri_to_path(&location.uri);
                     let line = location.range.start.line + 1;
                     let column = location.range.start.character + 1;
-                    output.push_str(&format!("definition,{},{},{}\n", file_path, line, column));
+                    let _ = writeln!(output, "definition,{file_path},{line},{column}");
                 }
                 for location in references {
                     let file_path = self.uri_to_path(&location.uri);
                     let line = location.range.start.line + 1;
                     let column = location.range.start.character + 1;
-                    output.push_str(&format!("reference,{},{},{}\n", file_path, line, column));
+                    let _ = writeln!(output, "reference,{file_path},{line},{column}");
                 }
                 output
             }
@@ -470,19 +432,14 @@ impl OutputFormatter {
                         let file_path = self.uri_to_path(&location.uri);
                         let line = location.range.start.line + 1;
                         let column = location.range.start.character + 1;
-                        output.push_str(&format!(
-                            "{},definition,{},{},{}\n",
-                            symbol, file_path, line, column
-                        ));
+                        let _ =
+                            writeln!(output, "{symbol},definition,{file_path},{line},{column}",);
                     }
                     for location in *references {
                         let file_path = self.uri_to_path(&location.uri);
                         let line = location.range.start.line + 1;
                         let column = location.range.start.character + 1;
-                        output.push_str(&format!(
-                            "{},reference,{},{},{}\n",
-                            symbol, file_path, line, column
-                        ));
+                        let _ = writeln!(output, "{symbol},reference,{file_path},{line},{column}",);
                     }
                 }
                 output
@@ -503,21 +460,39 @@ impl OutputFormatter {
             }
         }
     }
+}
 
-    #[allow(clippy::only_used_in_recursion)]
-    fn format_document_symbols_csv(&self, symbols: &[DocumentSymbol], output: &mut String) {
-        for symbol in symbols {
-            let line = symbol.range.start.line + 1;
-            let column = symbol.range.start.character + 1;
+fn format_document_symbols_recursive(
+    symbols: &[DocumentSymbol],
+    indent: usize,
+    output: &mut String,
+) {
+    for symbol in symbols {
+        let line = symbol.range.start.line + 1;
+        let column = symbol.range.start.character + 1;
+        let indent_str = "  ".repeat(indent);
 
-            output.push_str(&format!(
-                "{},{:?},{},{}\n",
-                symbol.name, symbol.kind, line, column
-            ));
+        let _ = writeln!(
+            output,
+            "{indent_str}{} ({:?}) - line {line}, col {column}",
+            symbol.name, symbol.kind,
+        );
 
-            if let Some(children) = &symbol.children {
-                self.format_document_symbols_csv(children, output);
-            }
+        if let Some(children) = &symbol.children {
+            format_document_symbols_recursive(children, indent + 1, output);
+        }
+    }
+}
+
+fn format_document_symbols_csv(symbols: &[DocumentSymbol], output: &mut String) {
+    for symbol in symbols {
+        let line = symbol.range.start.line + 1;
+        let column = symbol.range.start.character + 1;
+
+        let _ = writeln!(output, "{},{:?},{line},{column}", symbol.name, symbol.kind);
+
+        if let Some(children) = &symbol.children {
+            format_document_symbols_csv(children, output);
         }
     }
 }

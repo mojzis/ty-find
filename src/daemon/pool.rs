@@ -1,6 +1,6 @@
 //! LSP client pool management.
 //!
-//! This module manages a pool of TyLspClient instances, one per workspace.
+//! This module manages a pool of `TyLspClient` instances, one per workspace.
 //! Each client maintains a persistent connection to a ty LSP server process,
 //! allowing for fast response times on subsequent requests.
 
@@ -67,9 +67,7 @@ impl LspClientPool {
     /// let pool = LspClientPool::new();
     /// ```
     pub fn new() -> Self {
-        Self {
-            entries: Arc::new(Mutex::new(HashMap::new())),
-        }
+        Self { entries: Arc::new(Mutex::new(HashMap::new())) }
     }
 
     /// Gets an existing LSP client for the workspace, or creates a new one if it doesn't exist.
@@ -110,7 +108,7 @@ impl LspClientPool {
     pub async fn get_or_create(&self, workspace: PathBuf) -> Result<Arc<TyLspClient>> {
         // First, check if we already have a client for this workspace
         {
-            let mut entries = self.entries.lock().unwrap();
+            let mut entries = self.entries.lock().expect("pool mutex poisoned");
             if let Some(entry) = entries.get_mut(&workspace) {
                 // Update last access time
                 entry.last_access = Instant::now();
@@ -121,21 +119,17 @@ impl LspClientPool {
         // No existing client, create a new one
         let workspace_str = workspace.to_str().context("Invalid workspace path")?;
 
-        let client = TyLspClient::new(workspace_str)
-            .await
-            .context("Failed to create LSP client")?;
+        let client =
+            TyLspClient::new(workspace_str).await.context("Failed to create LSP client")?;
 
         let client_arc = Arc::new(client);
 
         // Store the client in the pool
         {
-            let mut entries = self.entries.lock().unwrap();
+            let mut entries = self.entries.lock().expect("pool mutex poisoned");
             entries.insert(
                 workspace.clone(),
-                PoolEntry {
-                    client: Arc::clone(&client_arc),
-                    last_access: Instant::now(),
-                },
+                PoolEntry { client: Arc::clone(&client_arc), last_access: Instant::now() },
             );
         }
 
@@ -163,7 +157,7 @@ impl LspClientPool {
     /// pool.remove(&workspace);
     /// ```
     pub fn remove(&self, workspace: &Path) {
-        let mut entries = self.entries.lock().unwrap();
+        let mut entries = self.entries.lock().expect("pool mutex poisoned");
         entries.remove(workspace);
     }
 
@@ -194,7 +188,7 @@ impl LspClientPool {
     /// println!("Removed {} idle clients", removed);
     /// ```
     pub fn cleanup_idle(&self, timeout: Duration) -> usize {
-        let mut entries = self.entries.lock().unwrap();
+        let mut entries = self.entries.lock().expect("pool mutex poisoned");
         let now = Instant::now();
 
         let to_remove: Vec<PathBuf> = entries
@@ -232,7 +226,7 @@ impl LspClientPool {
     /// }
     /// ```
     pub fn active_workspaces(&self) -> Vec<PathBuf> {
-        let entries = self.entries.lock().unwrap();
+        let entries = self.entries.lock().expect("pool mutex poisoned");
         entries.keys().cloned().collect()
     }
 
@@ -247,7 +241,7 @@ impl LspClientPool {
     /// assert_eq!(pool.len(), 0);
     /// ```
     pub fn len(&self) -> usize {
-        let entries = self.entries.lock().unwrap();
+        let entries = self.entries.lock().expect("pool mutex poisoned");
         entries.len()
     }
 

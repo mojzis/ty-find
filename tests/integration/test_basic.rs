@@ -1,4 +1,4 @@
-use assert_cmd::Command;
+use assert_cmd::cargo::cargo_bin_cmd;
 use predicates::prelude::*;
 use std::path::PathBuf;
 use std::process;
@@ -49,7 +49,7 @@ async fn test_definition_command() {
     require_ty();
 
     // Go to definition of `hello_world()` call on line 18
-    let mut cmd = Command::cargo_bin("ty-find").unwrap();
+    let mut cmd = cargo_bin_cmd!("ty-find");
     cmd.arg("--workspace")
         .arg(workspace_root())
         .arg("definition")
@@ -59,9 +59,10 @@ async fn test_definition_command() {
         .arg("--column")
         .arg("14");
 
-    cmd.assert()
-        .success()
-        .stdout(predicate::str::contains("hello_world"));
+    let output = cmd.output().expect("failed to run ty-find");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "command failed: {stdout}");
+    assert!(predicate::str::contains("hello_world").eval(&stdout));
 }
 
 #[tokio::test]
@@ -69,7 +70,7 @@ async fn test_find_command() {
     require_ty();
 
     // Find the `add` method in test_example.py
-    let mut cmd = Command::cargo_bin("ty-find").unwrap();
+    let mut cmd = cargo_bin_cmd!("ty-find");
     cmd.arg("--workspace")
         .arg(workspace_root())
         .arg("find")
@@ -77,9 +78,10 @@ async fn test_find_command() {
         .arg("--file")
         .arg(fixture_path());
 
-    cmd.assert()
-        .success()
-        .stdout(predicate::str::contains("add"));
+    let output = cmd.output().expect("failed to run ty-find");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "command failed: {stdout}");
+    assert!(predicate::str::contains("add").eval(&stdout));
 }
 
 #[tokio::test]
@@ -87,7 +89,7 @@ async fn test_json_output() {
     require_ty();
 
     // Go to definition of `calculate_sum()` call on line 19, with JSON output
-    let mut cmd = Command::cargo_bin("ty-find").unwrap();
+    let mut cmd = cargo_bin_cmd!("ty-find");
     cmd.arg("--workspace")
         .arg(workspace_root())
         .arg("--format")
@@ -99,10 +101,11 @@ async fn test_json_output() {
         .arg("--column")
         .arg("13");
 
-    cmd.assert()
-        .success()
-        .stdout(predicate::str::contains("uri"))
-        .stdout(predicate::str::contains("range"));
+    let output = cmd.output().expect("failed to run ty-find");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "command failed: {stdout}");
+    assert!(predicate::str::contains("uri").eval(&stdout));
+    assert!(predicate::str::contains("range").eval(&stdout));
 }
 
 #[tokio::test]
@@ -110,7 +113,7 @@ async fn test_inspect_command() {
     require_ty();
 
     // Inspect the `hello_world` function
-    let mut cmd = Command::cargo_bin("ty-find").unwrap();
+    let mut cmd = cargo_bin_cmd!("ty-find");
     cmd.arg("--workspace")
         .arg(workspace_root())
         .arg("inspect")
@@ -118,7 +121,8 @@ async fn test_inspect_command() {
         .arg("--file")
         .arg(fixture_path());
 
-    cmd.assert()
-        .success()
-        .stdout(predicate::str::contains("hello_world"));
+    let output = cmd.output().expect("failed to run ty-find");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "command failed: {stdout}");
+    assert!(predicate::str::contains("hello_world").eval(&stdout));
 }

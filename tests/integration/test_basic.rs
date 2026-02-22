@@ -1,12 +1,36 @@
 use assert_cmd::Command;
 use predicates::prelude::*;
-use std::fs;
+use std::path::PathBuf;
 use std::process;
-use tempfile::TempDir;
 
-/// Ensure `ty` is available on PATH. Panics with install instructions if missing.
+/// Path to the shared test fixture at the repo root.
+fn fixture_path() -> PathBuf {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    manifest_dir.join("test_example.py")
+}
+
+/// Workspace root (repo root) used as the `--workspace` argument.
+fn workspace_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+}
+
+/// Ensure `ty` is available, either directly on PATH or via `uvx`.
+/// Panics with install instructions if neither works.
 fn require_ty() {
-    let available = process::Command::new("ty")
+    let direct = process::Command::new("ty")
+        .arg("--version")
+        .stdout(process::Stdio::null())
+        .stderr(process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+
+    if direct {
+        return;
+    }
+
+    let via_uvx = process::Command::new("uvx")
+        .arg("ty")
         .arg("--version")
         .stdout(process::Stdio::null())
         .stderr(process::Stdio::null())
@@ -15,8 +39,8 @@ fn require_ty() {
         .unwrap_or(false);
 
     assert!(
-        available,
-        "ty is not installed. Install it with: pip install ty"
+        via_uvx,
+        "ty is not installed and uvx fallback failed. Install it with: uv add --dev ty"
     );
 }
 
@@ -24,31 +48,16 @@ fn require_ty() {
 async fn test_definition_command() {
     require_ty();
 
-    let temp_dir = TempDir::new().unwrap();
-    let test_file = temp_dir.path().join("test.py");
-
-    fs::write(
-        &test_file,
-        r#"
-def hello_world():
-    return "Hello, World!"
-
-def main():
-    result = hello_world()
-    print(result)
-"#,
-    )
-    .unwrap();
-
+    // Go to definition of `hello_world()` call on line 18
     let mut cmd = Command::cargo_bin("ty-find").unwrap();
     cmd.arg("--workspace")
-        .arg(temp_dir.path())
+        .arg(workspace_root())
         .arg("definition")
-        .arg(&test_file)
+        .arg(fixture_path())
         .arg("--line")
-        .arg("6")
+        .arg("18")
         .arg("--column")
-        .arg("15");
+        .arg("14");
 
     cmd.assert()
         .success()
@@ -59,32 +68,14 @@ def main():
 async fn test_find_command() {
     require_ty();
 
-    let temp_dir = TempDir::new().unwrap();
-    let test_file = temp_dir.path().join("test.py");
-
-    fs::write(
-        &test_file,
-        r#"
-class Calculator:
-    def add(self, a, b):
-        return a + b
-
-    def multiply(self, a, b):
-        return a * b
-
-calc = Calculator()
-result = calc.add(1, 2)
-"#,
-    )
-    .unwrap();
-
+    // Find the `add` method in test_example.py
     let mut cmd = Command::cargo_bin("ty-find").unwrap();
     cmd.arg("--workspace")
-        .arg(temp_dir.path())
+        .arg(workspace_root())
         .arg("find")
         .arg("add")
         .arg("--file")
-        .arg(&test_file);
+        .arg(fixture_path());
 
     cmd.assert()
         .success()
@@ -95,35 +86,39 @@ result = calc.add(1, 2)
 async fn test_json_output() {
     require_ty();
 
-    let temp_dir = TempDir::new().unwrap();
-    let test_file = temp_dir.path().join("test.py");
-
-    fs::write(
-        &test_file,
-        r#"
-def greet():
-    return "hi"
-
-greet()
-"#,
-    )
-    .unwrap();
-
+    // Go to definition of `calculate_sum()` call on line 19, with JSON output
     let mut cmd = Command::cargo_bin("ty-find").unwrap();
     cmd.arg("--workspace")
-        .arg(temp_dir.path())
+        .arg(workspace_root())
         .arg("--format")
         .arg("json")
         .arg("definition")
-        .arg(&test_file)
+        .arg(fixture_path())
         .arg("--line")
-        .arg("5")
+        .arg("19")
         .arg("--column")
-        .arg("1");
+        .arg("13");
 
-    // JSON output should contain a valid location with uri and range fields
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("uri"))
         .stdout(predicate::str::contains("range"));
+}
+
+#[tokio::test]
+async fn test_inspect_command() {
+    require_ty();
+
+    // Inspect the `hello_world` function
+    let mut cmd = Command::cargo_bin("ty-find").unwrap();
+    cmd.arg("--workspace")
+        .arg(workspace_root())
+        .arg("inspect")
+        .arg("hello_world")
+        .arg("--file")
+        .arg(fixture_path());
+
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("hello_world"));
 }

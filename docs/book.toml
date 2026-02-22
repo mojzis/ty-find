@@ -1,0 +1,14 @@
+[book]
+title = "ty-find"
+description = "Type-aware Python code navigation for AI coding agents"
+authors = ["mojzis"]
+language = "en"
+src = "src"
+
+[build]
+build-dir = "book"
+
+[output.html]
+site-url = "/ty-find/"
+git-repository-url = "https://github.com/mojzis/ty-find"
+edit-url-template = "https://github.com/mojzis/ty-find/edit/main/docs/{path}"

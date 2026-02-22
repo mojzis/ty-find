@@ -25,6 +25,10 @@ pub struct Cli {
 
     #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
     pub format: OutputFormat,
+
+    /// Timeout in seconds for daemon operations (default: 30)
+    #[arg(long, value_name = "SECONDS")]
+    pub timeout: Option<u64>,
 }
 
 #[derive(Subcommand)]
@@ -89,7 +93,7 @@ pub enum Commands {
     /// List all symbols in a file
     DocumentSymbols { file: PathBuf },
 
-    /// Inspect symbols: find definition, hover info, and references in one shot
+    /// Inspect symbols: find definition and hover info (optionally references)
     Inspect {
         /// Symbol name(s) to inspect (supports multiple symbols)
         #[arg(required = true, num_args = 1..)]
@@ -98,6 +102,10 @@ pub enum Commands {
         /// Optional file to narrow the search (uses workspace symbols if omitted)
         #[arg(short, long)]
         file: Option<PathBuf>,
+
+        /// Also find all references (can be slow on large codebases)
+        #[arg(short, long, default_value_t = false)]
+        references: bool,
     },
 
     /// Manage the background ty LSP server daemon

@@ -245,6 +245,9 @@ pub enum Method {
     /// Find all references to a symbol at a position
     References,
 
+    /// Inspect a symbol: hover + references in one call (parallelized server-side)
+    Inspect,
+
     /// Get diagnostics (type errors, warnings) for a file
     Diagnostics,
 
@@ -264,6 +267,7 @@ impl Method {
             Self::WorkspaceSymbols => "workspace_symbols",
             Self::DocumentSymbols => "document_symbols",
             Self::References => "references",
+            Self::Inspect => "inspect",
             Self::Diagnostics => "diagnostics",
             Self::Ping => "ping",
             Self::Shutdown => "shutdown",
@@ -325,6 +329,12 @@ pub struct WorkspaceSymbolsParams {
     /// Maximum number of results to return (optional)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub limit: Option<usize>,
+
+    /// If set, only return symbols whose name exactly matches this string.
+    /// The query is still sent to the LSP server for fuzzy matching, but
+    /// results are filtered daemon-side before serialization.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exact_name: Option<String>,
 }
 
 /// Parameters for document symbols request.
@@ -358,6 +368,29 @@ pub struct ReferencesParams {
 
     /// Whether to include the declaration in results
     pub include_declaration: bool,
+}
+
+/// Parameters for inspect request.
+///
+/// Runs hover and optionally references on the daemon side.
+/// When references are included, hover and references run in parallel.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct InspectParams {
+    /// Workspace root directory
+    pub workspace: PathBuf,
+
+    /// File path (absolute or relative to workspace)
+    pub file: PathBuf,
+
+    /// Line number (0-based)
+    pub line: u32,
+
+    /// Column number (0-based)
+    pub column: u32,
+
+    /// Whether to include references (can be slow on large codebases)
+    #[serde(default)]
+    pub include_references: bool,
 }
 
 /// Parameters for diagnostics request.
@@ -423,6 +456,17 @@ pub struct DocumentSymbolsResult {
 pub struct ReferencesResult {
     /// List of reference locations
     pub locations: Vec<Location>,
+}
+
+/// Result of an inspect request (hover + references combined).
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct InspectResult {
+    /// Hover information (if found)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hover: Option<Hover>,
+
+    /// Reference locations
+    pub references: Vec<Location>,
 }
 
 /// A single diagnostic message.

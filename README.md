@@ -15,7 +15,7 @@ Run `ty-find --help` to see all commands. Run `ty-find <cmd> --help` for details
 
 - Symbol overview (definition + type + refs): `ty-find inspect SymbolName`
 - Find definition: `ty-find find SymbolName`
-- All usages before refactoring: `ty-find references file.py -l LINE -c COL`
+- All usages before refactoring: `ty-find references SymbolName`
 - Type info: `ty-find hover file.py -l LINE -c COL`
 - File outline: `ty-find document-symbols file.py`
 
@@ -112,7 +112,7 @@ ty-find definition myfile.py --line 10 --column 5
 ### Find References
 
 ```bash
-ty-find references myfile.py --line 10 --column 5
+ty-find references my_function MyClass   # multiple symbols searched in parallel
 ```
 
 ### Workspace Symbol Search

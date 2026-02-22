@@ -69,15 +69,15 @@ pub enum Commands {
         column: u32,
     },
 
-    /// Find all references to a symbol at a specific file location
+    /// Find all references to symbols by name (searches in parallel)
     References {
-        file: PathBuf,
+        /// Symbol name(s) to find references for (supports multiple symbols)
+        #[arg(required = true, num_args = 1..)]
+        symbols: Vec<String>,
 
+        /// Optional file to narrow the search (uses workspace symbols if omitted)
         #[arg(short, long)]
-        line: u32,
-
-        #[arg(short, long)]
-        column: u32,
+        file: Option<PathBuf>,
 
         /// Include the declaration in the results
         #[arg(long, default_value_t = true)]

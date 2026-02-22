@@ -40,28 +40,83 @@ pub async fn handle_definition_command(
 
 pub async fn handle_references_command(
     workspace_root: &Path,
-    file: &Path,
-    line: u32,
-    column: u32,
+    file: Option<&Path>,
+    symbols: &[String],
     include_declaration: bool,
     formatter: &OutputFormatter,
     timeout: Duration,
 ) -> Result<()> {
     ensure_daemon_running().await?;
-    let mut client = DaemonClient::connect_with_timeout(timeout).await?;
 
-    let result = client
-        .execute_references(
-            workspace_root.to_path_buf(),
-            file.to_string_lossy().to_string(),
-            line.saturating_sub(1),
-            column.saturating_sub(1),
-            include_declaration,
-        )
-        .await?;
+    // Resolve each symbol to a (file, line, column) position
+    let mut symbol_positions: Vec<(String, String, u32, u32)> = Vec::new();
 
-    let query_info = format!("{}:{line}:{column}", file.display());
-    println!("{}", formatter.format_references(&result.locations, &query_info));
+    if let Some(file) = file {
+        let file_str = file.to_string_lossy();
+        let finder = SymbolFinder::new(&file_str)?;
+
+        for symbol in symbols {
+            let positions = finder.find_symbol_positions(symbol);
+            if let Some(&(line, col)) = positions.first() {
+                symbol_positions.push((symbol.clone(), file_str.to_string(), line, col));
+            } else {
+                // Symbol not found in file; still include it so the output shows "no references"
+                symbol_positions.push((symbol.clone(), file_str.to_string(), 0, 0));
+            }
+        }
+    } else {
+        // Workspace-wide: find each symbol's definition location first
+        for symbol in symbols {
+            let mut client = DaemonClient::connect_with_timeout(timeout).await?;
+            let result = client
+                .execute_workspace_symbols_exact(workspace_root.to_path_buf(), symbol.clone())
+                .await?;
+
+            if let Some(first) = result.symbols.first() {
+                let file_path = first
+                    .location
+                    .uri
+                    .strip_prefix("file://")
+                    .unwrap_or(&first.location.uri)
+                    .to_string();
+                let line = first.location.range.start.line;
+                let col = first.location.range.start.character;
+                symbol_positions.push((symbol.clone(), file_path, line, col));
+            } else {
+                symbol_positions.push((symbol.clone(), String::new(), 0, 0));
+            }
+        }
+    }
+
+    // Search for references in parallel using tokio tasks
+    let mut handles = Vec::new();
+    for (symbol, file_path, line, col) in symbol_positions {
+        let ws = workspace_root.to_path_buf();
+        let include_decl = include_declaration;
+        handles.push(tokio::spawn(async move {
+            if file_path.is_empty() {
+                return (symbol, Vec::new());
+            }
+            let result = async {
+                let mut client = DaemonClient::connect_with_timeout(timeout).await?;
+                client.execute_references(ws, file_path, line, col, include_decl).await
+            }
+            .await;
+
+            match result {
+                Ok(r) => (symbol, r.locations),
+                Err(_) => (symbol, Vec::new()),
+            }
+        }));
+    }
+
+    let mut results: Vec<(String, Vec<Location>)> = Vec::new();
+    for handle in handles {
+        let (symbol, locations) = handle.await?;
+        results.push((symbol, locations));
+    }
+
+    println!("{}", formatter.format_references_results(&results));
 
     Ok(())
 }

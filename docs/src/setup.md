@@ -22,6 +22,22 @@ Run `ty-find --help` to see all commands. Run `ty-find <cmd> --help` for details
 Grep is still appropriate for string literals, config values, TODOs, and non-symbol text.
 ```
 
+## Permissions
+
+Claude Code will prompt you for permission the first time it tries to run `ty-find`. To avoid repeated prompts, add a Bash permission rule in your project's `.claude/settings.json`:
+
+```json
+{
+  "permissions": {
+    "allow": [
+      "Bash(ty-find:*)"
+    ]
+  }
+}
+```
+
+This allows Claude Code to run any `ty-find` command without asking each time.
+
 ## Why the strong language?
 
 Claude Code's system prompt tells it to use its built-in Grep tool for searching code. This is a sensible default — Grep works everywhere and requires no setup.

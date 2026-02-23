@@ -1,5 +1,4 @@
 use anyhow::Result;
-use std::fs;
 
 #[allow(dead_code)]
 pub struct SymbolFinder {
@@ -9,8 +8,8 @@ pub struct SymbolFinder {
 
 #[allow(dead_code)]
 impl SymbolFinder {
-    pub fn new(file_path: &str) -> Result<Self> {
-        let content = fs::read_to_string(file_path)?;
+    pub async fn new(file_path: &str) -> Result<Self> {
+        let content = tokio::fs::read_to_string(file_path).await?;
         let lines: Vec<String> = content.lines().map(String::from).collect();
 
         Ok(Self { content, lines })
@@ -68,15 +67,15 @@ mod tests {
     use std::io::Write;
     use tempfile::NamedTempFile;
 
-    #[test]
-    fn test_symbol_finder() {
+    #[tokio::test]
+    async fn test_symbol_finder() {
         let mut temp_file = NamedTempFile::new().unwrap();
         writeln!(temp_file, "def test_function():").unwrap();
         writeln!(temp_file, "    return test_function()").unwrap();
         writeln!(temp_file).unwrap();
         writeln!(temp_file, "result = test_function()").unwrap();
 
-        let finder = SymbolFinder::new(temp_file.path().to_str().unwrap()).unwrap();
+        let finder = SymbolFinder::new(temp_file.path().to_str().unwrap()).await.unwrap();
         let positions = finder.find_symbol_positions("test_function");
 
         assert_eq!(positions.len(), 3);
@@ -85,65 +84,65 @@ mod tests {
         assert_eq!(positions[2], (3, 9));
     }
 
-    #[test]
-    fn test_symbol_not_found() {
+    #[tokio::test]
+    async fn test_symbol_not_found() {
         let mut temp_file = NamedTempFile::new().unwrap();
         writeln!(temp_file, "def foo():").unwrap();
 
-        let finder = SymbolFinder::new(temp_file.path().to_str().unwrap()).unwrap();
+        let finder = SymbolFinder::new(temp_file.path().to_str().unwrap()).await.unwrap();
         let positions = finder.find_symbol_positions("bar");
         assert!(positions.is_empty());
     }
 
-    #[test]
-    fn test_empty_file() {
+    #[tokio::test]
+    async fn test_empty_file() {
         let temp_file = NamedTempFile::new().unwrap();
 
-        let finder = SymbolFinder::new(temp_file.path().to_str().unwrap()).unwrap();
+        let finder = SymbolFinder::new(temp_file.path().to_str().unwrap()).await.unwrap();
         let positions = finder.find_symbol_positions("anything");
         assert!(positions.is_empty());
     }
 
-    #[test]
-    fn test_symbol_at_line_start() {
+    #[tokio::test]
+    async fn test_symbol_at_line_start() {
         let mut temp_file = NamedTempFile::new().unwrap();
         writeln!(temp_file, "foo = 1").unwrap();
 
-        let finder = SymbolFinder::new(temp_file.path().to_str().unwrap()).unwrap();
+        let finder = SymbolFinder::new(temp_file.path().to_str().unwrap()).await.unwrap();
         let positions = finder.find_symbol_positions("foo");
         assert_eq!(positions.len(), 1);
         assert_eq!(positions[0], (0, 0));
     }
 
-    #[test]
-    fn test_symbol_at_line_end() {
+    #[tokio::test]
+    async fn test_symbol_at_line_end() {
         let mut temp_file = NamedTempFile::new().unwrap();
         write!(temp_file, "x = foo").unwrap();
 
-        let finder = SymbolFinder::new(temp_file.path().to_str().unwrap()).unwrap();
+        let finder = SymbolFinder::new(temp_file.path().to_str().unwrap()).await.unwrap();
         let positions = finder.find_symbol_positions("foo");
         assert_eq!(positions.len(), 1);
         assert_eq!(positions[0], (0, 4));
     }
 
-    #[test]
-    fn test_partial_match_rejected() {
+    #[tokio::test]
+    async fn test_partial_match_rejected() {
         let mut temp_file = NamedTempFile::new().unwrap();
         writeln!(temp_file, "foobar = 1").unwrap();
         writeln!(temp_file, "bar_foo = 2").unwrap();
 
-        let finder = SymbolFinder::new(temp_file.path().to_str().unwrap()).unwrap();
+        let finder = SymbolFinder::new(temp_file.path().to_str().unwrap()).await.unwrap();
         let positions = finder.find_symbol_positions("foo");
         assert!(positions.is_empty());
     }
 
-    #[test]
-    fn test_get_line() {
+    #[tokio::test]
+    async fn test_get_line() {
         let mut temp_file = NamedTempFile::new().unwrap();
         writeln!(temp_file, "line zero").unwrap();
         writeln!(temp_file, "line one").unwrap();
 
-        let finder = SymbolFinder::new(temp_file.path().to_str().unwrap()).unwrap();
+        let finder = SymbolFinder::new(temp_file.path().to_str().unwrap()).await.unwrap();
         assert_eq!(finder.get_line(0), Some("line zero"));
         assert_eq!(finder.get_line(1), Some("line one"));
         assert_eq!(finder.get_line(2), None);

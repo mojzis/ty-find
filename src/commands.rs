@@ -76,7 +76,7 @@ async fn resolve_symbols_to_queries(
 
     if let Some(file) = file {
         let file_str = file.to_string_lossy();
-        let finder = SymbolFinder::new(&file_str)?;
+        let finder = SymbolFinder::new(&file_str).await?;
 
         for symbol in symbols {
             let positions = finder.find_symbol_positions(symbol);
@@ -99,8 +99,8 @@ async fn resolve_symbols_to_queries(
             }
         }
     } else {
+        let mut client = DaemonClient::connect_with_timeout(timeout).await?;
         for symbol in symbols {
-            let mut client = DaemonClient::connect_with_timeout(timeout).await?;
             let result = client
                 .execute_workspace_symbols_exact(workspace_root.to_path_buf(), symbol.clone())
                 .await?;
@@ -301,7 +301,7 @@ pub async fn handle_find_command(
     if let Some(file) = file {
         let client = TyLspClient::new(&workspace_root.to_string_lossy()).await?;
         let file_str = file.to_string_lossy();
-        let finder = SymbolFinder::new(&file_str)?;
+        let finder = SymbolFinder::new(&file_str).await?;
         client.open_document(&file_str).await?;
 
         for symbol in symbols {
@@ -354,8 +354,7 @@ async fn find_symbol_via_workspace(
         return Ok(result.symbols.into_iter().map(|s| s.location).collect());
     }
 
-    // Fallback: fuzzy search (no exact_name filter)
-    let mut client = DaemonClient::connect_with_timeout(timeout).await?;
+    // Fallback: fuzzy search (no exact_name filter), reuse the same connection
     let result =
         client.execute_workspace_symbols(workspace_root.to_path_buf(), symbol.to_string()).await?;
     Ok(result.symbols.into_iter().map(|s| s.location).collect())
@@ -406,9 +405,10 @@ async fn inspect_single_symbol(
     include_references: bool,
 ) -> Result<InspectResult> {
     // Step 1: Find the symbol's location(s)
-    let (definition_file, def_line, def_col, all_definitions) = if let Some(file) = file {
+    let (mut client, definition_file, def_line, def_col, all_definitions) = if let Some(file) = file
+    {
         let file_str = file.to_string_lossy();
-        let finder = SymbolFinder::new(&file_str)?;
+        let finder = SymbolFinder::new(&file_str).await?;
         let positions = finder.find_symbol_positions(symbol);
 
         if positions.is_empty() {
@@ -422,9 +422,9 @@ async fn inspect_single_symbol(
 
         let (first_line, first_col) = positions[0];
 
+        let mut client = DaemonClient::connect_with_timeout(timeout).await?;
         let mut all_definitions = Vec::new();
         for (line, column) in &positions {
-            let mut client = DaemonClient::connect_with_timeout(timeout).await?;
             let result = client
                 .execute_definition(
                     workspace_root.to_path_buf(),
@@ -439,7 +439,7 @@ async fn inspect_single_symbol(
         }
         dedup_locations(&mut all_definitions);
 
-        (file_str.to_string(), first_line, first_col, all_definitions)
+        (client, file_str.to_string(), first_line, first_col, all_definitions)
     } else {
         // Use exact_name filter to avoid transferring thousands of fuzzy matches
         let mut client = DaemonClient::connect_with_timeout(timeout).await?;
@@ -464,11 +464,10 @@ async fn inspect_single_symbol(
         let def_col = first.location.range.start.character;
         let all_definitions: Vec<Location> = matched.iter().map(|s| s.location.clone()).collect();
 
-        (file_path.to_string(), def_line, def_col, all_definitions)
+        (client, file_path.to_string(), def_line, def_col, all_definitions)
     };
 
     // Steps 2 & 3: Get hover info (and optionally references) via single daemon call
-    let mut client = DaemonClient::connect_with_timeout(timeout).await?;
     let inspect = client
         .execute_inspect(
             workspace_root.to_path_buf(),

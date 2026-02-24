@@ -131,8 +131,8 @@ Before marking any task as complete, run the review process:
    - `cargo fmt --all -- --check`
    - `cargo clippy --all-targets --all-features -- -D warnings`
 
-2. **Deep review** (use the rust-review skill for significant changes):
-   - The `rust-review` skill runs automatically when finishing work or can be invoked with `/rust-review`
+2. **Deep review** (REQUIRED for all significant changes):
+   - You MUST run the `rust-review` skill (`/rust-review`) before marking work as complete or pushing code
    - Address all 🔴 Must Fix items before completing
    - Address 🟡 Should Fix items unless there's a documented reason not to
 

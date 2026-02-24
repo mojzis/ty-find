@@ -20,19 +20,11 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.11'
-
-      - name: Install maturin
-        run: pip install maturin
-
       - name: Build wheels
-        run: maturin build --release --strip
+        uses: PyO3/maturin-action@v1
+        with:
+          args: --release --strip
+          manylinux: 2_28
 
       - name: Upload wheels
         uses: actions/upload-artifact@v6

@@ -184,6 +184,66 @@ impl OutputFormatter {
         }
     }
 
+    /// Format results for one or more symbol reference queries, grouped by symbol.
+    pub fn format_references_results(&self, results: &[(String, Vec<Location>)]) -> String {
+        if results.len() == 1 {
+            let (symbol, locations) = &results[0];
+            let query_info = format!("'{symbol}'");
+            return self.format_references(locations, &query_info);
+        }
+
+        match self.format {
+            OutputFormat::Human => {
+                let mut output = String::new();
+                for (symbol, locations) in results {
+                    let _ = writeln!(output, "=== {symbol} ===");
+                    if locations.is_empty() {
+                        output.push_str("No references found.\n");
+                    } else {
+                        output.push_str(&self.format_references(locations, &format!("'{symbol}'")));
+                    }
+                    output.push('\n');
+                }
+                output.trim_end().to_string()
+            }
+            OutputFormat::Json => {
+                let grouped: Vec<serde_json::Value> = results
+                    .iter()
+                    .map(|(symbol, locations)| {
+                        serde_json::json!({
+                            "symbol": symbol,
+                            "references": locations,
+                        })
+                    })
+                    .collect();
+                serde_json::to_string_pretty(&grouped).unwrap_or_else(|_| "[]".to_string())
+            }
+            OutputFormat::Csv => {
+                let mut output = String::from("symbol,file,line,column\n");
+                for (symbol, locations) in results {
+                    for location in locations {
+                        let file_path = self.uri_to_path(&location.uri);
+                        let line = location.range.start.line + 1;
+                        let column = location.range.start.character + 1;
+                        let _ = writeln!(output, "{symbol},{file_path},{line},{column}");
+                    }
+                }
+                output
+            }
+            OutputFormat::Paths => {
+                let mut paths: Vec<String> = results
+                    .iter()
+                    .flat_map(|(_, locations)| {
+                        locations.iter().map(|loc| self.uri_to_path(&loc.uri))
+                    })
+                    .collect();
+                paths.sort();
+                paths.dedup();
+                paths.join("\n")
+            }
+        }
+    }
+
     pub fn format_hover(&self, hover: &Hover, query_info: &str) -> String {
         match self.format {
             OutputFormat::Human => {

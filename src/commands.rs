@@ -6,6 +6,7 @@ use std::time::Duration;
 use crate::cli::args::DaemonCommands;
 use crate::cli::output::{InspectEntry, OutputFormatter};
 use crate::daemon::client::{ensure_daemon_running, spawn_daemon, DaemonClient};
+use crate::daemon::protocol::BatchReferencesQuery;
 use crate::daemon::server::DaemonServer;
 use crate::lsp::client::TyLspClient;
 use crate::lsp::protocol::Location;
@@ -38,30 +39,252 @@ pub async fn handle_definition_command(
     Ok(())
 }
 
+/// Try to parse a string as `file:line:col`. Returns `None` if it doesn't match.
+fn parse_file_position(input: &str) -> Option<(String, u32, u32)> {
+    let last_colon = input.rfind(':')?;
+    let col: u32 = input[last_colon + 1..].parse().ok()?;
+    let rest = &input[..last_colon];
+    let second_colon = rest.rfind(':')?;
+    let line: u32 = rest[second_colon + 1..].parse().ok()?;
+    let file = &rest[..second_colon];
+    if file.is_empty() {
+        return None;
+    }
+    Some((file.to_string(), line, col))
+}
+
+/// A resolved reference query ready to send to the daemon.
+struct ResolvedQuery {
+    /// Display label for output grouping
+    label: String,
+    /// File path for the LSP references request
+    file: String,
+    /// 0-based line
+    line: u32,
+    /// 0-based column
+    column: u32,
+}
+
+/// Resolve symbol names to LSP positions via file search or workspace symbols.
+async fn resolve_symbols_to_queries(
+    symbols: &[String],
+    file: Option<&Path>,
+    workspace_root: &Path,
+    timeout: Duration,
+) -> Result<Vec<ResolvedQuery>> {
+    let mut resolved = Vec::new();
+
+    if let Some(file) = file {
+        let file_str = file.to_string_lossy();
+        let finder = SymbolFinder::new(&file_str).await?;
+
+        for symbol in symbols {
+            let positions = finder.find_symbol_positions(symbol);
+            if positions.is_empty() {
+                resolved.push(ResolvedQuery {
+                    label: symbol.clone(),
+                    file: String::new(),
+                    line: 0,
+                    column: 0,
+                });
+            } else {
+                for &(ln, col) in &positions {
+                    resolved.push(ResolvedQuery {
+                        label: symbol.clone(),
+                        file: file_str.to_string(),
+                        line: ln,
+                        column: col,
+                    });
+                }
+            }
+        }
+    } else {
+        let mut client = DaemonClient::connect_with_timeout(timeout).await?;
+        for symbol in symbols {
+            let result = client
+                .execute_workspace_symbols_exact(workspace_root.to_path_buf(), symbol.clone())
+                .await?;
+
+            if result.symbols.is_empty() {
+                resolved.push(ResolvedQuery {
+                    label: symbol.clone(),
+                    file: String::new(),
+                    line: 0,
+                    column: 0,
+                });
+            } else {
+                for sym_info in &result.symbols {
+                    let file_path = sym_info
+                        .location
+                        .uri
+                        .strip_prefix("file://")
+                        .unwrap_or(&sym_info.location.uri)
+                        .to_string();
+                    resolved.push(ResolvedQuery {
+                        label: symbol.clone(),
+                        file: file_path,
+                        line: sym_info.location.range.start.line,
+                        column: sym_info.location.range.start.character,
+                    });
+                }
+            }
+        }
+    }
+
+    Ok(resolved)
+}
+
+/// Send resolved queries to the daemon in a single batch RPC and merge results by label.
+async fn execute_references_batch(
+    resolved: Vec<ResolvedQuery>,
+    workspace_root: &Path,
+    include_declaration: bool,
+    timeout: Duration,
+) -> Result<Vec<(String, Vec<Location>)>> {
+    // Split into queries the daemon can handle (have a file) and empty ones
+    let mut empty_labels: Vec<String> = Vec::new();
+    let mut batch_queries: Vec<BatchReferencesQuery> = Vec::new();
+
+    for q in resolved {
+        if q.file.is_empty() {
+            empty_labels.push(q.label);
+        } else {
+            batch_queries.push(BatchReferencesQuery {
+                label: q.label,
+                file: PathBuf::from(q.file),
+                line: q.line,
+                column: q.column,
+            });
+        }
+    }
+
+    let mut merged: Vec<(String, Vec<Location>)> = Vec::new();
+
+    // Add empty results for unresolved symbols
+    for label in empty_labels {
+        if !merged.iter().any(|(s, _)| s == &label) {
+            merged.push((label, Vec::new()));
+        }
+    }
+
+    // Send the batch to the daemon in one call
+    if !batch_queries.is_empty() {
+        let mut client = DaemonClient::connect_with_timeout(timeout).await?;
+        let result = client
+            .execute_batch_references(
+                workspace_root.to_path_buf(),
+                batch_queries,
+                include_declaration,
+            )
+            .await?;
+
+        for entry in result.entries {
+            if let Some(existing) = merged.iter_mut().find(|(s, _)| s == &entry.label) {
+                existing.1.extend(entry.locations);
+            } else {
+                merged.push((entry.label, entry.locations));
+            }
+        }
+    }
+
+    for (_, locations) in &mut merged {
+        dedup_locations(locations);
+    }
+    Ok(merged)
+}
+
+/// Collect query strings from CLI args and optionally stdin.
+fn collect_queries(queries: &[String], read_stdin: bool) -> Result<Vec<String>> {
+    let mut all = queries.to_vec();
+    if read_stdin {
+        let stdin = std::io::stdin();
+        for line in std::io::BufRead::lines(stdin.lock()) {
+            let trimmed = line?.trim().to_string();
+            if !trimmed.is_empty() {
+                all.push(trimmed);
+            }
+        }
+    }
+    Ok(all)
+}
+
+/// Classify queries as positions or symbols and resolve to LSP coordinates.
+async fn classify_and_resolve(
+    all_queries: &[String],
+    file: Option<&Path>,
+    workspace_root: &Path,
+    timeout: Duration,
+) -> Result<Vec<ResolvedQuery>> {
+    let mut resolved: Vec<ResolvedQuery> = Vec::new();
+    let mut symbols: Vec<String> = Vec::new();
+
+    for q in all_queries {
+        if let Some((f, l, c)) = parse_file_position(q) {
+            resolved.push(ResolvedQuery {
+                label: q.clone(),
+                file: f,
+                line: l.saturating_sub(1),
+                column: c.saturating_sub(1),
+            });
+        } else {
+            symbols.push(q.clone());
+        }
+    }
+
+    if !symbols.is_empty() {
+        resolved.extend(resolve_symbols_to_queries(&symbols, file, workspace_root, timeout).await?);
+    }
+
+    Ok(resolved)
+}
+
+#[allow(clippy::too_many_arguments)]
 pub async fn handle_references_command(
     workspace_root: &Path,
-    file: &Path,
-    line: u32,
-    column: u32,
+    file: Option<&Path>,
+    queries: &[String],
+    position: Option<(u32, u32)>,
+    read_stdin: bool,
     include_declaration: bool,
     formatter: &OutputFormatter,
     timeout: Duration,
 ) -> Result<()> {
     ensure_daemon_running().await?;
-    let mut client = DaemonClient::connect_with_timeout(timeout).await?;
 
-    let result = client
-        .execute_references(
-            workspace_root.to_path_buf(),
-            file.to_string_lossy().to_string(),
-            line.saturating_sub(1),
-            column.saturating_sub(1),
-            include_declaration,
-        )
-        .await?;
+    // Explicit --file -l -c: single position mode
+    if let (Some(file), Some((line, col))) = (file, position) {
+        let mut client = DaemonClient::connect_with_timeout(timeout).await?;
+        let result = client
+            .execute_references(
+                workspace_root.to_path_buf(),
+                file.to_string_lossy().to_string(),
+                line.saturating_sub(1),
+                col.saturating_sub(1),
+                include_declaration,
+            )
+            .await?;
 
-    let query_info = format!("{}:{line}:{column}", file.display());
-    println!("{}", formatter.format_references(&result.locations, &query_info));
+        let query_info = format!("{}:{line}:{col}", file.display());
+        println!("{}", formatter.format_references(&result.locations, &query_info));
+        return Ok(());
+    }
+
+    let all_queries = collect_queries(queries, read_stdin)?;
+    if all_queries.is_empty() {
+        anyhow::bail!(
+            "Provide symbol names, file:line:col positions, or --file with --line/--column.\n\
+             Position mode:  ty-find references -f file.py -l 10 -c 5\n\
+             Symbol mode:    ty-find references my_func my_class\n\
+             Mixed/pipe:     ty-find references file.py:10:5 my_func\n\
+             Stdin:          ... | ty-find references --stdin"
+        );
+    }
+
+    let resolved = classify_and_resolve(&all_queries, file, workspace_root, timeout).await?;
+    let merged =
+        execute_references_batch(resolved, workspace_root, include_declaration, timeout).await?;
+
+    println!("{}", formatter.format_references_results(&merged));
 
     Ok(())
 }
@@ -78,7 +301,7 @@ pub async fn handle_find_command(
     if let Some(file) = file {
         let client = TyLspClient::new(&workspace_root.to_string_lossy()).await?;
         let file_str = file.to_string_lossy();
-        let finder = SymbolFinder::new(&file_str)?;
+        let finder = SymbolFinder::new(&file_str).await?;
         client.open_document(&file_str).await?;
 
         for symbol in symbols {
@@ -131,8 +354,7 @@ async fn find_symbol_via_workspace(
         return Ok(result.symbols.into_iter().map(|s| s.location).collect());
     }
 
-    // Fallback: fuzzy search (no exact_name filter)
-    let mut client = DaemonClient::connect_with_timeout(timeout).await?;
+    // Fallback: fuzzy search (no exact_name filter), reuse the same connection
     let result =
         client.execute_workspace_symbols(workspace_root.to_path_buf(), symbol.to_string()).await?;
     Ok(result.symbols.into_iter().map(|s| s.location).collect())
@@ -183,9 +405,10 @@ async fn inspect_single_symbol(
     include_references: bool,
 ) -> Result<InspectResult> {
     // Step 1: Find the symbol's location(s)
-    let (definition_file, def_line, def_col, all_definitions) = if let Some(file) = file {
+    let (mut client, definition_file, def_line, def_col, all_definitions) = if let Some(file) = file
+    {
         let file_str = file.to_string_lossy();
-        let finder = SymbolFinder::new(&file_str)?;
+        let finder = SymbolFinder::new(&file_str).await?;
         let positions = finder.find_symbol_positions(symbol);
 
         if positions.is_empty() {
@@ -199,9 +422,9 @@ async fn inspect_single_symbol(
 
         let (first_line, first_col) = positions[0];
 
+        let mut client = DaemonClient::connect_with_timeout(timeout).await?;
         let mut all_definitions = Vec::new();
         for (line, column) in &positions {
-            let mut client = DaemonClient::connect_with_timeout(timeout).await?;
             let result = client
                 .execute_definition(
                     workspace_root.to_path_buf(),
@@ -216,7 +439,7 @@ async fn inspect_single_symbol(
         }
         dedup_locations(&mut all_definitions);
 
-        (file_str.to_string(), first_line, first_col, all_definitions)
+        (client, file_str.to_string(), first_line, first_col, all_definitions)
     } else {
         // Use exact_name filter to avoid transferring thousands of fuzzy matches
         let mut client = DaemonClient::connect_with_timeout(timeout).await?;
@@ -241,11 +464,10 @@ async fn inspect_single_symbol(
         let def_col = first.location.range.start.character;
         let all_definitions: Vec<Location> = matched.iter().map(|s| s.location.clone()).collect();
 
-        (file_path.to_string(), def_line, def_col, all_definitions)
+        (client, file_path.to_string(), def_line, def_col, all_definitions)
     };
 
     // Steps 2 & 3: Get hover info (and optionally references) via single daemon call
-    let mut client = DaemonClient::connect_with_timeout(timeout).await?;
     let inspect = client
         .execute_inspect(
             workspace_root.to_path_buf(),
@@ -487,4 +709,40 @@ pub async fn handle_daemon_command(command: DaemonCommands) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_file_position_valid() {
+        assert_eq!(parse_file_position("file.py:10:5"), Some(("file.py".to_string(), 10, 5)));
+        assert_eq!(
+            parse_file_position("src/foo/bar.py:1:1"),
+            Some(("src/foo/bar.py".to_string(), 1, 1))
+        );
+        assert_eq!(
+            parse_file_position("/absolute/path.py:100:20"),
+            Some(("/absolute/path.py".to_string(), 100, 20))
+        );
+    }
+
+    #[test]
+    fn test_parse_file_position_symbol_names() {
+        assert_eq!(parse_file_position("my_function"), None);
+        assert_eq!(parse_file_position("MyClass"), None);
+        assert_eq!(parse_file_position("foo_bar_baz"), None);
+    }
+
+    #[test]
+    fn test_parse_file_position_edge_cases() {
+        // Only one colon
+        assert_eq!(parse_file_position("file.py:10"), None);
+        // Empty file part
+        assert_eq!(parse_file_position(":10:5"), None);
+        // Non-numeric parts
+        assert_eq!(parse_file_position("file.py:abc:5"), None);
+        assert_eq!(parse_file_position("file.py:10:abc"), None);
+    }
 }

@@ -136,16 +136,30 @@ pub enum Commands {
         renaming or removing code to understand the impact.\n\n\
         Examples:\n  \
         ty-find references myfile.py -l 10 -c 5\n  \
-        ty-find references myfile.py -l 10 -c 5 --no-include-declaration"
+        ty-find references my_func my_class\n  \
+        ty-find references file.py:10:5 my_func\n  \
+        ... | ty-find references --stdin"
     )]
     References {
-        file: PathBuf,
+        /// Symbol names or `file:line:col` positions (auto-detected, parallel)
+        #[arg(num_args = 0..)]
+        queries: Vec<String>,
 
+        /// File path (required for position mode, optional for symbol mode)
         #[arg(short, long)]
-        line: u32,
+        file: Option<PathBuf>,
 
-        #[arg(short, long)]
-        column: u32,
+        /// Line number (position mode, requires --file and --column)
+        #[arg(short, long, requires = "file", requires = "column")]
+        line: Option<u32>,
+
+        /// Column number (position mode, requires --file and --line)
+        #[arg(short, long, requires = "file", requires = "line")]
+        column: Option<u32>,
+
+        /// Read queries from stdin (one per line: symbol names or `file:line:col`)
+        #[arg(long)]
+        stdin: bool,
 
         /// Include the declaration in the results
         #[arg(long, default_value_t = true)]

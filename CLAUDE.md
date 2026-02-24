@@ -110,6 +110,11 @@ If formatting fails, fix it with `cargo fmt` and re-run the checks.
 - `SymbolFinder` does text-based symbol matching with whole-word detection
 - `OutputFormatter` supports multiple formats: human, JSON, CSV, paths-only
 
+**Concurrency rule — daemon handles all parallelism**:
+- All multi-query operations (batch references, multi-symbol inspect, etc.) must be batched into a single RPC call and processed by the daemon, **not** parallelized on the CLI client side.
+- The ty LSP server communicates through a single stdin/stdout pipe, so LSP requests are inherently sequential. Spawning parallel client connections only adds connection overhead without concurrency benefit.
+- Use `BatchReferences` (or similar batch RPC methods) to send multiple queries in one call. The daemon processes them sequentially on the shared LSP client and returns merged results.
+
 ### Python Integration Strategy
 The project uses maturin to bridge Rust and Python ecosystems:
 - Rust binary provides performance for LSP communication

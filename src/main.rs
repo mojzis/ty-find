@@ -71,12 +71,14 @@ async fn run(cli: Cli) -> Result<()> {
         Commands::Interactive { file } => {
             commands::handle_interactive_command(&workspace_root, file, &formatter).await?;
         }
-        Commands::References { file, line, column, include_declaration } => {
+        Commands::References { queries, file, line, column, stdin, include_declaration } => {
+            let position = line.zip(column);
             commands::handle_references_command(
                 &workspace_root,
-                &file,
-                line,
-                column,
+                file.as_deref(),
+                &queries,
+                position,
+                stdin,
                 include_declaration,
                 &formatter,
                 timeout,

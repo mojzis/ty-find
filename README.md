@@ -59,7 +59,26 @@ cd ty-find
 cargo install --path .
 ```
 
-**Note:** Windows is not currently supported. PRs welcome!
+**Note:** Windows support is limited — see [Platform Support](#platform-support) below.
+
+## Platform Support
+
+ty-find builds and installs on all platforms, but the background daemon requires Unix domain sockets and is only available on Unix systems (Linux, macOS).
+
+| Command | Linux / macOS | Windows |
+|---------|:---:|:---:|
+| `definition` | Yes | Yes |
+| `find --file` | Yes | Yes |
+| `interactive` | Yes | Yes |
+| `find` (no file) | Yes | No |
+| `inspect` | Yes | No |
+| `hover` | Yes | No |
+| `references` | Yes | No |
+| `workspace-symbols` | Yes | No |
+| `document-symbols` | Yes | No |
+| `daemon` | Yes | No |
+
+On Windows, daemon-dependent commands exit with a clear error message. Adding the package as a dependency won't break your project on Windows — it just won't have full functionality. PRs for Windows named-pipe support are welcome!
 
 ## Usage
 

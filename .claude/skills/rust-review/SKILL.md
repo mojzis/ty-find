@@ -1,6 +1,6 @@
 ---
 name: rust-review
-forked_context: true
+context: fork
 description: Deep Rust code quality review. Auto-invoke when finishing a task, before marking work complete, when the user asks to review code, or when preparing a PR. Covers error handling, async correctness, duplicated logic, test quality, performance patterns, and idiomatic Rust beyond what clippy catches.
 ---
 

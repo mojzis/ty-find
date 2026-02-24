@@ -3,10 +3,14 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+#[cfg(unix)]
 use crate::cli::args::DaemonCommands;
 use crate::cli::output::{InspectEntry, OutputFormatter};
+#[cfg(unix)]
 use crate::daemon::client::{ensure_daemon_running, spawn_daemon, DaemonClient};
+#[cfg(unix)]
 use crate::daemon::protocol::BatchReferencesQuery;
+#[cfg(unix)]
 use crate::daemon::server::DaemonServer;
 use crate::lsp::client::TyLspClient;
 use crate::lsp::protocol::Location;
@@ -54,6 +58,7 @@ fn parse_file_position(input: &str) -> Option<(String, u32, u32)> {
 }
 
 /// A resolved reference query ready to send to the daemon.
+#[cfg(unix)]
 struct ResolvedQuery {
     /// Display label for output grouping
     label: String,
@@ -66,6 +71,7 @@ struct ResolvedQuery {
 }
 
 /// Resolve symbol names to LSP positions via file search or workspace symbols.
+#[cfg(unix)]
 async fn resolve_symbols_to_queries(
     symbols: &[String],
     file: Option<&Path>,
@@ -135,6 +141,7 @@ async fn resolve_symbols_to_queries(
 }
 
 /// Send resolved queries to the daemon in a single batch RPC and merge results by label.
+#[cfg(unix)]
 async fn execute_references_batch(
     resolved: Vec<ResolvedQuery>,
     workspace_root: &Path,
@@ -209,6 +216,7 @@ fn collect_queries(queries: &[String], read_stdin: bool) -> Result<Vec<String>> 
 }
 
 /// Classify queries as positions or symbols and resolve to LSP coordinates.
+#[cfg(unix)]
 async fn classify_and_resolve(
     all_queries: &[String],
     file: Option<&Path>,
@@ -238,6 +246,7 @@ async fn classify_and_resolve(
     Ok(resolved)
 }
 
+#[cfg(unix)]
 #[allow(clippy::too_many_arguments)]
 pub async fn handle_references_command(
     workspace_root: &Path,
@@ -289,6 +298,23 @@ pub async fn handle_references_command(
     Ok(())
 }
 
+#[cfg(not(unix))]
+#[allow(clippy::too_many_arguments)]
+pub async fn handle_references_command(
+    _workspace_root: &Path,
+    _file: Option<&Path>,
+    _queries: &[String],
+    _position: Option<(u32, u32)>,
+    _read_stdin: bool,
+    _include_declaration: bool,
+    _formatter: &OutputFormatter,
+    _timeout: Duration,
+) -> Result<()> {
+    anyhow::bail!(
+        "The 'references' command requires the background daemon, which is only supported on Unix systems"
+    )
+}
+
 pub async fn handle_find_command(
     workspace_root: &Path,
     file: Option<&Path>,
@@ -323,9 +349,20 @@ pub async fn handle_find_command(
             results.push((symbol.clone(), all_locations));
         }
     } else {
-        for symbol in symbols {
-            let locations = find_symbol_via_workspace(workspace_root, symbol, timeout).await?;
-            results.push((symbol.clone(), locations));
+        #[cfg(not(unix))]
+        {
+            let _ = (workspace_root, symbols, timeout);
+            anyhow::bail!(
+                "Finding symbols without --file requires the background daemon, which is only \
+                 supported on Unix systems. Use --file to search within a specific file instead."
+            );
+        }
+        #[cfg(unix)]
+        {
+            for symbol in symbols {
+                let locations = find_symbol_via_workspace(workspace_root, symbol, timeout).await?;
+                results.push((symbol.clone(), locations));
+            }
         }
     }
 
@@ -335,6 +372,7 @@ pub async fn handle_find_command(
 }
 
 /// Find a symbol's location(s) using workspace symbols search.
+#[cfg(unix)]
 async fn find_symbol_via_workspace(
     workspace_root: &Path,
     symbol: &str,
@@ -360,6 +398,7 @@ async fn find_symbol_via_workspace(
     Ok(result.symbols.into_iter().map(|s| s.location).collect())
 }
 
+#[cfg(unix)]
 pub async fn handle_inspect_command(
     workspace_root: &Path,
     file: Option<&Path>,
@@ -390,6 +429,21 @@ pub async fn handle_inspect_command(
     Ok(())
 }
 
+#[cfg(not(unix))]
+pub async fn handle_inspect_command(
+    _workspace_root: &Path,
+    _file: Option<&Path>,
+    _symbols: &[String],
+    _formatter: &OutputFormatter,
+    _timeout: Duration,
+    _include_references: bool,
+) -> Result<()> {
+    anyhow::bail!(
+        "The 'inspect' command requires the background daemon, which is only supported on Unix systems"
+    )
+}
+
+#[cfg(unix)]
 struct InspectResult {
     symbol: String,
     definitions: Vec<Location>,
@@ -397,6 +451,7 @@ struct InspectResult {
     references: Vec<Location>,
 }
 
+#[cfg(unix)]
 async fn inspect_single_symbol(
     workspace_root: &Path,
     file: Option<&Path>,
@@ -519,12 +574,17 @@ pub async fn handle_interactive_command(
                 let file = PathBuf::from(parts[1]);
                 let symbols: Vec<String> = parts[2..].iter().map(|s| (*s).to_string()).collect();
 
+                #[cfg(unix)]
+                let find_timeout = crate::daemon::client::DEFAULT_TIMEOUT;
+                #[cfg(not(unix))]
+                let find_timeout = Duration::from_secs(30);
+
                 if let Err(e) = handle_find_command(
                     workspace_root,
                     Some(&file),
                     &symbols,
                     formatter,
-                    crate::daemon::client::DEFAULT_TIMEOUT,
+                    find_timeout,
                 )
                 .await
                 {
@@ -566,6 +626,7 @@ pub async fn handle_interactive_command(
     Ok(())
 }
 
+#[cfg(unix)]
 pub async fn handle_hover_command(
     workspace_root: &Path,
     file: &Path,
@@ -598,6 +659,21 @@ pub async fn handle_hover_command(
     Ok(())
 }
 
+#[cfg(not(unix))]
+pub async fn handle_hover_command(
+    _workspace_root: &Path,
+    _file: &Path,
+    _line: u32,
+    _column: u32,
+    _formatter: &OutputFormatter,
+    _timeout: Duration,
+) -> Result<()> {
+    anyhow::bail!(
+        "The 'hover' command requires the background daemon, which is only supported on Unix systems"
+    )
+}
+
+#[cfg(unix)]
 pub async fn handle_workspace_symbols_command(
     workspace_root: &Path,
     query: &str,
@@ -620,6 +696,19 @@ pub async fn handle_workspace_symbols_command(
     Ok(())
 }
 
+#[cfg(not(unix))]
+pub async fn handle_workspace_symbols_command(
+    _workspace_root: &Path,
+    _query: &str,
+    _formatter: &OutputFormatter,
+    _timeout: Duration,
+) -> Result<()> {
+    anyhow::bail!(
+        "The 'workspace-symbols' command requires the background daemon, which is only supported on Unix systems"
+    )
+}
+
+#[cfg(unix)]
 pub async fn handle_document_symbols_command(
     workspace_root: &Path,
     file: &Path,
@@ -643,6 +732,19 @@ pub async fn handle_document_symbols_command(
     Ok(())
 }
 
+#[cfg(not(unix))]
+pub async fn handle_document_symbols_command(
+    _workspace_root: &Path,
+    _file: &Path,
+    _formatter: &OutputFormatter,
+    _timeout: Duration,
+) -> Result<()> {
+    anyhow::bail!(
+        "The 'document-symbols' command requires the background daemon, which is only supported on Unix systems"
+    )
+}
+
+#[cfg(unix)]
 pub async fn handle_daemon_command(command: DaemonCommands) -> Result<()> {
     match command {
         DaemonCommands::Start { foreground } => {

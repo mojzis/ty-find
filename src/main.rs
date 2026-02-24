@@ -5,13 +5,17 @@ use std::time::Duration;
 
 mod cli;
 mod commands;
+#[cfg(unix)]
 mod daemon;
 mod lsp;
 mod workspace;
 
 use cli::args::{Cli, Commands};
 use cli::output::OutputFormatter;
+#[cfg(unix)]
 use daemon::client::DEFAULT_TIMEOUT;
+#[cfg(not(unix))]
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 use workspace::detection::WorkspaceDetector;
 
 #[tokio::main]
@@ -121,7 +125,15 @@ async fn run(cli: Cli) -> Result<()> {
             .await?;
         }
         Commands::Daemon { command } => {
-            commands::handle_daemon_command(command).await?;
+            #[cfg(unix)]
+            {
+                commands::handle_daemon_command(command).await?;
+            }
+            #[cfg(not(unix))]
+            {
+                let _ = command;
+                anyhow::bail!("Daemon commands are only supported on Unix systems");
+            }
         }
         Commands::GenerateDocs { output_dir } => {
             let cmd = Cli::command();

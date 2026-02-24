@@ -1,6 +1,6 @@
 # references
 
-Find all references to a symbol (by position, by name, or piped from stdin)
+Find every place a symbol is used across the codebase. Useful before renaming or removing code to understand the impact.
 
 ## Usage
 

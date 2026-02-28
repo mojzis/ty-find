@@ -46,27 +46,6 @@ fn require_ty() {
 }
 
 #[tokio::test]
-async fn test_definition_command() {
-    require_ty();
-
-    // Go to definition of `hello_world()` call on line 18
-    let mut cmd = cargo_bin_cmd!("tyf");
-    cmd.arg("--workspace")
-        .arg(workspace_root())
-        .arg("definition")
-        .arg(fixture_path())
-        .arg("--line")
-        .arg("18")
-        .arg("--column")
-        .arg("14");
-
-    let output = cmd.output().expect("failed to run tyf");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(output.status.success(), "command failed: {stdout}");
-    assert!(predicate::str::contains("hello_world").eval(&stdout));
-}
-
-#[tokio::test]
 async fn test_find_command() {
     require_ty();
 
@@ -89,18 +68,16 @@ async fn test_find_command() {
 async fn test_json_output() {
     require_ty();
 
-    // Go to definition of `calculate_sum()` call on line 19, with JSON output
+    // Find `calculate_sum` with JSON output
     let mut cmd = cargo_bin_cmd!("tyf");
     cmd.arg("--workspace")
         .arg(workspace_root())
         .arg("--format")
         .arg("json")
-        .arg("definition")
-        .arg(fixture_path())
-        .arg("--line")
-        .arg("19")
-        .arg("--column")
-        .arg("13");
+        .arg("find")
+        .arg("calculate_sum")
+        .arg("--file")
+        .arg(fixture_path());
 
     let output = cmd.output().expect("failed to run tyf");
     let stdout = String::from_utf8_lossy(&output.stdout);

@@ -53,27 +53,6 @@ fn find_name_column(file_path: &str, line_0: u32, name: &str) -> Option<u32> {
     }
 }
 
-pub async fn handle_definition_command(
-    workspace_root: &Path,
-    file: &Path,
-    line: u32,
-    column: u32,
-    formatter: &OutputFormatter,
-) -> Result<()> {
-    let client = TyLspClient::new(&workspace_root.to_string_lossy()).await?;
-
-    let file_str = file.to_string_lossy();
-    client.open_document(&file_str).await?;
-
-    let locations =
-        client.goto_definition(&file_str, line.saturating_sub(1), column.saturating_sub(1)).await?;
-
-    let query_info = format!("{}:{line}:{column}", file.display());
-    println!("{}", formatter.format_definitions(&locations, &query_info));
-
-    Ok(())
-}
-
 /// Try to parse a string as `file:line:col`. Returns `None` if it doesn't match.
 fn parse_file_position(input: &str) -> Option<(String, u32, u32)> {
     let last_colon = input.rfind(':')?;
@@ -355,9 +334,43 @@ pub async fn handle_find_command(
     workspace_root: &Path,
     file: Option<&Path>,
     symbols: &[String],
+    fuzzy: bool,
     formatter: &OutputFormatter,
     timeout: Duration,
 ) -> Result<()> {
+    // --fuzzy mode: use workspace/symbol pure fuzzy query
+    if fuzzy {
+        #[cfg(not(unix))]
+        {
+            let _ = (workspace_root, symbols, timeout);
+            anyhow::bail!(
+                "The --fuzzy flag requires the background daemon, which is only \
+                 supported on Unix systems."
+            );
+        }
+        #[cfg(unix)]
+        {
+            ensure_daemon_running().await?;
+            let mut client = DaemonClient::connect_with_timeout(timeout).await?;
+
+            for symbol in symbols {
+                let result = client
+                    .execute_workspace_symbols(workspace_root.to_path_buf(), symbol.clone())
+                    .await?;
+
+                if result.symbols.is_empty() {
+                    println!("No symbols found matching '{symbol}'");
+                } else {
+                    if symbols.len() > 1 {
+                        println!("=== {symbol} ({} match(es)) ===\n", result.symbols.len());
+                    }
+                    println!("{}", formatter.format_workspace_symbols(&result.symbols));
+                }
+            }
+            return Ok(());
+        }
+    }
+
     let mut results: Vec<(String, Vec<Location>)> = Vec::new();
 
     if let Some(file) = file {
@@ -619,7 +632,7 @@ pub async fn handle_interactive_command(
 ) -> Result<()> {
     use std::io::Write as _;
 
-    let _client = TyLspClient::new(&workspace_root.to_string_lossy()).await?;
+    let client = TyLspClient::new(&workspace_root.to_string_lossy()).await?;
 
     println!("tyf interactive mode");
     println!("Commands: <file>:<line>:<column>, find <file> <symbol>, quit");
@@ -654,6 +667,7 @@ pub async fn handle_interactive_command(
                     workspace_root,
                     Some(&file),
                     &symbols,
+                    false,
                     formatter,
                     find_timeout,
                 )
@@ -673,12 +687,18 @@ pub async fn handle_interactive_command(
                 if let (Ok(line), Ok(column)) =
                     (line_part.parse::<u32>(), column_part.parse::<u32>())
                 {
+                    let file_str = file_part;
                     let file = PathBuf::from(file_part);
-                    if let Err(e) =
-                        handle_definition_command(workspace_root, &file, line, column, formatter)
-                            .await
-                    {
-                        eprintln!("Error: {e}");
+                    client.open_document(file_str).await?;
+                    let locations = client
+                        .goto_definition(file_str, line.saturating_sub(1), column.saturating_sub(1))
+                        .await;
+                    match locations {
+                        Ok(locs) => {
+                            let query_info = format!("{}:{line}:{column}", file.display());
+                            println!("{}", formatter.format_definitions(&locs, &query_info));
+                        }
+                        Err(e) => eprintln!("Error: {e}"),
                     }
                 } else {
                     eprintln!("Invalid line or column number");
@@ -695,88 +715,6 @@ pub async fn handle_interactive_command(
 
     println!("Goodbye!");
     Ok(())
-}
-
-#[cfg(unix)]
-pub async fn handle_hover_command(
-    workspace_root: &Path,
-    file: &Path,
-    line: u32,
-    column: u32,
-    formatter: &OutputFormatter,
-    timeout: Duration,
-) -> Result<()> {
-    ensure_daemon_running().await?;
-    let mut client = DaemonClient::connect_with_timeout(timeout).await?;
-
-    let result = client
-        .execute_hover(
-            workspace_root.to_path_buf(),
-            file.to_string_lossy().to_string(),
-            line.saturating_sub(1),
-            column.saturating_sub(1),
-        )
-        .await?;
-
-    if let Some(hover) = result.hover {
-        println!(
-            "{}",
-            formatter.format_hover(&hover, &format!("{}:{line}:{column}", file.display()))
-        );
-    } else {
-        println!("No hover information found at {}:{line}:{column}", file.display());
-    }
-
-    Ok(())
-}
-
-#[cfg(not(unix))]
-pub async fn handle_hover_command(
-    _workspace_root: &Path,
-    _file: &Path,
-    _line: u32,
-    _column: u32,
-    _formatter: &OutputFormatter,
-    _timeout: Duration,
-) -> Result<()> {
-    anyhow::bail!(
-        "The 'type' command requires the background daemon, which is only supported on Unix systems"
-    )
-}
-
-#[cfg(unix)]
-pub async fn handle_workspace_symbols_command(
-    workspace_root: &Path,
-    query: &str,
-    formatter: &OutputFormatter,
-    timeout: Duration,
-) -> Result<()> {
-    ensure_daemon_running().await?;
-    let mut client = DaemonClient::connect_with_timeout(timeout).await?;
-
-    let result =
-        client.execute_workspace_symbols(workspace_root.to_path_buf(), query.to_string()).await?;
-
-    if result.symbols.is_empty() {
-        println!("No symbols found matching '{query}'");
-    } else {
-        println!("Found {} symbol(s) matching '{query}':\n", result.symbols.len());
-        println!("{}", formatter.format_workspace_symbols(&result.symbols));
-    }
-
-    Ok(())
-}
-
-#[cfg(not(unix))]
-pub async fn handle_workspace_symbols_command(
-    _workspace_root: &Path,
-    _query: &str,
-    _formatter: &OutputFormatter,
-    _timeout: Duration,
-) -> Result<()> {
-    anyhow::bail!(
-        "The 'workspace-symbols' command requires the background daemon, which is only supported on Unix systems"
-    )
 }
 
 #[cfg(unix)]

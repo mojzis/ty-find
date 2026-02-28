@@ -178,10 +178,6 @@ fn render_subcommand(cmd: &Command, name: &str) -> String {
 /// Write example usages for a given command.
 fn write_examples(out: &mut String, name: &str, cmd: &Command) {
     match name {
-        "definition" => {
-            let _ = writeln!(out, "# Find definition at a specific location");
-            let _ = writeln!(out, "tyf definition main.py --line 10 --column 5");
-        }
         "find" => {
             let _ = writeln!(out, "# Find a single symbol");
             let _ = writeln!(out, "tyf find calculate_sum");
@@ -191,6 +187,9 @@ fn write_examples(out: &mut String, name: &str, cmd: &Command) {
             let _ = writeln!(out);
             let _ = writeln!(out, "# Find a symbol in a specific file");
             let _ = writeln!(out, "tyf find my_function --file src/module.py");
+            let _ = writeln!(out);
+            let _ = writeln!(out, "# Fuzzy/prefix match");
+            let _ = writeln!(out, "tyf find handle_ --fuzzy");
         }
         "inspect" => {
             let _ = writeln!(out, "# Inspect a single symbol");
@@ -209,17 +208,9 @@ fn write_examples(out: &mut String, name: &str, cmd: &Command) {
             let _ = writeln!(out, "# Start with a file context");
             let _ = writeln!(out, "tyf interactive main.py");
         }
-        "type" => {
-            let _ = writeln!(out, "# Show type information at a location");
-            let _ = writeln!(out, "tyf type main.py --line 10 --column 5");
-        }
         "refs" => {
             let _ = writeln!(out, "# Find all references to a symbol");
             let _ = writeln!(out, "tyf refs main.py --line 10 --column 5");
-        }
-        "workspace-symbols" => {
-            let _ = writeln!(out, "# Search for symbols across the workspace");
-            let _ = writeln!(out, "tyf workspace-symbols --query MyClass");
         }
         "list" => {
             let _ = writeln!(out, "# List all symbols in a file");

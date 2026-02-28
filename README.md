@@ -16,7 +16,6 @@ Run `tyf --help` to see all commands. Run `tyf <cmd> --help` for details.
 - Symbol overview (definition + type + refs): `tyf inspect SymbolName`
 - Find definition: `tyf find SymbolName`
 - All usages before refactoring: `tyf refs SymbolName` or `tyf refs -f file.py -l LINE -c COL`
-- Type info: `tyf type file.py -l LINE -c COL`
 - File outline: `tyf list file.py`
 
 Grep is still appropriate for string literals, config values, TODOs, and non-symbol text.
@@ -67,14 +66,12 @@ ty-find builds and installs on all platforms, but the background daemon requires
 
 | Command | Linux / macOS | Windows |
 |---------|:---:|:---:|
-| `definition` | Yes | Yes |
 | `find --file` | Yes | Yes |
 | `interactive` | Yes | Yes |
 | `find` (no file) | Yes | No |
+| `find --fuzzy` | Yes | No |
 | `inspect` | Yes | No |
-| `type` | Yes | No |
 | `refs` | Yes | No |
-| `workspace-symbols` | Yes | No |
 | `list` | Yes | No |
 | `daemon` | Yes | No |
 
@@ -101,7 +98,7 @@ tyf --format json inspect UserService
 
 ### Find Symbol by Name
 
-Searches the workspace for a symbol's definition. Supports multiple symbols in a single call:
+Searches the workspace for a symbol's definition. Supports multiple symbols in a single call. Use `--fuzzy` for partial/prefix matching with richer output (kind + container):
 
 ```bash
 tyf find calculate_sum
@@ -111,21 +108,9 @@ tyf find calculate_sum multiply divide
 
 # Narrow to a specific file (text-based search + goto_definition)
 tyf find function_name --file myfile.py
-```
 
-### Type (Type Information)
-
-```bash
-tyf type src/main.py --line 45 --column 12
-
-# JSON output for scripting
-tyf --format json type src/main.py -l 45 -c 12 | jq '.result.contents.value'
-```
-
-### Go to Definition
-
-```bash
-tyf definition myfile.py --line 10 --column 5
+# Fuzzy/prefix match (returns symbol kind + container info)
+tyf find handle_ --fuzzy
 ```
 
 ### Find References
@@ -134,14 +119,12 @@ tyf definition myfile.py --line 10 --column 5
 # By position (exact, pipeable from list)
 tyf refs -f myfile.py --line 10 --column 5
 
-# By name (parallel search)
+# By name
 tyf refs my_function MyClass
-```
 
-### Workspace Symbol Search
-
-```bash
-tyf workspace-symbols --query "UserService"
+# Mixed and piped
+tyf refs file.py:10:5 my_func
+... | tyf refs --stdin
 ```
 
 ### Document Outline
@@ -171,8 +154,8 @@ tyf daemon stop     # Stop
 All commands support `--format` (placed before the subcommand): `human` (default), `json`, `csv`, `paths`.
 
 ```bash
-tyf --format json type myfile.py -l 10 -c 5
-tyf --format csv workspace-symbols --query "User"
+tyf --format json inspect MyClass
+tyf --format csv find User --fuzzy
 ```
 
 ## Architecture
@@ -193,7 +176,7 @@ cargo clippy
 cargo fmt --check
 
 # Verbose logging
-RUST_LOG=ty_find=debug cargo run -- type test.py -l 1 -c 1
+RUST_LOG=ty_find=debug cargo run -- find hello_world
 ```
 
 ## Troubleshooting

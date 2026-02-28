@@ -23,7 +23,7 @@ cargo build
 cargo build --release
 
 # Run the tool directly during development
-cargo run -- definition test_example.py --line 1 --column 5
+cargo run -- find hello_world
 
 # Install ty (required for integration tests)
 uv add --dev ty
@@ -51,9 +51,9 @@ maturin build --release
 ### Testing with ty LSP server
 ```bash
 # Requires ty to be installed: uv add --dev ty
-tyf definition test_example.py --line 6 --column 5
 tyf find calculate_sum
 tyf find calculate_sum multiply divide   # multiple symbols in one call
+tyf find handle_ --fuzzy                 # fuzzy/prefix match
 tyf inspect MyClass my_function          # inspect multiple symbols at once
 tyf interactive
 ```
@@ -91,7 +91,7 @@ If formatting fails, fix it with `cargo fmt` and re-run the checks.
 1. **LSP Client (`src/lsp/`)** - JSON-RPC client that communicates with ty's LSP server
 2. **CLI Interface (`src/cli/`)** - Command-line argument parsing and output formatting
 3. **Workspace Detection (`src/workspace/`)** - Python project detection and symbol finding
-4. **Main Application (`src/main.rs`)** - Orchestrates the three main modes: definition, find, interactive
+4. **Main Application (`src/main.rs`)** - Orchestrates the main modes: find, inspect, refs, list, interactive
 
 ### Key Architectural Patterns
 
@@ -105,8 +105,9 @@ If formatting fails, fix it with `cargo fmt` and re-run the checks.
 - `pyproject.toml` uses maturin backend (`bindings = "bin"`) to package the Rust binary as a Python wheel
 
 **Command Processing**:
-- Three main commands: `definition` (find at specific line/column), `find` (search symbol), `interactive` (REPL mode)
-- `find` and `inspect` accept multiple symbols in one call to reduce tool invocations (results grouped by symbol)
+- Main commands: `inspect` (all-in-one), `find` (definitions), `refs` (references), `list` (file outline), `interactive` (REPL)
+- `find` supports `--fuzzy` for partial/prefix matching via workspace symbols
+- `find`, `inspect`, and `refs` accept multiple symbols in one call to reduce tool invocations (results grouped by symbol)
 - `SymbolFinder` does text-based symbol matching with whole-word detection
 - `OutputFormatter` supports multiple formats: human, JSON, CSV, paths-only
 

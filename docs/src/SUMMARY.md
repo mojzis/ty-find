@@ -11,12 +11,9 @@
 - [Overview](commands/overview.md)
 - [inspect](commands/inspect.md)
 - [find](commands/find.md)
-- [interactive](commands/interactive.md)
-- [type](commands/type.md)
-- [definition](commands/definition.md)
 - [refs](commands/refs.md)
-- [workspace-symbols](commands/workspace-symbols.md)
 - [list](commands/list.md)
+- [interactive](commands/interactive.md)
 - [daemon](commands/daemon.md)
 
 # Reference

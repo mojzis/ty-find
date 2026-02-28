@@ -141,7 +141,7 @@ BENCHMARKS=(
     "find-multi|tyf --workspace $PANDAS_DIR find DataFrame Series Index|"
     "inspect-DataFrame|tyf --workspace $PANDAS_DIR inspect DataFrame|"
     "inspect-multi|tyf --workspace $PANDAS_DIR inspect DataFrame Series|"
-    "workspace-symbols|tyf --workspace $PANDAS_DIR workspace-symbols --query DataFrame|grep -rn 'DataFrame' --include='*.py' $PANDAS_DIR"
+    "find-fuzzy|tyf --workspace $PANDAS_DIR find DataFrame --fuzzy|grep -rn 'DataFrame' --include='*.py' $PANDAS_DIR"
     "refs-single|tyf --workspace $PANDAS_DIR refs DataFrame|"
     "refs-multi|tyf --workspace $PANDAS_DIR refs DataFrame Series Index|"
     "refs-stdin-pipe|printf 'DataFrame\nSeries\nIndex\n' | tyf --workspace $PANDAS_DIR refs --stdin|"

@@ -1,0 +1,240 @@
+/* ty-find docs — custom mdbook overrides
+   Fonts loaded via theme/head.hbs, NOT @import */
+
+:root {
+  --font-sans: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: 'IBM Plex Mono', 'SFMono-Regular', Consolas, monospace;
+  --ty-accent: #0ea5e9;
+  --ty-accent-dim: #0284c7;
+  --ty-accent-glow: rgba(14, 165, 233, 0.12);
+}
+
+/* --- Global typography --- */
+html body {
+  font-family: var(--font-sans) !important;
+}
+
+html code, html pre, html pre > code, html .hljs {
+  font-family: var(--font-mono) !important;
+}
+
+html .content main {
+  font-size: 0.95rem;
+  line-height: 1.7;
+}
+
+/* ==========================================================
+   SIDEBAR
+   All selectors prefixed with `html .sidebar` to beat
+   mdbook's chrome.css specificity.
+   ========================================================== */
+
+html .sidebar {
+  font-family: var(--font-sans) !important;
+  font-size: 0.85rem !important;
+}
+
+/* Spacers between sections */
+html .sidebar .chapter-item.spacer {
+  height: 1px !important;
+  margin: 12px 16px !important;
+  padding: 0 !important;
+  list-style: none;
+  opacity: 0.15;
+  background: currentColor;
+}
+
+/* Part titles (GETTING STARTED, COMMANDS, REFERENCE) */
+html .sidebar .part-title {
+  text-transform: uppercase !important;
+  font-size: 0.65rem !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.1em !important;
+  opacity: 0.5;
+  margin-top: 18px !important;
+  margin-bottom: 4px !important;
+  padding-left: 16px;
+  pointer-events: none;
+}
+
+/* All nav links */
+html .sidebar ol.chapter li a,
+html .sidebar ol.chapter li.chapter-item a {
+  padding: 5px 16px !important;
+  margin: 1px 8px !important;
+  border-radius: 6px !important;
+  display: block !important;
+  transition: background 0.15s ease, color 0.15s ease !important;
+  font-weight: 400 !important;
+  text-decoration: none !important;
+  border-left: 3px solid transparent !important;
+}
+
+/* Hover */
+html .sidebar ol.chapter li a:hover,
+html .sidebar ol.chapter li.chapter-item a:hover {
+  background: var(--ty-accent-glow) !important;
+}
+
+/* Active page */
+html .sidebar ol.chapter li a.active,
+html .sidebar ol.chapter li.chapter-item a.active,
+html .sidebar ol.chapter li.chapter-item li a.active {
+  background: var(--ty-accent-glow) !important;
+  font-weight: 500 !important;
+  border-left: 3px solid var(--ty-accent) !important;
+  padding-left: 13px !important;
+}
+
+/* Sub-items (section headers within a page) */
+html .sidebar ol.chapter li.chapter-item li a {
+  padding-left: 32px !important;
+  font-size: 0.82rem !important;
+  opacity: 0.75;
+}
+
+html .sidebar ol.chapter li.chapter-item li a:hover {
+  opacity: 1 !important;
+}
+
+/* Section numbers — subtle */
+html .sidebar .section-number {
+  opacity: 0.35 !important;
+  font-size: 0.78em !important;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ==========================================================
+   CONTENT AREA
+   ========================================================== */
+
+/* Headings */
+html .content main h1 {
+  font-weight: 600 !important;
+  font-size: 1.8rem !important;
+  letter-spacing: -0.02em;
+  margin-top: 0;
+  padding-bottom: 0.3em;
+  border-bottom: 2px solid var(--ty-accent) !important;
+}
+
+html .content main h2 {
+  font-weight: 600 !important;
+  font-size: 1.3rem !important;
+  letter-spacing: -0.01em;
+  margin-top: 2em;
+}
+
+html .content main h3 {
+  font-weight: 500 !important;
+  font-size: 1.1rem !important;
+}
+
+/* Code blocks */
+html .content pre {
+  border-radius: 8px !important;
+  padding: 1em 1.2em !important;
+  font-size: 0.85rem !important;
+  line-height: 1.6 !important;
+  border: 1px solid rgba(128, 128, 128, 0.15) !important;
+}
+
+/* Inline code */
+html .content code:not(pre code) {
+  padding: 0.15em 0.4em !important;
+  border-radius: 4px !important;
+  font-size: 0.88em !important;
+  font-weight: 500;
+}
+
+/* Tables */
+html .content table {
+  border-collapse: separate !important;
+  border-spacing: 0 !important;
+  border-radius: 8px !important;
+  overflow: hidden;
+  border: 1px solid rgba(128, 128, 128, 0.2) !important;
+  width: 100%;
+}
+
+html .content table th {
+  font-weight: 600 !important;
+  font-size: 0.85rem !important;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+html .content table td,
+html .content table th {
+  padding: 0.6em 1em !important;
+  border-bottom: 1px solid rgba(128, 128, 128, 0.1) !important;
+}
+
+html .content table tr:last-child td {
+  border-bottom: none !important;
+}
+
+/* Links */
+html .content a {
+  text-decoration: underline !important;
+  text-decoration-color: var(--ty-accent) !important;
+  text-underline-offset: 2px;
+  transition: color 0.15s ease;
+}
+
+html .content a:hover {
+  color: var(--ty-accent) !important;
+}
+
+/* Command names in definition lists */
+html .content dt strong,
+html .content p strong code {
+  color: var(--ty-accent) !important;
+}
+
+/* ==========================================================
+   THEME-SPECIFIC ACCENT COLORS
+   ========================================================== */
+
+.navy  { --ty-accent: #38bdf8; --ty-accent-dim: #0ea5e9; --ty-accent-glow: rgba(56, 189, 248, 0.10); }
+.ayu   { --ty-accent: #39bae6; --ty-accent-dim: #59c2ff; --ty-accent-glow: rgba(57, 186, 230, 0.10); }
+.coal  { --ty-accent: #38bdf8; --ty-accent-dim: #0ea5e9; --ty-accent-glow: rgba(56, 189, 248, 0.08); }
+.light { --ty-accent: #0284c7; --ty-accent-dim: #0369a1; --ty-accent-glow: rgba(2, 132, 199, 0.08); }
+.rust  { --ty-accent: #f59e0b; --ty-accent-dim: #d97706; --ty-accent-glow: rgba(245, 158, 11, 0.10); }
+
+/* ==========================================================
+   TOP BAR & NAV ARROWS
+   ========================================================== */
+
+html #menu-bar {
+  border-bottom: 1px solid rgba(128, 128, 128, 0.15) !important;
+}
+
+html #menu-bar .icon-button {
+  transition: color 0.15s ease;
+}
+
+html #menu-bar .icon-button:hover {
+  color: var(--ty-accent) !important;
+}
+
+html .nav-chapters {
+  transition: color 0.2s ease;
+}
+
+html .nav-chapters:hover {
+  color: var(--ty-accent) !important;
+}
+
+/* ==========================================================
+   RESPONSIVE
+   ========================================================== */
+
+@media (max-width: 1080px) {
+  html .content main { font-size: 0.92rem; }
+}
+
+@media (max-width: 600px) {
+  html .sidebar ol.chapter li a,
+  html .sidebar ol.chapter li.chapter-item a { margin: 1px 4px !important; }
+}

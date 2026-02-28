@@ -22,7 +22,6 @@ Browsing:
   list         All functions, classes, and variables defined in a file
 
 Infrastructure:
-  interactive  Interactive REPL for exploring code
   daemon       Manage the background LSP server (auto-starts on first use)
 
 {options}";
@@ -158,9 +157,6 @@ pub enum Commands {
     DocumentSymbols { file: PathBuf },
 
     // -- Infrastructure --
-    /// Interactive REPL for exploring code
-    Interactive { file: Option<PathBuf> },
-
     /// Manage the background LSP server (auto-starts on first use)
     Daemon {
         #[command(subcommand)]
@@ -265,7 +261,7 @@ mod tests {
         cmd.write_help(&mut buf).unwrap();
         let help = String::from_utf8(buf).unwrap();
 
-        let expected_subcommands = &["inspect", "find", "refs", "list", "interactive", "daemon"];
+        let expected_subcommands = &["inspect", "find", "refs", "list", "daemon"];
 
         for subcmd in expected_subcommands {
             assert!(

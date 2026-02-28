@@ -62,7 +62,19 @@ cargo install --path .
 
 ## Platform Support
 
-Full functionality on Linux and macOS. On Windows, only `find --file` and `interactive` work — everything else requires the background daemon, which needs Unix domain sockets. Adding the package as a dependency won't break your project on Windows. PRs for Windows named-pipe support are welcome!
+ty-find builds and installs on all platforms, but the background daemon requires Unix domain sockets and is only available on Unix systems (Linux, macOS).
+
+| Command | Linux / macOS | Windows |
+|---------|:---:|:---:|
+| `find --file` | Yes | Yes |
+| `find` (no file) | Yes | No |
+| `find --fuzzy` | Yes | No |
+| `inspect` | Yes | No |
+| `refs` | Yes | No |
+| `list` | Yes | No |
+| `daemon` | Yes | No |
+
+On Windows, daemon-dependent commands exit with a clear error message. Adding the package as a dependency won't break your project on Windows — it just won't have full functionality. PRs for Windows named-pipe support are welcome!
 
 ## Usage
 
@@ -118,12 +130,6 @@ tyf refs file.py:10:5 my_func
 
 ```bash
 tyf list src/services/user.py
-```
-
-### Interactive Mode
-
-```bash
-tyf interactive
 ```
 
 ### Daemon Management

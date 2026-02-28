@@ -65,14 +65,6 @@ of contents. Useful for getting an overview of a file you haven't seen before.
 tyf list src/services/user.py
 ```
 
-### interactive — Interactive REPL
-
-Start a REPL session for exploring definitions interactively.
-
-```
-tyf interactive
-```
-
 ### daemon — Manage the background server
 
 The daemon starts automatically on first use and shuts down after 5 minutes

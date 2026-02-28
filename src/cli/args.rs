@@ -242,3 +242,88 @@ pub enum OutputDetail {
     /// Verbose output with numbered lists, section headers, and full labels
     Full,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    /// Verify that every global option defined on `Cli` appears in `--help` output.
+    /// This catches accidentally hidden flags (e.g. a stray `#[arg(hide = true)]`).
+    #[test]
+    fn help_shows_all_global_options() {
+        let mut cmd = Cli::command();
+        let mut buf = Vec::new();
+        cmd.write_help(&mut buf).unwrap();
+        let help = String::from_utf8(buf).unwrap();
+
+        let expected_flags = &[
+            "--workspace",
+            "--verbose",
+            "--format",
+            "--detail",
+            "--timeout",
+            "--help",
+            "--version",
+        ];
+
+        for flag in expected_flags {
+            assert!(
+                help.contains(flag),
+                "Expected flag {flag} missing from help output.\nHelp text:\n{help}"
+            );
+        }
+    }
+
+    /// Verify that `--detail` documents both value variants.
+    #[test]
+    fn help_shows_detail_variants() {
+        let mut cmd = Cli::command();
+        let mut buf = Vec::new();
+        cmd.write_long_help(&mut buf).unwrap();
+        let help = String::from_utf8(buf).unwrap();
+
+        assert!(
+            help.contains("condensed"),
+            "Help should mention the 'condensed' variant.\nHelp text:\n{help}"
+        );
+        assert!(
+            help.contains("full"),
+            "Help should mention the 'full' variant.\nHelp text:\n{help}"
+        );
+    }
+
+    /// Verify that all subcommands appear in help (except hidden ones like generate-docs).
+    #[test]
+    fn help_shows_all_subcommands() {
+        let mut cmd = Cli::command();
+        let mut buf = Vec::new();
+        cmd.write_help(&mut buf).unwrap();
+        let help = String::from_utf8(buf).unwrap();
+
+        let expected_subcommands = &[
+            "inspect",
+            "find",
+            "hover",
+            "definition",
+            "references",
+            "document-symbols",
+            "workspace-symbols",
+            "interactive",
+            "daemon",
+        ];
+
+        for subcmd in expected_subcommands {
+            assert!(
+                help.contains(subcmd),
+                "Expected subcommand '{subcmd}' missing from help output.\nHelp text:\n{help}"
+            );
+        }
+
+        // generate-docs is intentionally hidden
+        assert!(
+            !help.contains("generate-docs"),
+            "Hidden subcommand 'generate-docs' should not appear in help.\nHelp text:\n{help}"
+        );
+    }
+}

@@ -435,15 +435,20 @@ impl OutputFormatter {
             }
         }
 
-        // Type section — skip entirely when empty
+        // Type section — always shown, compact placeholder when empty
+        let _ = writeln!(output, "\n{h} Type");
         if let Some(hover) = hover {
-            let _ = writeln!(output, "\n{h} Type");
             output.push_str(&Self::extract_hover_text(&hover.contents));
             output.push('\n');
+        } else {
+            output.push_str("(none)\n");
         }
 
-        // Refs section — paths only, only show when there are actual references
-        if !references.is_empty() {
+        // Refs section — always shown, paths only
+        if references.is_empty() {
+            let _ = writeln!(output, "\n{h} Refs");
+            output.push_str("(none)\n");
+        } else {
             let _ = writeln!(output, "\n{h} Refs ({})", references.len());
             for location in references {
                 let file_path = self.uri_to_path(&location.uri);
@@ -860,9 +865,9 @@ mod tests {
         // Condensed: no symbol header for single symbol, short section names
         assert!(result.contains("# Def"));
         assert!(result.contains("(none)"));
-        // No Type or Refs sections when empty in condensed
-        assert!(!result.contains("# Type"));
-        assert!(!result.contains("# Refs"));
+        // Type and Refs sections always shown, even when empty (with "(none)" placeholder)
+        assert!(result.contains("# Type"));
+        assert!(result.contains("# Refs"));
     }
 
     #[test]

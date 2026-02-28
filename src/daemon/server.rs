@@ -717,7 +717,7 @@ mod tests {
             tags: None,
             deprecated: None,
             range: range.clone(),
-            selection_range: range.clone(),
+            selection_range: range,
             children: None,
         }];
 

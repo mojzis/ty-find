@@ -129,4 +129,37 @@ async fn test_project_inspect_and_references() {
         !predicate::str::contains("No hover information").eval(&out),
         "hover should be present when using --file, got:\n{out}"
     );
+
+    // ── 7. members via workspace symbols (no --file) ────────────────
+    let out = run_tyf(&["members", "Animal"]);
+    assert!(
+        predicate::str::contains("Animal").eval(&out),
+        "members should show Animal class, got:\n{out}"
+    );
+    assert!(
+        predicate::str::contains("speak").eval(&out),
+        "members should show speak method, got:\n{out}"
+    );
+
+    // ── 8. members with --file ──────────────────────────────────────
+    let out = run_tyf(&["members", "Dog", "--file", &models_str]);
+    assert!(
+        predicate::str::contains("Dog").eval(&out),
+        "members should show Dog class, got:\n{out}"
+    );
+    assert!(
+        predicate::str::contains("fetch").eval(&out),
+        "members should show fetch method for Dog, got:\n{out}"
+    );
+
+    // ── 9. members on non-class should give error ───────────────────
+    let mut cmd = cargo_bin_cmd!("tyf");
+    cmd.arg("--workspace").arg(test_project_root());
+    cmd.arg("members").arg("create_dog").arg("--file").arg(&models_str);
+    let output = cmd.output().expect("failed to run tyf");
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    assert!(
+        predicate::str::contains("not a class").eval(&stderr),
+        "members should report non-class error, got stderr:\n{stderr}"
+    );
 }

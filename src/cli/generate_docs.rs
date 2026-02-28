@@ -191,6 +191,19 @@ fn write_examples(out: &mut String, name: &str, cmd: &Command) {
             let _ = writeln!(out, "# Fuzzy/prefix match");
             let _ = writeln!(out, "tyf find handle_ --fuzzy");
         }
+        "members" => {
+            let _ = writeln!(out, "# Show public interface of a class");
+            let _ = writeln!(out, "tyf members MyClass");
+            let _ = writeln!(out);
+            let _ = writeln!(out, "# Multiple classes at once");
+            let _ = writeln!(out, "tyf members MyClass UserService");
+            let _ = writeln!(out);
+            let _ = writeln!(out, "# Include dunder methods and private members");
+            let _ = writeln!(out, "tyf members MyClass --all");
+            let _ = writeln!(out);
+            let _ = writeln!(out, "# Narrow to a specific file");
+            let _ = writeln!(out, "tyf members MyClass --file src/models.py");
+        }
         "inspect" => {
             let _ = writeln!(out, "# Inspect a single symbol");
             let _ = writeln!(out, "tyf inspect MyClass");

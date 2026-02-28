@@ -251,6 +251,9 @@ pub enum Method {
     /// Inspect a symbol: hover + references in one call (parallelized server-side)
     Inspect,
 
+    /// Get class members (methods, properties, class variables) with type signatures
+    Members,
+
     /// Get diagnostics (type errors, warnings) for a file
     Diagnostics,
 
@@ -272,6 +275,7 @@ impl Method {
             Self::References => "references",
             Self::BatchReferences => "batch_references",
             Self::Inspect => "inspect",
+            Self::Members => "members",
             Self::Diagnostics => "diagnostics",
             Self::Ping => "ping",
             Self::Shutdown => "shutdown",
@@ -430,6 +434,26 @@ pub struct InspectParams {
     pub include_references: bool,
 }
 
+/// Parameters for members request.
+///
+/// Returns the public interface of a class: methods, properties, and class
+/// variables with type signatures obtained via hover.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct MembersParams {
+    /// Workspace root directory
+    pub workspace: PathBuf,
+
+    /// File path containing the class
+    pub file: PathBuf,
+
+    /// Class name to inspect
+    pub class_name: String,
+
+    /// Include dunder methods (default: exclude `__*__` and `_*` members)
+    #[serde(default)]
+    pub include_all: bool,
+}
+
 /// Parameters for diagnostics request.
 ///
 /// Returns type errors and warnings for a file.
@@ -521,6 +545,49 @@ pub struct InspectResult {
 
     /// Reference locations
     pub references: Vec<Location>,
+}
+
+/// Information about a single class member.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct MemberInfo {
+    /// Member name (e.g. `calculate_total`, `name`, `MAX_RETRIES`)
+    pub name: String,
+
+    /// LSP symbol kind (Method, Property, Variable, etc.)
+    pub kind: crate::lsp::protocol::SymbolKind,
+
+    /// Type signature from hover (e.g. "def add(self, a, b) -> int")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
+
+    /// Line number (0-based)
+    pub line: u32,
+
+    /// Column number (0-based)
+    pub column: u32,
+}
+
+/// Result of a members request.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct MembersResult {
+    /// The class name
+    pub class_name: String,
+
+    /// File URI (file:///...)
+    pub file_uri: String,
+
+    /// Class definition line (0-based)
+    pub class_line: u32,
+
+    /// Class definition column (0-based)
+    pub class_column: u32,
+
+    /// The kind of the resolved symbol (None if not found)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub symbol_kind: Option<crate::lsp::protocol::SymbolKind>,
+
+    /// Class members grouped by kind
+    pub members: Vec<MemberInfo>,
 }
 
 /// A single diagnostic message.
@@ -687,5 +754,60 @@ mod tests {
         assert_eq!(DiagnosticSeverity::Warning as u8, 2);
         assert_eq!(DiagnosticSeverity::Information as u8, 3);
         assert_eq!(DiagnosticSeverity::Hint as u8, 4);
+    }
+
+    #[test]
+    fn test_members_method_serialization() {
+        assert_eq!(serde_json::to_string(&Method::Members).unwrap(), "\"members\"");
+    }
+
+    #[test]
+    fn test_members_params_serialization() {
+        let params = MembersParams {
+            workspace: PathBuf::from("/workspace"),
+            file: PathBuf::from("models.py"),
+            class_name: "MyClass".to_string(),
+            include_all: false,
+        };
+
+        let json = serde_json::to_value(&params).unwrap();
+        assert_eq!(json["class_name"], "MyClass");
+        assert_eq!(json["include_all"], false);
+    }
+
+    #[test]
+    fn test_members_result_roundtrip() {
+        use crate::lsp::protocol::SymbolKind;
+
+        let result = MembersResult {
+            class_name: "Animal".to_string(),
+            file_uri: "file:///src/models.py".to_string(),
+            class_line: 5,
+            class_column: 0,
+            symbol_kind: Some(SymbolKind::Class),
+            members: vec![
+                MemberInfo {
+                    name: "speak".to_string(),
+                    kind: SymbolKind::Method,
+                    signature: Some("speak(self) -> str".to_string()),
+                    line: 10,
+                    column: 4,
+                },
+                MemberInfo {
+                    name: "name".to_string(),
+                    kind: SymbolKind::Property,
+                    signature: Some("name: str".to_string()),
+                    line: 7,
+                    column: 4,
+                },
+            ],
+        };
+
+        let json = serde_json::to_string(&result).unwrap();
+        let parsed: MembersResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.class_name, "Animal");
+        assert_eq!(parsed.members.len(), 2);
+        assert_eq!(parsed.members[0].name, "speak");
+        assert!(matches!(parsed.members[0].kind, SymbolKind::Method));
     }
 }

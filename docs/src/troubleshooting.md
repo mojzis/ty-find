@@ -15,13 +15,13 @@ If ty is installed but not on PATH, ty-find will attempt to run it via `uvx ty` 
 Check the daemon status:
 
 ```bash
-ty-find daemon status
+tyf daemon status
 ```
 
 For more detail, enable debug logging:
 
 ```bash
-RUST_LOG=ty_find=debug ty-find daemon start
+RUST_LOG=ty_find=debug tyf daemon start
 ```
 
 Common causes:
@@ -31,10 +31,10 @@ Common causes:
 
 ## Wrong or stale results
 
-If ty-find returns outdated definitions or missing references, the LSP server may have stale state. Restart the daemon:
+If tyf returns outdated definitions or missing references, the LSP server may have stale state. Restart the daemon:
 
 ```bash
-ty-find daemon stop && ty-find daemon start
+tyf daemon stop && tyf daemon start
 ```
 
 Then retry your query.
@@ -47,7 +47,7 @@ The first call in a session is expected to be slower because it:
 2. Spawns the ty LSP server.
 3. Waits for LSP initialization and project indexing.
 
-Subsequent calls reuse the running daemon and typically respond in 50–100ms. If every call is slow, check that the daemon is staying alive between calls with `ty-find daemon status`.
+Subsequent calls reuse the running daemon and typically respond in 50–100ms. If every call is slow, check that the daemon is staying alive between calls with `tyf daemon status`.
 
 ## No results for a symbol that exists
 
@@ -60,7 +60,7 @@ Subsequent calls reuse the running daemon and typically respond in 50–100ms. I
 For any issue, enable full debug output:
 
 ```bash
-RUST_LOG=ty_find=debug ty-find inspect MySymbol
+RUST_LOG=ty_find=debug tyf inspect MySymbol
 ```
 
 This shows the LSP messages exchanged with ty, which helps diagnose protocol-level issues.

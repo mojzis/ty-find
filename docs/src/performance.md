@@ -10,8 +10,8 @@ Benchmarks are run as part of CI. See `tests/bench_*` for the test code.
 |-----------|-------------------------|------------------------|
 | inspect   | TBD                     | TBD                    |
 | find      | TBD                     | TBD                    |
-| hover     | TBD                     | TBD                    |
-| references| TBD                     | TBD                    |
+| type      | TBD                     | TBD                    |
+| refs      | TBD                     | TBD                    |
 
 These numbers will be filled in with real measurements from the benchmark suite.
 

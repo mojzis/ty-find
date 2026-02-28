@@ -1,18 +1,20 @@
 # Commands Overview
 
-Navigate Python code with type-aware precision (powered by ty's LSP server)
+Type-aware Python code navigation (powered by ty)
 
 ## Usage
 
 ```
-ty-find [OPTIONS] <COMMAND>
+tyf [OPTIONS] <COMMAND>
 ```
 
 ## Global Options
 
 **`--workspace`**
+: Project root (default: auto-detect)
 
 **`-v, --verbose`**
+: Enable verbose output
 
 **`--format`**
 
@@ -22,28 +24,28 @@ ty-find [OPTIONS] <COMMAND>
 ## Commands
 
 **[inspect](inspect.md)**
-: Get the full picture of a symbol: definition, type signature, and usages
+: Definition, type signature, and usages of a symbol by name
 
 **[find](find.md)**
-: Jump to where a function, class, or variable is defined by name
+: Find where a symbol is defined by name
 
-**[hover](hover.md)**
-: Show type signature and documentation at a specific file location
+**[type](type.md)**
+: Type signature and docs at a file position (line:col)
 
 **[definition](definition.md)**
-: Jump to definition from a specific file location (line + column)
+: Resolve definition at a file position (line:col) — use 'find' for name search
 
-**[references](references.md)**
-: Find every place a symbol is used across the codebase
+**[refs](refs.md)**
+: All usages of a symbol across the codebase
 
-**[document-symbols](document-symbols.md)**
-: List all functions, classes, and variables defined in a file
+**[list](list.md)**
+: All functions, classes, and variables defined in a file
 
 **[workspace-symbols](workspace-symbols.md)**
-: Search for symbols by name across the whole project
+: Search symbols by name with fuzzy matching (may be merged into find)
 
 **[interactive](interactive.md)**
-: Interactive REPL for exploring definitions
+: Interactive REPL for exploring code
 
 **[daemon](daemon.md)**
 : Manage the background LSP server (auto-starts on first use)

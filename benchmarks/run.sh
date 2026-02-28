@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# ty-find performance benchmark script
-# Runs ty-find against a pandas checkout and measures performance.
+# tyf performance benchmark script
+# Runs tyf against a pandas checkout and measures performance.
 # Usage:
 #   benchmarks/run.sh                  # compare against baseline
 #   benchmarks/run.sh --save-baseline  # save results as new baseline
@@ -20,7 +20,7 @@ if [ "${1:-}" = "--save-baseline" ]; then
 fi
 
 # --- Dependency checks ---
-for cmd in ty-find hyperfine jq bc python3; do
+for cmd in tyf hyperfine jq bc python3; do
     if ! command -v "$cmd" >/dev/null 2>&1; then
         echo "ERROR: '$cmd' is required but not found on PATH." >&2
         exit 1
@@ -30,7 +30,7 @@ done
 # --- Clone pandas at pinned commit ---
 # Uses git init + fetch to reliably fetch a specific commit regardless of
 # how far it has drifted from the default branch HEAD.
-PANDAS_DIR="${TMPDIR:-/tmp}/ty-find-bench-pandas"
+PANDAS_DIR="${TMPDIR:-/tmp}/tyf-bench-pandas"
 if [ -d "$PANDAS_DIR/.git" ]; then
     CURRENT_COMMIT="$(git -C "$PANDAS_DIR" rev-parse HEAD)"
     if [ "$CURRENT_COMMIT" = "$PANDAS_COMMIT" ]; then
@@ -57,7 +57,7 @@ echo ""
 # --- Helper functions ---
 TMPDIR_BENCH="$(mktemp -d)"
 cleanup() {
-    ty-find daemon stop >/dev/null 2>&1 || true
+    tyf daemon stop >/dev/null 2>&1 || true
     rm -rf "$TMPDIR_BENCH"
 }
 trap cleanup EXIT
@@ -121,30 +121,30 @@ echo "=== Measuring startup times ==="
 echo ""
 
 echo "Stopping daemon for cold start measurement..."
-ty-find daemon stop >/dev/null 2>&1 || true
+tyf daemon stop >/dev/null 2>&1 || true
 sleep 1
 
 echo "Measuring cold start..."
-COLD_START="$(measure_single_run "ty-find --workspace $PANDAS_DIR inspect DataFrame")"
+COLD_START="$(measure_single_run "tyf --workspace $PANDAS_DIR inspect DataFrame")"
 echo "  Cold start: ${COLD_START}s"
 
 echo "Measuring warm start..."
-WARM_START="$(measure_single_run "ty-find --workspace $PANDAS_DIR inspect DataFrame")"
+WARM_START="$(measure_single_run "tyf --workspace $PANDAS_DIR inspect DataFrame")"
 echo "  Warm start: ${WARM_START}s"
 echo ""
 
-# --- Pre-flight: verify each ty-find command works before benchmarking ---
+# --- Pre-flight: verify each tyf command works before benchmarking ---
 # Benchmark definitions (pipe-separated: name|ty_cmd|grep_cmd)
 BENCHMARKS=(
-    "find-DataFrame|ty-find --workspace $PANDAS_DIR find DataFrame|grep -rn 'class DataFrame' --include='*.py' $PANDAS_DIR"
-    "find-Series|ty-find --workspace $PANDAS_DIR find Series|grep -rn 'class Series' --include='*.py' $PANDAS_DIR"
-    "find-multi|ty-find --workspace $PANDAS_DIR find DataFrame Series Index|"
-    "inspect-DataFrame|ty-find --workspace $PANDAS_DIR inspect DataFrame|"
-    "inspect-multi|ty-find --workspace $PANDAS_DIR inspect DataFrame Series|"
-    "workspace-symbols|ty-find --workspace $PANDAS_DIR workspace-symbols --query DataFrame|grep -rn 'DataFrame' --include='*.py' $PANDAS_DIR"
-    "refs-single|ty-find --workspace $PANDAS_DIR references DataFrame|"
-    "refs-multi|ty-find --workspace $PANDAS_DIR references DataFrame Series Index|"
-    "refs-stdin-pipe|printf 'DataFrame\nSeries\nIndex\n' | ty-find --workspace $PANDAS_DIR references --stdin|"
+    "find-DataFrame|tyf --workspace $PANDAS_DIR find DataFrame|grep -rn 'class DataFrame' --include='*.py' $PANDAS_DIR"
+    "find-Series|tyf --workspace $PANDAS_DIR find Series|grep -rn 'class Series' --include='*.py' $PANDAS_DIR"
+    "find-multi|tyf --workspace $PANDAS_DIR find DataFrame Series Index|"
+    "inspect-DataFrame|tyf --workspace $PANDAS_DIR inspect DataFrame|"
+    "inspect-multi|tyf --workspace $PANDAS_DIR inspect DataFrame Series|"
+    "workspace-symbols|tyf --workspace $PANDAS_DIR workspace-symbols --query DataFrame|grep -rn 'DataFrame' --include='*.py' $PANDAS_DIR"
+    "refs-single|tyf --workspace $PANDAS_DIR refs DataFrame|"
+    "refs-multi|tyf --workspace $PANDAS_DIR refs DataFrame Series Index|"
+    "refs-stdin-pipe|printf 'DataFrame\nSeries\nIndex\n' | tyf --workspace $PANDAS_DIR refs --stdin|"
 )
 
 echo "=== Pre-flight: verifying commands ==="
@@ -165,7 +165,7 @@ echo ""
 # --- Run benchmarks ---
 # The daemon is already warm from the startup measurements and pre-flight checks
 # above, so the first benchmark run doesn't pay cold-start cost.
-echo "=== Running ty-find benchmarks against pandas ==="
+echo "=== Running tyf benchmarks against pandas ==="
 echo ""
 
 # Store results in temp files since associative arrays and subshells don't mix well
@@ -177,14 +177,14 @@ for bench in "${BENCHMARKS[@]}"; do
 
     echo "--- Benchmark: $name ---"
 
-    # ty-find measurement
+    # tyf measurement
     ty_median="$(run_hyperfine_bench "${name}-ty" "$ty_cmd")" || true
     echo "$ty_median" > "$RESULTS_DIR/${name}.ty_median"
     echo "$ty_cmd" > "$RESULTS_DIR/${name}.ty_cmd"
     if [ "$ty_median" != "null" ]; then
-        echo "  ty-find median: ${ty_median}s"
+        echo "  tyf median: ${ty_median}s"
     else
-        echo "  ty-find: FAILED (command errored or timed out)"
+        echo "  tyf: FAILED (command errored or timed out)"
     fi
 
     # grep measurement (if applicable)

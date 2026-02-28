@@ -1,12 +1,12 @@
 # What is ty-find?
 
-ty-find is a command-line tool for type-aware Python code navigation. It talks to [ty](https://github.com/astral-sh/ty)'s LSP server to find definitions, references, and type information for Python symbols — directly from the terminal. A background daemon keeps the LSP server warm so that repeated queries respond in 50–100ms.
+ty-find is a command-line tool (`tyf`) for type-aware Python code navigation. It talks to [ty](https://github.com/astral-sh/ty)'s LSP server to find definitions, references, and type information for Python symbols — directly from the terminal. A background daemon keeps the LSP server warm so that repeated queries respond in 50–100ms.
 
 ## Why not grep?
 
-Grep matches text. ty-find understands Python's type system.
+Grep matches text. tyf understands Python's type system.
 
-When you grep for `calculate_sum`, you'll get hits in comments, docstrings, string literals, and variable names that happen to contain the substring. ty-find returns only the actual symbol definition, its type signature, and where it's referenced — because it uses ty's type inference engine under the hood.
+When you grep for `calculate_sum`, you'll get hits in comments, docstrings, string literals, and variable names that happen to contain the substring. tyf returns only the actual symbol definition, its type signature, and where it's referenced — because it uses ty's type inference engine under the hood.
 
 This matters most for AI coding agents (Claude Code, Codex, etc.) that need precise symbol information to make correct edits.
 
@@ -32,7 +32,7 @@ pip install ty-find
 
 ```bash
 # Get a full overview of a symbol: definition, type, and references
-$ ty-find inspect MyClass
+$ tyf inspect MyClass
 
 MyClass
   Definition: src/models.py:15:1
@@ -43,13 +43,13 @@ MyClass
     tests/test_models.py:8:5
 
 # Find where a function is defined
-$ ty-find find calculate_sum
+$ tyf find calculate_sum
 
 calculate_sum
   src/utils.py:22:1
 
 # See all commands
-$ ty-find --help
+$ tyf --help
 ```
 
 ## For AI agents

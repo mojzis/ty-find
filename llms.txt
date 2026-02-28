@@ -1,8 +1,8 @@
 # ty-find
 
-> Navigate Python code with type-aware precision — powered by ty's LSP server.
+> Type-aware Python code navigation — powered by ty's LSP server.
 
-ty-find is a CLI tool for Python code navigation. Unlike grep, it understands
+ty-find is a CLI tool (`tyf`) for Python code navigation. Unlike grep, it understands
 your code's type structure: it finds actual symbol usages (not string matches
 in comments or docs), resolves definitions through imports, and shows type
 signatures. It talks to ty's LSP server behind the scenes, but you don't need
@@ -13,7 +13,7 @@ a daemon that keeps connections warm.
 
 ## Commands
 
-### inspect — Get the full picture of a symbol
+### inspect — Definition, type signature, and usages of a symbol by name
 
 The most useful command. Given a symbol name, it shows:
 - Where it's defined (file + line)
@@ -23,36 +23,36 @@ The most useful command. Given a symbol name, it shows:
 No file path needed — it searches the whole project by name.
 
 ```
-ty-find inspect MyClass
-ty-find inspect calculate_sum UserService       # multiple symbols at once
-ty-find inspect MyClass --references            # also list all usages
-ty-find inspect MyClass --file src/models.py    # narrow to one file
-ty-find --format json inspect MyClass           # JSON output for scripting
+tyf inspect MyClass
+tyf inspect calculate_sum UserService       # multiple symbols at once
+tyf inspect MyClass --references            # also list all usages
+tyf inspect MyClass --file src/models.py    # narrow to one file
+tyf --format json inspect MyClass           # JSON output for scripting
 ```
 
-### find — Jump to where a symbol is defined
+### find — Find where a symbol is defined by name
 
 Given a symbol name, returns the file and line where it's defined.
 Searches the whole project — no need to know which file it's in.
 
 ```
-ty-find find calculate_sum
-ty-find find calculate_sum multiply divide      # multiple symbols at once
-ty-find find handler --file src/routes.py       # narrow to one file
+tyf find calculate_sum
+tyf find calculate_sum multiply divide      # multiple symbols at once
+tyf find handler --file src/routes.py       # narrow to one file
 ```
 
-### hover — Show type signature and documentation at a location
+### type — Type signature and docs at a file position
 
 Point at a specific position in a file and get back the type signature and
 any documentation for whatever is there. Useful for understanding what a
 variable holds, what a function returns, or what a class provides.
 
 ```
-ty-find hover src/main.py -l 45 -c 12
-ty-find --format json hover src/main.py -l 45 -c 12
+tyf type src/main.py -l 45 -c 12
+tyf --format json type src/main.py -l 45 -c 12
 ```
 
-### definition — Jump to definition from a specific location
+### definition — Resolve definition at a file position
 
 Like `find`, but instead of searching by name, you point at a specific
 position (file + line + column) and it follows the symbol to where it's
@@ -60,37 +60,37 @@ defined. Use this when you already have coordinates (e.g., from a stack trace
 or editor). For name-based search, use `find` or `inspect` instead.
 
 ```
-ty-find definition myfile.py -l 10 -c 5
+tyf definition myfile.py -l 10 -c 5
 ```
 
-### references — Find every place a symbol is used
+### refs — All usages of a symbol across the codebase
 
 Point at a symbol and get back every location in the codebase that references
 it. Essential before renaming or removing code — tells you exactly what will
 break.
 
 ```
-ty-find references myfile.py -l 10 -c 5
-ty-find references myfile.py -l 10 -c 5 --no-include-declaration
+tyf refs myfile.py -l 10 -c 5
+tyf refs myfile.py -l 10 -c 5 --no-include-declaration
 ```
 
-### document-symbols — List everything defined in a file
+### list — All functions, classes, and variables defined in a file
 
 Shows all functions, classes, and variables defined in a file — like a table
 of contents. Useful for getting an overview of a file you haven't seen before.
 
 ```
-ty-find document-symbols src/services/user.py
+tyf list src/services/user.py
 ```
 
-### workspace-symbols — Search for symbols across the whole project
+### workspace-symbols — Search symbols by name with fuzzy matching
 
 Fuzzy-search for functions, classes, and variables by name across every file
 in the project. Returns matching symbols with their locations.
 
 ```
-ty-find workspace-symbols -q "UserService"
-ty-find workspace-symbols -q "handle_"
+tyf workspace-symbols -q "UserService"
+tyf workspace-symbols -q "handle_"
 ```
 
 ### interactive — Interactive REPL
@@ -98,7 +98,7 @@ ty-find workspace-symbols -q "handle_"
 Start a REPL session for exploring definitions interactively.
 
 ```
-ty-find interactive
+tyf interactive
 ```
 
 ### daemon — Manage the background server
@@ -107,9 +107,9 @@ The daemon starts automatically on first use and shuts down after 5 minutes
 of inactivity. You usually don't need these commands.
 
 ```
-ty-find daemon start     # start manually
-ty-find daemon status    # check if running, uptime, cache info
-ty-find daemon stop      # stop the daemon
+tyf daemon start     # start manually
+tyf daemon status    # check if running, uptime, cache info
+tyf daemon stop      # stop the daemon
 ```
 
 ## Output Formats
@@ -121,13 +121,13 @@ All commands support `--format` (placed before the subcommand):
 - `paths` — just file paths, one per line (for xargs, editors, etc.)
 
 ```
-ty-find --format json inspect MyClass
-ty-find --format paths find calculate_sum | head -1 | xargs code
+tyf --format json inspect MyClass
+tyf --format paths find calculate_sum | head -1 | xargs code
 ```
 
-## When to use ty-find vs grep
+## When to use tyf vs grep
 
-Use **ty-find** when you want type-aware, precise results:
+Use **tyf** when you want type-aware, precise results:
 - Find where a function/class/variable is actually defined
 - Find all actual usages of a symbol (not string matches)
 - Get type signatures and documentation

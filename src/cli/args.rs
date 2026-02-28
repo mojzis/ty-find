@@ -8,33 +8,45 @@ const STYLES: Styles = Styles::styled()
     .placeholder(AnsiColor::Cyan.on_default())
     .error(AnsiColor::Red.on_default().bold());
 
-const AFTER_HELP: &str = "\x1b[1;32mQuick Reference:\x1b[0m
-  \x1b[1;36mLook up symbols by name\x1b[0m (most common — just give a name, no file needed):
-    ty-find inspect MyClass              Full overview: definition + type info + usages
-    ty-find find calculate_sum           Jump to where a symbol is defined
+const HELP_TEMPLATE: &str = "\
+{name} \u{2014} {about}
 
-  \x1b[1;36mExplore code at a specific location\x1b[0m (when you know the file + line):
-    ty-find hover app.py -l 10 -c 5     Show type signature and docs
-    ty-find definition app.py -l 10 -c 5 Jump to where this symbol is defined
-    ty-find references app.py -l 10 -c 5 Find all usages across the codebase
+{usage-heading} {usage}
 
-  \x1b[1;36mBrowse project structure:\x1b[0m
-    ty-find document-symbols app.py      List all definitions in a file
-    ty-find workspace-symbols -q \"User\"  Search for symbols across the project";
+Symbol Lookup:
+  inspect      Definition, type signature, and usages of a symbol by name
+  find         Find where a symbol is defined by name
+  refs         All usages of a symbol across the codebase
+  type         Type signature and docs at a file position (line:col)
+
+Browsing:
+  list         All functions, classes, and variables defined in a file
+
+Positional:
+  definition   Resolve definition at a file position (line:col) \u{2014} use 'find' for name search
+
+Infrastructure:
+  workspace-symbols  Search symbols by name with fuzzy matching (may be merged into find)
+  interactive        Interactive REPL for exploring code
+  daemon             Manage the background LSP server (auto-starts on first use)
+
+{options}";
 
 #[derive(Parser)]
-#[command(name = "ty-find")]
-#[command(about = "Navigate Python code with type-aware precision (powered by ty's LSP server)")]
+#[command(name = "tyf")]
+#[command(about = "Type-aware Python code navigation (powered by ty)")]
 #[command(version)]
 #[command(styles = STYLES)]
-#[command(after_help = AFTER_HELP)]
+#[command(help_template = HELP_TEMPLATE)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
 
-    #[arg(long, value_name = "DIR")]
+    /// Project root (default: auto-detect)
+    #[arg(long, value_name = "PATH")]
     pub workspace: Option<PathBuf>,
 
+    /// Enable verbose output
     #[arg(short, long)]
     pub verbose: bool,
 
@@ -46,22 +58,23 @@ pub struct Cli {
     pub detail: OutputDetail,
 
     /// Timeout in seconds for daemon operations (default: 30)
-    #[arg(long, value_name = "SECONDS")]
+    #[arg(long, value_name = "SECS")]
     pub timeout: Option<u64>,
 }
 
 #[derive(Subcommand)]
 pub enum Commands {
-    // -- Look up symbols by name (most common) --
-    /// Get the full picture of a symbol: definition, type signature, and usages
+    // -- Symbol Lookup --
+    /// Definition, type signature, and usages of a symbol by name
     #[command(
-        long_about = "Get the full picture of a symbol — where it's defined, its type signature, \
-        and optionally all usages. Searches the whole project by name, no file path needed.\n\n\
+        long_about = "Definition, type signature, and usages of a symbol \u{2014} where it's defined, \
+        its type signature, and optionally all usages. Searches the whole project by name, \
+        no file path needed.\n\n\
         Examples:\n  \
-        ty-find inspect MyClass\n  \
-        ty-find inspect calculate_sum UserService    # multiple symbols at once\n  \
-        ty-find inspect MyClass --references         # also show all usages\n  \
-        ty-find inspect MyClass --file src/models.py # narrow to one file"
+        tyf inspect MyClass\n  \
+        tyf inspect calculate_sum UserService    # multiple symbols at once\n  \
+        tyf inspect MyClass --references         # also show all usages\n  \
+        tyf inspect MyClass --file src/models.py # narrow to one file"
     )]
     Inspect {
         /// Symbol name(s) to inspect (supports multiple symbols)
@@ -77,15 +90,13 @@ pub enum Commands {
         references: bool,
     },
 
-    /// Jump to where a function, class, or variable is defined by name
-    #[command(
-        long_about = "Jump to where a function, class, or variable is defined. Searches the \
-        whole project by name — no need to know which file it's in.\n\n\
+    /// Find where a symbol is defined by name
+    #[command(long_about = "Find where a function, class, or variable is defined. Searches the \
+        whole project by name \u{2014} no need to know which file it's in.\n\n\
         Examples:\n  \
-        ty-find find calculate_sum\n  \
-        ty-find find calculate_sum multiply divide   # multiple symbols at once\n  \
-        ty-find find handler --file src/routes.py    # narrow to one file"
-    )]
+        tyf find calculate_sum\n  \
+        tyf find calculate_sum multiply divide   # multiple symbols at once\n  \
+        tyf find handler --file src/routes.py    # narrow to one file")]
     Find {
         /// Symbol name(s) to find (supports multiple symbols)
         #[arg(required = true, num_args = 1..)]
@@ -96,15 +107,16 @@ pub enum Commands {
         file: Option<PathBuf>,
     },
 
-    // -- Explore code at a specific location --
-    /// Show type signature and documentation at a specific file location
+    // -- Positional --
+    /// Type signature and docs at a file position (line:col)
     #[command(
-        long_about = "Show the type signature and documentation for the symbol at a specific \
+        name = "type",
+        long_about = "Type signature and documentation for the symbol at a specific \
         position in a file. Useful for understanding what a variable holds, what a function \
         returns, or what a class provides.\n\n\
         Examples:\n  \
-        ty-find hover src/main.py -l 45 -c 12\n  \
-        ty-find --format json hover src/main.py -l 45 -c 12   # JSON for scripting"
+        tyf type src/main.py -l 45 -c 12\n  \
+        tyf --format json type src/main.py -l 45 -c 12   # JSON for scripting"
     )]
     Hover {
         file: PathBuf,
@@ -116,13 +128,13 @@ pub enum Commands {
         column: u32,
     },
 
-    /// Jump to definition from a specific file location (line + column)
+    /// Resolve definition at a file position (line:col) \u{2014} use 'find' for name search
     #[command(
-        long_about = "Jump to where a symbol is defined, given its exact location in a file. \
+        long_about = "Resolve where a symbol is defined, given its exact location in a file. \
         Use this when you already know the file, line, and column (e.g., from an editor). \
         For name-based search, use 'find' or 'inspect' instead.\n\n\
         Examples:\n  \
-        ty-find definition myfile.py -l 10 -c 5"
+        tyf definition myfile.py -l 10 -c 5"
     )]
     Definition {
         file: PathBuf,
@@ -134,15 +146,16 @@ pub enum Commands {
         column: u32,
     },
 
-    /// Find every place a symbol is used across the codebase
+    /// All usages of a symbol across the codebase
     #[command(
-        long_about = "Find every place a symbol is used across the codebase. Useful before \
+        name = "refs",
+        long_about = "All usages of a symbol across the codebase. Useful before \
         renaming or removing code to understand the impact.\n\n\
         Examples:\n  \
-        ty-find references myfile.py -l 10 -c 5\n  \
-        ty-find references my_func my_class\n  \
-        ty-find references file.py:10:5 my_func\n  \
-        ... | ty-find references --stdin"
+        tyf refs myfile.py -l 10 -c 5\n  \
+        tyf refs my_func my_class\n  \
+        tyf refs file.py:10:5 my_func\n  \
+        ... | tyf refs --stdin"
     )]
     References {
         /// Symbol names or `file:line:col` positions (auto-detected, parallel)
@@ -170,31 +183,32 @@ pub enum Commands {
         include_declaration: bool,
     },
 
-    // -- Browse project structure --
-    /// List all functions, classes, and variables defined in a file
+    // -- Browsing --
+    /// All functions, classes, and variables defined in a file
     #[command(
-        long_about = "List all functions, classes, and variables defined in a file — like a \
+        name = "list",
+        long_about = "All functions, classes, and variables defined in a file \u{2014} like a \
         table of contents for your code.\n\n\
         Examples:\n  \
-        ty-find document-symbols src/services/user.py"
+        tyf list src/services/user.py"
     )]
     DocumentSymbols { file: PathBuf },
 
-    /// Search for symbols by name across the whole project
+    // -- Infrastructure --
+    /// Search symbols by name with fuzzy matching (may be merged into find)
     #[command(
         long_about = "Search for functions, classes, and variables by name across the whole \
         project. Returns matching symbols with their file locations.\n\n\
         Examples:\n  \
-        ty-find workspace-symbols -q \"UserService\"\n  \
-        ty-find workspace-symbols -q \"handle_\""
+        tyf workspace-symbols -q \"UserService\"\n  \
+        tyf workspace-symbols -q \"handle_\""
     )]
     WorkspaceSymbols {
         #[arg(short, long)]
         query: String,
     },
 
-    // -- Other --
-    /// Interactive REPL for exploring definitions
+    /// Interactive REPL for exploring code
     Interactive { file: Option<PathBuf> },
 
     /// Manage the background LSP server (auto-starts on first use)
@@ -304,10 +318,10 @@ mod tests {
         let expected_subcommands = &[
             "inspect",
             "find",
-            "hover",
+            "type",
             "definition",
-            "references",
-            "document-symbols",
+            "refs",
+            "list",
             "workspace-symbols",
             "interactive",
             "daemon",

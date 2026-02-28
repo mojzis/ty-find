@@ -1,17 +1,17 @@
 # inspect
 
-Get the full picture of a symbol — where it's defined, its type signature, and optionally all usages. Searches the whole project by name, no file path needed.
+Definition, type signature, and usages of a symbol — where it's defined, its type signature, and optionally all usages. Searches the whole project by name, no file path needed.
 
 Examples:
-  ty-find inspect MyClass
-  ty-find inspect calculate_sum UserService    # multiple symbols at once
-  ty-find inspect MyClass --references         # also show all usages
-  ty-find inspect MyClass --file src/models.py # narrow to one file
+  tyf inspect MyClass
+  tyf inspect calculate_sum UserService    # multiple symbols at once
+  tyf inspect MyClass --references         # also show all usages
+  tyf inspect MyClass --file src/models.py # narrow to one file
 
 ## Usage
 
 ```
-ty-find inspect <SYMBOLS> [OPTIONS]
+tyf inspect <SYMBOLS> [OPTIONS]
 ```
 
 ## Arguments
@@ -31,13 +31,13 @@ ty-find inspect <SYMBOLS> [OPTIONS]
 
 ```bash
 # Inspect a single symbol
-ty-find inspect MyClass
+tyf inspect MyClass
 
 # Inspect multiple symbols at once
-ty-find inspect MyClass my_function
+tyf inspect MyClass my_function
 
 # Inspect a symbol in a specific file
-ty-find inspect MyClass --file src/module.py
+tyf inspect MyClass --file src/module.py
 ```
 
 ## See also

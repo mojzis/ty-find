@@ -1,18 +1,18 @@
-# references
+# refs
 
-Find every place a symbol is used across the codebase. Useful before renaming or removing code to understand the impact.
+All usages of a symbol across the codebase. Useful before renaming or removing code to understand the impact.
 
 ## Usage
 
 ```
 # Position mode (exact)
-ty-find references -f <FILE> -l <LINE> -c <COLUMN>
+tyf refs -f <FILE> -l <LINE> -c <COLUMN>
 
 # Symbol mode (parallel search)
-ty-find references <QUERIES>... [-f <FILE>]
+tyf refs <QUERIES>... [-f <FILE>]
 
 # Stdin mode (pipe positions or symbol names)
-... | ty-find references --stdin
+... | tyf refs --stdin
 ```
 
 ## Arguments
@@ -35,29 +35,29 @@ ty-find references <QUERIES>... [-f <FILE>]
 
 ```bash
 # Position mode: exact location
-ty-find references -f main.py -l 10 -c 5
+tyf refs -f main.py -l 10 -c 5
 
 # Symbol mode: find references by name
-ty-find references my_function
+tyf refs my_function
 
 # Symbol mode: multiple symbols searched in parallel
-ty-find references my_function MyClass calculate_sum
+tyf refs my_function MyClass calculate_sum
 
 # Auto-detected file:line:col positions (parallel)
-ty-find references main.py:10:5 utils.py:20:3
+tyf refs main.py:10:5 utils.py:20:3
 
 # Mixed: positions and symbols together
-ty-find references main.py:10:5 my_function
+tyf refs main.py:10:5 my_function
 
-# Pipe from document-symbols
-ty-find document-symbols file.py --format csv \
+# Pipe from list
+tyf list file.py --format csv \
   | awk -F, 'NR>1{printf "file.py:%s:%s\n",$3,$4}' \
-  | ty-find references --stdin
+  | tyf refs --stdin
 
 # Pipe symbol names
-ty-find document-symbols file.py --format csv \
+tyf list file.py --format csv \
   | tail -n+2 | cut -d, -f1 \
-  | ty-find references --stdin
+  | tyf refs --stdin
 ```
 
 ## See also

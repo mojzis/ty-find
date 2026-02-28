@@ -5,7 +5,7 @@ Manage the background LSP server (auto-starts on first use)
 ## Usage
 
 ```
-ty-find daemon
+tyf daemon
 ```
 
 ## Subcommands
@@ -23,13 +23,13 @@ ty-find daemon
 
 ```bash
 # Start the background daemon
-ty-find daemon start
+tyf daemon start
 
 # Check daemon status
-ty-find daemon status
+tyf daemon status
 
 # Stop the daemon
-ty-find daemon stop
+tyf daemon stop
 ```
 
 ## See also

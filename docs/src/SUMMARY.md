@@ -12,11 +12,11 @@
 - [inspect](commands/inspect.md)
 - [find](commands/find.md)
 - [interactive](commands/interactive.md)
-- [hover](commands/hover.md)
+- [type](commands/type.md)
 - [definition](commands/definition.md)
-- [references](commands/references.md)
+- [refs](commands/refs.md)
 - [workspace-symbols](commands/workspace-symbols.md)
-- [document-symbols](commands/document-symbols.md)
+- [list](commands/list.md)
 - [daemon](commands/daemon.md)
 
 # Reference

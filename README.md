@@ -9,23 +9,23 @@ Add this to your project's `CLAUDE.md` to enable type-aware code navigation:
 ```markdown
 ### Python Symbol Navigation (ty-find)
 
-IMPORTANT: Use `ty-find` instead of Grep for Python symbol lookups.
-Grep matches in comments, strings, and docs — ty-find is type-aware and precise.
-Run `ty-find --help` to see all commands. Run `ty-find <cmd> --help` for details.
+IMPORTANT: Use `tyf` instead of Grep for Python symbol lookups.
+Grep matches in comments, strings, and docs — tyf is type-aware and precise.
+Run `tyf --help` to see all commands. Run `tyf <cmd> --help` for details.
 
-- Symbol overview (definition + type + refs): `ty-find inspect SymbolName`
-- Find definition: `ty-find find SymbolName`
-- All usages before refactoring: `ty-find references SymbolName` or `ty-find references -f file.py -l LINE -c COL`
-- Type info: `ty-find hover file.py -l LINE -c COL`
-- File outline: `ty-find document-symbols file.py`
+- Symbol overview (definition + type + refs): `tyf inspect SymbolName`
+- Find definition: `tyf find SymbolName`
+- All usages before refactoring: `tyf refs SymbolName` or `tyf refs -f file.py -l LINE -c COL`
+- Type info: `tyf type file.py -l LINE -c COL`
+- File outline: `tyf list file.py`
 
 Grep is still appropriate for string literals, config values, TODOs, and non-symbol text.
 ```
 
 ### Why ty-find over grep?
 
-- **Find symbol usages** - grep matches in docs, comments, and strings; ty-find returns only actual code references
-- **Rename refactoring** - grep may miss or over-match; ty-find is type-aware and precise
+- **Find symbol usages** - grep matches in docs, comments, and strings; tyf returns only actual code references
+- **Rename refactoring** - grep may miss or over-match; tyf is type-aware and precise
 
 ## Installation
 
@@ -72,10 +72,10 @@ ty-find builds and installs on all platforms, but the background daemon requires
 | `interactive` | Yes | Yes |
 | `find` (no file) | Yes | No |
 | `inspect` | Yes | No |
-| `hover` | Yes | No |
-| `references` | Yes | No |
+| `type` | Yes | No |
+| `refs` | Yes | No |
 | `workspace-symbols` | Yes | No |
-| `document-symbols` | Yes | No |
+| `list` | Yes | No |
 | `daemon` | Yes | No |
 
 On Windows, daemon-dependent commands exit with a clear error message. Adding the package as a dependency won't break your project on Windows — it just won't have full functionality. PRs for Windows named-pipe support are welcome!
@@ -87,16 +87,16 @@ On Windows, daemon-dependent commands exit with a clear error message. Adding th
 All-in-one command — searches the workspace by symbol name, no file needed. Supports multiple symbols in a single call:
 
 ```bash
-ty-find inspect calculate_sum
+tyf inspect calculate_sum
 
 # Inspect multiple symbols at once (results grouped by symbol)
-ty-find inspect calculate_sum UserService Config
+tyf inspect calculate_sum UserService Config
 
 # Narrow to a specific file
-ty-find inspect calculate_sum --file src/math.py
+tyf inspect calculate_sum --file src/math.py
 
 # JSON output for scripting
-ty-find --format json inspect UserService
+tyf --format json inspect UserService
 ```
 
 ### Find Symbol by Name
@@ -104,56 +104,56 @@ ty-find --format json inspect UserService
 Searches the workspace for a symbol's definition. Supports multiple symbols in a single call:
 
 ```bash
-ty-find find calculate_sum
+tyf find calculate_sum
 
 # Find multiple symbols at once (results grouped by symbol)
-ty-find find calculate_sum multiply divide
+tyf find calculate_sum multiply divide
 
 # Narrow to a specific file (text-based search + goto_definition)
-ty-find find function_name --file myfile.py
+tyf find function_name --file myfile.py
 ```
 
-### Hover (Type Information)
+### Type (Type Information)
 
 ```bash
-ty-find hover src/main.py --line 45 --column 12
+tyf type src/main.py --line 45 --column 12
 
 # JSON output for scripting
-ty-find --format json hover src/main.py -l 45 -c 12 | jq '.result.contents.value'
+tyf --format json type src/main.py -l 45 -c 12 | jq '.result.contents.value'
 ```
 
 ### Go to Definition
 
 ```bash
-ty-find definition myfile.py --line 10 --column 5
+tyf definition myfile.py --line 10 --column 5
 ```
 
 ### Find References
 
 ```bash
-# By position (exact, pipeable from document-symbols)
-ty-find references -f myfile.py --line 10 --column 5
+# By position (exact, pipeable from list)
+tyf refs -f myfile.py --line 10 --column 5
 
 # By name (parallel search)
-ty-find references my_function MyClass
+tyf refs my_function MyClass
 ```
 
 ### Workspace Symbol Search
 
 ```bash
-ty-find workspace-symbols --query "UserService"
+tyf workspace-symbols --query "UserService"
 ```
 
 ### Document Outline
 
 ```bash
-ty-find document-symbols src/services/user.py
+tyf list src/services/user.py
 ```
 
 ### Interactive Mode
 
 ```bash
-ty-find interactive
+tyf interactive
 ```
 
 ### Daemon Management
@@ -161,9 +161,9 @@ ty-find interactive
 The daemon starts automatically on first use. Manual control:
 
 ```bash
-ty-find daemon start    # Start manually
-ty-find daemon status   # Check status
-ty-find daemon stop     # Stop
+tyf daemon start    # Start manually
+tyf daemon status   # Check status
+tyf daemon stop     # Stop
 ```
 
 ## Output Formats
@@ -171,8 +171,8 @@ ty-find daemon stop     # Stop
 All commands support `--format` (placed before the subcommand): `human` (default), `json`, `csv`, `paths`.
 
 ```bash
-ty-find --format json hover myfile.py -l 10 -c 5
-ty-find --format csv workspace-symbols --query "User"
+tyf --format json type myfile.py -l 10 -c 5
+tyf --format csv workspace-symbols --query "User"
 ```
 
 ## Architecture
@@ -193,7 +193,7 @@ cargo clippy
 cargo fmt --check
 
 # Verbose logging
-RUST_LOG=ty_find=debug cargo run -- hover test.py -l 1 -c 1
+RUST_LOG=ty_find=debug cargo run -- type test.py -l 1 -c 1
 ```
 
 ## Troubleshooting
@@ -203,11 +203,11 @@ RUST_LOG=ty_find=debug cargo run -- hover test.py -l 1 -c 1
 ty --version
 
 # Debug daemon issues
-ty-find daemon status
-RUST_LOG=ty_find=debug ty-find daemon start
+tyf daemon status
+RUST_LOG=ty_find=debug tyf daemon start
 
 # Restart daemon
-ty-find daemon stop && ty-find daemon start
+tyf daemon stop && tyf daemon start
 ```
 
 ## Contributing

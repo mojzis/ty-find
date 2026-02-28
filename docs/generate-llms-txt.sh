@@ -22,7 +22,7 @@ echo "Copied .md source files to $BOOK_DIR/"
 
 # llms.txt — index with links to .md files
 cat > "$BOOK_DIR/llms.txt" << EOF
-# ty-find
+# tyf
 
 > Type-aware Python code navigation for AI coding agents, powered by ty's LSP server.
 
@@ -42,7 +42,7 @@ echo "Wrote $BOOK_DIR/llms.txt"
 
 # llms-full.txt — all source files concatenated
 : > "$BOOK_DIR/llms-full.txt"
-echo "# ty-find — Full Documentation" >> "$BOOK_DIR/llms-full.txt"
+echo "# tyf — Full Documentation" >> "$BOOK_DIR/llms-full.txt"
 echo "" >> "$BOOK_DIR/llms-full.txt"
 
 # Concatenate all .md files from SUMMARY.md in order

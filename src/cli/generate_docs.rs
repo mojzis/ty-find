@@ -105,7 +105,7 @@ fn render_subcommand(cmd: &Command, name: &str) -> String {
     // Usage
     let _ = writeln!(out, "## Usage\n");
     let _ = writeln!(out, "```");
-    let _ = write!(out, "ty-find {name}");
+    let _ = write!(out, "tyf {name}");
     // Positional arguments
     for arg in cmd.get_positionals() {
         let val = arg
@@ -180,68 +180,68 @@ fn write_examples(out: &mut String, name: &str, cmd: &Command) {
     match name {
         "definition" => {
             let _ = writeln!(out, "# Find definition at a specific location");
-            let _ = writeln!(out, "ty-find definition main.py --line 10 --column 5");
+            let _ = writeln!(out, "tyf definition main.py --line 10 --column 5");
         }
         "find" => {
             let _ = writeln!(out, "# Find a single symbol");
-            let _ = writeln!(out, "ty-find find calculate_sum");
+            let _ = writeln!(out, "tyf find calculate_sum");
             let _ = writeln!(out);
             let _ = writeln!(out, "# Find multiple symbols at once");
-            let _ = writeln!(out, "ty-find find calculate_sum multiply divide");
+            let _ = writeln!(out, "tyf find calculate_sum multiply divide");
             let _ = writeln!(out);
             let _ = writeln!(out, "# Find a symbol in a specific file");
-            let _ = writeln!(out, "ty-find find my_function --file src/module.py");
+            let _ = writeln!(out, "tyf find my_function --file src/module.py");
         }
         "inspect" => {
             let _ = writeln!(out, "# Inspect a single symbol");
-            let _ = writeln!(out, "ty-find inspect MyClass");
+            let _ = writeln!(out, "tyf inspect MyClass");
             let _ = writeln!(out);
             let _ = writeln!(out, "# Inspect multiple symbols at once");
-            let _ = writeln!(out, "ty-find inspect MyClass my_function");
+            let _ = writeln!(out, "tyf inspect MyClass my_function");
             let _ = writeln!(out);
             let _ = writeln!(out, "# Inspect a symbol in a specific file");
-            let _ = writeln!(out, "ty-find inspect MyClass --file src/module.py");
+            let _ = writeln!(out, "tyf inspect MyClass --file src/module.py");
         }
         "interactive" => {
             let _ = writeln!(out, "# Start interactive REPL");
-            let _ = writeln!(out, "ty-find interactive");
+            let _ = writeln!(out, "tyf interactive");
             let _ = writeln!(out);
             let _ = writeln!(out, "# Start with a file context");
-            let _ = writeln!(out, "ty-find interactive main.py");
+            let _ = writeln!(out, "tyf interactive main.py");
         }
-        "hover" => {
+        "type" => {
             let _ = writeln!(out, "# Show type information at a location");
-            let _ = writeln!(out, "ty-find hover main.py --line 10 --column 5");
+            let _ = writeln!(out, "tyf type main.py --line 10 --column 5");
         }
-        "references" => {
+        "refs" => {
             let _ = writeln!(out, "# Find all references to a symbol");
-            let _ = writeln!(out, "ty-find references main.py --line 10 --column 5");
+            let _ = writeln!(out, "tyf refs main.py --line 10 --column 5");
         }
         "workspace-symbols" => {
             let _ = writeln!(out, "# Search for symbols across the workspace");
-            let _ = writeln!(out, "ty-find workspace-symbols --query MyClass");
+            let _ = writeln!(out, "tyf workspace-symbols --query MyClass");
         }
-        "document-symbols" => {
+        "list" => {
             let _ = writeln!(out, "# List all symbols in a file");
-            let _ = writeln!(out, "ty-find document-symbols main.py");
+            let _ = writeln!(out, "tyf list main.py");
         }
         "daemon" => {
             let _ = writeln!(out, "# Start the background daemon");
-            let _ = writeln!(out, "ty-find daemon start");
+            let _ = writeln!(out, "tyf daemon start");
             let _ = writeln!(out);
             let _ = writeln!(out, "# Check daemon status");
-            let _ = writeln!(out, "ty-find daemon status");
+            let _ = writeln!(out, "tyf daemon status");
             let _ = writeln!(out);
             let _ = writeln!(out, "# Stop the daemon");
-            let _ = writeln!(out, "ty-find daemon stop");
+            let _ = writeln!(out, "tyf daemon stop");
         }
         _ => {
             // Generic example for unknown commands
             let has_positional = cmd.get_positionals().next().is_some();
             if has_positional {
-                let _ = writeln!(out, "ty-find {name} <args>");
+                let _ = writeln!(out, "tyf {name} <args>");
             } else {
-                let _ = writeln!(out, "ty-find {name}");
+                let _ = writeln!(out, "tyf {name}");
             }
         }
     }

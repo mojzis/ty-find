@@ -49,16 +49,16 @@ fn require_ty() {
     );
 }
 
-/// Run ty-find with the given arguments against `test_project` and return stdout.
-fn run_ty_find(args: &[&str]) -> String {
-    let mut cmd = cargo_bin_cmd!("ty-find");
+/// Run tyf with the given arguments against `test_project` and return stdout.
+fn run_tyf(args: &[&str]) -> String {
+    let mut cmd = cargo_bin_cmd!("tyf");
     cmd.arg("--workspace").arg(test_project_root());
     for arg in args {
         cmd.arg(arg);
     }
-    let output = cmd.output().expect("failed to run ty-find");
+    let output = cmd.output().expect("failed to run tyf");
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    assert!(output.status.success(), "ty-find failed: {stdout}");
+    assert!(output.status.success(), "tyf failed: {stdout}");
     stdout
 }
 
@@ -67,7 +67,7 @@ async fn test_project_inspect_and_references() {
     require_ty();
 
     // ── 1. inspect class via workspace symbols (no --file) ──────────
-    let out = run_ty_find(&["inspect", "Animal"]);
+    let out = run_tyf(&["inspect", "Animal"]);
     assert!(
         predicate::str::contains("models.py").eval(&out),
         "expected definition in models.py, got:\n{out}"
@@ -78,7 +78,7 @@ async fn test_project_inspect_and_references() {
     );
 
     // ── 2. inspect function via workspace symbols ───────────────────
-    let out = run_ty_find(&["inspect", "create_dog"]);
+    let out = run_tyf(&["inspect", "create_dog"]);
     assert!(
         !predicate::str::contains("No hover information").eval(&out),
         "hover should be present for create_dog, got:\n{out}"
@@ -89,7 +89,7 @@ async fn test_project_inspect_and_references() {
     );
 
     // ── 3. inspect with --references ────────────────────────────────
-    let out = run_ty_find(&["inspect", "Animal", "--references"]);
+    let out = run_tyf(&["inspect", "Animal", "--references"]);
     assert!(
         !predicate::str::contains("No references found").eval(&out),
         "references should be present for Animal, got:\n{out}"
@@ -100,7 +100,7 @@ async fn test_project_inspect_and_references() {
     );
 
     // ── 4. references by symbol name (class) ────────────────────────
-    let out = run_ty_find(&["references", "Animal"]);
+    let out = run_tyf(&["refs", "Animal"]);
     assert!(
         !predicate::str::contains("No references found").eval(&out),
         "references should be present for Animal, got:\n{out}"
@@ -115,7 +115,7 @@ async fn test_project_inspect_and_references() {
     );
 
     // ── 5. references by symbol name (function) ─────────────────────
-    let out = run_ty_find(&["references", "create_dog"]);
+    let out = run_tyf(&["refs", "create_dog"]);
     assert!(
         !predicate::str::contains("No references found").eval(&out),
         "references should be present for create_dog, got:\n{out}"
@@ -124,7 +124,7 @@ async fn test_project_inspect_and_references() {
     // ── 6. inspect with --file (file-based path, regression check) ──
     let models = test_project_root().join("models.py");
     let models_str = models.to_string_lossy().to_string();
-    let out = run_ty_find(&["inspect", "Animal", "--file", &models_str]);
+    let out = run_tyf(&["inspect", "Animal", "--file", &models_str]);
     assert!(
         !predicate::str::contains("No hover information").eval(&out),
         "hover should be present when using --file, got:\n{out}"

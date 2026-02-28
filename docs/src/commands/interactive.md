@@ -1,26 +1,26 @@
 # interactive
 
-Interactive REPL for exploring definitions
+Interactive REPL for exploring code
 
 ## Usage
 
 ```
-ty-find interactive [FILE]
+tyf interactive [FILE]
 ```
 
 ## Arguments
 
 **`<file>`**
-: 
+:
 
 ## Examples
 
 ```bash
 # Start interactive REPL
-ty-find interactive
+tyf interactive
 
 # Start with a file context
-ty-find interactive main.py
+tyf interactive main.py
 ```
 
 ## See also

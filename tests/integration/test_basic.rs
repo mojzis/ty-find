@@ -50,7 +50,7 @@ async fn test_definition_command() {
     require_ty();
 
     // Go to definition of `hello_world()` call on line 18
-    let mut cmd = cargo_bin_cmd!("ty-find");
+    let mut cmd = cargo_bin_cmd!("tyf");
     cmd.arg("--workspace")
         .arg(workspace_root())
         .arg("definition")
@@ -60,7 +60,7 @@ async fn test_definition_command() {
         .arg("--column")
         .arg("14");
 
-    let output = cmd.output().expect("failed to run ty-find");
+    let output = cmd.output().expect("failed to run tyf");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(output.status.success(), "command failed: {stdout}");
     assert!(predicate::str::contains("hello_world").eval(&stdout));
@@ -71,7 +71,7 @@ async fn test_find_command() {
     require_ty();
 
     // Find the `add` method in test_example.py
-    let mut cmd = cargo_bin_cmd!("ty-find");
+    let mut cmd = cargo_bin_cmd!("tyf");
     cmd.arg("--workspace")
         .arg(workspace_root())
         .arg("find")
@@ -79,7 +79,7 @@ async fn test_find_command() {
         .arg("--file")
         .arg(fixture_path());
 
-    let output = cmd.output().expect("failed to run ty-find");
+    let output = cmd.output().expect("failed to run tyf");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(output.status.success(), "command failed: {stdout}");
     assert!(predicate::str::contains("add").eval(&stdout));
@@ -90,7 +90,7 @@ async fn test_json_output() {
     require_ty();
 
     // Go to definition of `calculate_sum()` call on line 19, with JSON output
-    let mut cmd = cargo_bin_cmd!("ty-find");
+    let mut cmd = cargo_bin_cmd!("tyf");
     cmd.arg("--workspace")
         .arg(workspace_root())
         .arg("--format")
@@ -102,7 +102,7 @@ async fn test_json_output() {
         .arg("--column")
         .arg("13");
 
-    let output = cmd.output().expect("failed to run ty-find");
+    let output = cmd.output().expect("failed to run tyf");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(output.status.success(), "command failed: {stdout}");
     assert!(predicate::str::contains("uri").eval(&stdout));
@@ -114,7 +114,7 @@ async fn test_inspect_command_with_file() {
     require_ty();
 
     // Inspect the `hello_world` function (--file path, uses SymbolFinder)
-    let mut cmd = cargo_bin_cmd!("ty-find");
+    let mut cmd = cargo_bin_cmd!("tyf");
     cmd.arg("--workspace")
         .arg(workspace_root())
         .arg("inspect")
@@ -122,7 +122,7 @@ async fn test_inspect_command_with_file() {
         .arg("--file")
         .arg(fixture_path());
 
-    let output = cmd.output().expect("failed to run ty-find");
+    let output = cmd.output().expect("failed to run tyf");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(output.status.success(), "command failed: {stdout}");
 
@@ -147,10 +147,10 @@ async fn test_inspect_command_workspace_symbols() {
     require_ty();
 
     // Inspect `hello_world` WITHOUT --file (uses workspace symbols + find_name_column)
-    let mut cmd = cargo_bin_cmd!("ty-find");
+    let mut cmd = cargo_bin_cmd!("tyf");
     cmd.arg("--workspace").arg(workspace_root()).arg("inspect").arg("hello_world");
 
-    let output = cmd.output().expect("failed to run ty-find");
+    let output = cmd.output().expect("failed to run tyf");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(output.status.success(), "command failed: {stdout}");
 
@@ -175,10 +175,10 @@ async fn test_inspect_class_workspace_symbols() {
     // Inspect `Calculator` class WITHOUT --file — this is the case where
     // workspace symbols return column at "class" keyword, and find_name_column
     // must correct it to the "Calculator" name position for hover to work.
-    let mut cmd = cargo_bin_cmd!("ty-find");
+    let mut cmd = cargo_bin_cmd!("tyf");
     cmd.arg("--workspace").arg(workspace_root()).arg("inspect").arg("Calculator");
 
-    let output = cmd.output().expect("failed to run ty-find");
+    let output = cmd.output().expect("failed to run tyf");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(output.status.success(), "command failed: {stdout}");
 
@@ -201,7 +201,7 @@ async fn test_inspect_command_with_references() {
     require_ty();
 
     // Inspect `hello_world` with --references to verify all three sections
-    let mut cmd = cargo_bin_cmd!("ty-find");
+    let mut cmd = cargo_bin_cmd!("tyf");
     cmd.arg("--workspace")
         .arg(workspace_root())
         .arg("inspect")
@@ -210,7 +210,7 @@ async fn test_inspect_command_with_references() {
         .arg(fixture_path())
         .arg("--references");
 
-    let output = cmd.output().expect("failed to run ty-find");
+    let output = cmd.output().expect("failed to run tyf");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(output.status.success(), "command failed: {stdout}");
 
@@ -241,10 +241,10 @@ async fn test_references_by_position() {
     require_ty();
 
     // Find references to `hello_world` via its definition at line 1, col 5
-    let mut cmd = cargo_bin_cmd!("ty-find");
+    let mut cmd = cargo_bin_cmd!("tyf");
     cmd.arg("--workspace")
         .arg(workspace_root())
-        .arg("references")
+        .arg("refs")
         .arg("-f")
         .arg(fixture_path())
         .arg("-l")
@@ -252,7 +252,7 @@ async fn test_references_by_position() {
         .arg("-c")
         .arg("5");
 
-    let output = cmd.output().expect("failed to run ty-find");
+    let output = cmd.output().expect("failed to run tyf");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(output.status.success(), "command failed: {stdout}");
     assert!(predicate::str::contains("test_example.py").eval(&stdout));
@@ -263,15 +263,15 @@ async fn test_references_by_symbol_name() {
     require_ty();
 
     // Find references to `calculate_sum` by symbol name
-    let mut cmd = cargo_bin_cmd!("ty-find");
+    let mut cmd = cargo_bin_cmd!("tyf");
     cmd.arg("--workspace")
         .arg(workspace_root())
-        .arg("references")
+        .arg("refs")
         .arg("calculate_sum")
         .arg("-f")
         .arg(fixture_path());
 
-    let output = cmd.output().expect("failed to run ty-find");
+    let output = cmd.output().expect("failed to run tyf");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(output.status.success(), "command failed: {stdout}");
     assert!(predicate::str::contains("calculate_sum").eval(&stdout));
@@ -282,16 +282,16 @@ async fn test_references_multiple_symbols() {
     require_ty();
 
     // Find references to multiple symbols in one call (batched via daemon)
-    let mut cmd = cargo_bin_cmd!("ty-find");
+    let mut cmd = cargo_bin_cmd!("tyf");
     cmd.arg("--workspace")
         .arg(workspace_root())
-        .arg("references")
+        .arg("refs")
         .arg("hello_world")
         .arg("calculate_sum")
         .arg("-f")
         .arg(fixture_path());
 
-    let output = cmd.output().expect("failed to run ty-find");
+    let output = cmd.output().expect("failed to run tyf");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(output.status.success(), "command failed: {stdout}");
     assert!(predicate::str::contains("hello_world").eval(&stdout));
@@ -304,11 +304,11 @@ async fn test_references_stdin_piping() {
 
     // Pipe symbol names via stdin using std::process::Command
     let fixture = fixture_path();
-    let bin = assert_cmd::cargo::cargo_bin!("ty-find");
+    let bin = assert_cmd::cargo::cargo_bin!("tyf");
     let mut child = process::Command::new(bin)
         .arg("--workspace")
         .arg(workspace_root())
-        .arg("references")
+        .arg("refs")
         .arg("--stdin")
         .arg("-f")
         .arg(&fixture)
@@ -316,7 +316,7 @@ async fn test_references_stdin_piping() {
         .stdout(process::Stdio::piped())
         .stderr(process::Stdio::piped())
         .spawn()
-        .expect("failed to spawn ty-find");
+        .expect("failed to spawn tyf");
 
     {
         let stdin = child.stdin.as_mut().expect("failed to open stdin");
@@ -324,7 +324,7 @@ async fn test_references_stdin_piping() {
         writeln!(stdin, "calculate_sum").expect("failed to write to stdin");
     }
 
-    let output = child.wait_with_output().expect("failed to wait for ty-find");
+    let output = child.wait_with_output().expect("failed to wait for tyf");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(output.status.success(), "command failed: {stdout}");
     assert!(predicate::str::contains("hello_world").eval(&stdout));
@@ -338,10 +338,10 @@ async fn test_references_file_line_col_format() {
     // Use file:line:col auto-detection format
     let fixture = fixture_path();
     let position = format!("{}:1:5", fixture.display());
-    let mut cmd = cargo_bin_cmd!("ty-find");
-    cmd.arg("--workspace").arg(workspace_root()).arg("references").arg(&position);
+    let mut cmd = cargo_bin_cmd!("tyf");
+    cmd.arg("--workspace").arg(workspace_root()).arg("refs").arg(&position);
 
-    let output = cmd.output().expect("failed to run ty-find");
+    let output = cmd.output().expect("failed to run tyf");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(output.status.success(), "command failed: {stdout}");
     assert!(predicate::str::contains("test_example.py").eval(&stdout));

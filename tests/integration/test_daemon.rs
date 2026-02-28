@@ -21,7 +21,7 @@ use std::time::Duration;
 fn test_daemon_start_does_not_fork_bomb() {
     // Build the binary first (assert_cmd does this lazily, but we need the
     // path upfront to grep for it in the process table).
-    let bin_path = assert_cmd::cargo::cargo_bin!("ty-find");
+    let bin_path = assert_cmd::cargo::cargo_bin!("tyf");
 
     // Use a unique socket path so we don't interfere with a real daemon.
     // We achieve this by removing any existing socket so the "already running"
@@ -40,12 +40,12 @@ fn test_daemon_start_does_not_fork_bomb() {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
-        .expect("failed to spawn ty-find");
+        .expect("failed to spawn tyf");
 
     // Give it a moment to potentially fork-bomb.
     std::thread::sleep(Duration::from_secs(2));
 
-    // Count ty-find processes.  We look for the binary name in the process
+    // Count tyf processes.  We look for the binary name in the process
     // list via `pgrep`.
     let count = count_ty_find_processes(bin_path);
 
@@ -64,7 +64,7 @@ fn test_daemon_start_does_not_fork_bomb() {
     // clear fork bomb.
     assert!(
         count <= 5,
-        "Detected {count} ty-find processes — likely a fork bomb! \
+        "Detected {count} tyf processes — likely a fork bomb! \
          Expected at most 2 (parent + 1 background child).",
     );
 }
@@ -83,7 +83,7 @@ fn test_daemon_start_does_not_fork_bomb() {
 #[test]
 #[allow(unsafe_code)]
 fn test_daemon_auto_start_on_first_request() {
-    let bin_path = assert_cmd::cargo::cargo_bin!("ty-find");
+    let bin_path = assert_cmd::cargo::cargo_bin!("tyf");
     // SAFETY: `libc::getuid()` is a simple syscall with no preconditions.
     let socket_path = format!("/tmp/ty-find-{}.sock", unsafe { libc::getuid() });
 
@@ -95,25 +95,25 @@ fn test_daemon_auto_start_on_first_request() {
     // Sanity-check: socket must not exist.
     assert!(!Path::new(&socket_path).exists(), "Socket still present after cleanup");
 
-    // --- act: run a daemon-dependent command (hover) ---
+    // --- act: run a daemon-dependent command (type) ---
     // Create a minimal Python file so the CLI doesn't bail on missing file before
     // reaching the daemon auto-start path.
     let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
     let test_file = temp_dir.path().join("test.py");
     std::fs::write(&test_file, "x = 1\n").expect("failed to write test file");
 
-    // The hover command will call ensure_daemon_running() then try to use the
+    // The type command will call ensure_daemon_running() then try to use the
     // daemon.  The LSP request may fail, but we only care that the daemon was
     // spawned.
     let _output = Command::new(bin_path.as_os_str())
-        .arg("hover")
+        .arg("type")
         .arg(&test_file)
         .arg("-l")
         .arg("1")
         .arg("-c")
         .arg("1")
         .output()
-        .expect("failed to run hover command");
+        .expect("failed to run type command");
 
     // Give the daemon a moment to fully bind the socket (it may already be
     // bound because ensure_daemon_running polls for it, but be safe).

@@ -1,4 +1,4 @@
-//! Daemon client for communicating with the persistent ty-find daemon.
+//! Daemon client for communicating with the persistent tyf daemon.
 //!
 //! This module provides a client that connects to the daemon via Unix domain
 //! sockets and sends JSON-RPC 2.0 requests. The client handles auto-starting
@@ -35,7 +35,7 @@ const MAX_STARTUP_RETRIES: usize = 20;
 /// Delay between startup retry attempts (100ms).
 const STARTUP_RETRY_DELAY: Duration = Duration::from_millis(100);
 
-/// Client for communicating with the ty-find daemon.
+/// Client for communicating with the tyf daemon.
 ///
 /// The client connects to the daemon via a Unix domain socket and sends
 /// JSON-RPC 2.0 requests. Messages are framed using Content-Length headers

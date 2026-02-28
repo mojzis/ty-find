@@ -126,6 +126,11 @@ async fn test_inspect_command() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(output.status.success(), "command failed: {stdout}");
     assert!(predicate::str::contains("hello_world").eval(&stdout));
+    // Verify hover / type info is actually returned (not just the name)
+    assert!(
+        !predicate::str::contains("No hover information").eval(&stdout),
+        "inspect should return hover info, got:\n{stdout}"
+    );
 }
 
 #[tokio::test]

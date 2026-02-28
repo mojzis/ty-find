@@ -130,6 +130,16 @@ The project uses maturin to bridge Rust and Python ecosystems:
 - **tokio** for async LSP communication and process management
 - **clap** for CLI parsing with subcommands and multiple output formats
 
+## Branch Hygiene
+
+**Always merge `main` into your feature branch before creating a PR.** This catches integration issues (compilation errors, test failures) from recently-merged PRs before CI runs. Run:
+
+```bash
+git fetch origin main && git merge origin/main
+```
+
+Then re-run the full check suite (`cargo fmt --check && cargo clippy --all-features -- -D warnings && cargo test --all-features`) to verify the merge didn't introduce breakage.
+
 ## Review Before Completing Work
 
 Before marking any task as complete, run the review process:

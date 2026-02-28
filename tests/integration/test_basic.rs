@@ -110,10 +110,10 @@ async fn test_json_output() {
 }
 
 #[tokio::test]
-async fn test_inspect_command() {
+async fn test_inspect_command_with_file() {
     require_ty();
 
-    // Inspect the `hello_world` function
+    // Inspect the `hello_world` function (--file path, uses SymbolFinder)
     let mut cmd = cargo_bin_cmd!("ty-find");
     cmd.arg("--workspace")
         .arg(workspace_root())
@@ -125,11 +125,74 @@ async fn test_inspect_command() {
     let output = cmd.output().expect("failed to run ty-find");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(output.status.success(), "command failed: {stdout}");
-    assert!(predicate::str::contains("hello_world").eval(&stdout));
-    // Verify hover / type info is actually returned (not just the name)
+
+    // Definition section must show the file location
     assert!(
-        !predicate::str::contains("No hover information").eval(&stdout),
-        "inspect should return hover info, got:\n{stdout}"
+        predicate::str::contains("test_example.py:1:").eval(&stdout),
+        "inspect should find definition, got:\n{stdout}"
+    );
+    // Hover/Type section must contain actual type info (not "(none)")
+    assert!(
+        predicate::str::contains("hello_world").eval(&stdout),
+        "inspect should show type signature, got:\n{stdout}"
+    );
+    assert!(
+        !predicate::str::contains("# Type\n(none)").eval(&stdout),
+        "hover should not be empty — type info must be returned, got:\n{stdout}"
+    );
+}
+
+#[tokio::test]
+async fn test_inspect_command_workspace_symbols() {
+    require_ty();
+
+    // Inspect `hello_world` WITHOUT --file (uses workspace symbols + find_name_column)
+    let mut cmd = cargo_bin_cmd!("ty-find");
+    cmd.arg("--workspace").arg(workspace_root()).arg("inspect").arg("hello_world");
+
+    let output = cmd.output().expect("failed to run ty-find");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "command failed: {stdout}");
+
+    // Definition section must show the file location
+    assert!(
+        predicate::str::contains("test_example.py:1:").eval(&stdout),
+        "inspect should find definition, got:\n{stdout}"
+    );
+    // Hover/Type section must contain actual type info (not "(none)")
+    assert!(
+        !predicate::str::contains("# Type\n(none)").eval(&stdout),
+        "hover should not be empty — type info must be returned.\n\
+         If this fails, find_name_column may have returned the wrong column.\n\
+         Got:\n{stdout}"
+    );
+}
+
+#[tokio::test]
+async fn test_inspect_class_workspace_symbols() {
+    require_ty();
+
+    // Inspect `Calculator` class WITHOUT --file — this is the case where
+    // workspace symbols return column at "class" keyword, and find_name_column
+    // must correct it to the "Calculator" name position for hover to work.
+    let mut cmd = cargo_bin_cmd!("ty-find");
+    cmd.arg("--workspace").arg(workspace_root()).arg("inspect").arg("Calculator");
+
+    let output = cmd.output().expect("failed to run ty-find");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "command failed: {stdout}");
+
+    // Should show as class kind
+    assert!(
+        predicate::str::contains("(class)").eval(&stdout),
+        "Calculator should be identified as a class, got:\n{stdout}"
+    );
+    // Hover must return actual type info
+    assert!(
+        !predicate::str::contains("# Type\n(none)").eval(&stdout),
+        "hover should not be empty for Calculator class.\n\
+         This tests that find_name_column correctly shifts from 'class' keyword \
+         to 'Calculator' name.\nGot:\n{stdout}"
     );
 }
 
@@ -153,18 +216,23 @@ async fn test_inspect_command_with_references() {
 
     // Definition
     assert!(
-        predicate::str::contains("hello_world").eval(&stdout),
+        predicate::str::contains("test_example.py:1:").eval(&stdout),
         "should find hello_world definition, got:\n{stdout}"
     );
-    // Hover
+    // Hover must have actual type info
     assert!(
-        !predicate::str::contains("No hover information").eval(&stdout),
+        !predicate::str::contains("# Type\n(none)").eval(&stdout),
         "inspect should return hover info, got:\n{stdout}"
     );
-    // References
+    // References section must have actual locations (not "(none)")
     assert!(
-        !predicate::str::contains("No references found").eval(&stdout),
+        !predicate::str::contains("# Refs\n(none)").eval(&stdout),
         "inspect --references should find usages, got:\n{stdout}"
+    );
+    // Should show at least 2 refs (definition + usage in main())
+    assert!(
+        predicate::str::contains("# Refs (").eval(&stdout),
+        "references should show count, got:\n{stdout}"
     );
 }
 

@@ -227,8 +227,18 @@ impl DaemonServer {
         let client = { self.lsp_pool.lock().await.get_or_create(params.workspace).await? };
 
         let file_str = params.file.to_string_lossy().to_string();
-        client.open_document(&file_str).await?;
+        let first_open = client.open_document(&file_str).await?;
+
         let hover = client.hover(&file_str, params.line, params.column).await?;
+
+        // Retry once on cold start (see handle_inspect for explanation).
+        let hover = if hover.is_none() && first_open {
+            tracing::debug!("hover returned null after first open, retrying...");
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            client.hover(&file_str, params.line, params.column).await?
+        } else {
+            hover
+        };
 
         let result = HoverResult { hover };
         Ok(serde_json::to_value(result)?)
@@ -337,9 +347,21 @@ impl DaemonServer {
         let client = { self.lsp_pool.lock().await.get_or_create(params.workspace).await? };
 
         let file_str = params.file.to_string_lossy().to_string();
-        client.open_document(&file_str).await?;
+        let first_open = client.open_document(&file_str).await?;
 
         let hover = client.hover(&file_str, params.line, params.column).await?;
+
+        // The ty LSP server may return null hover when a document was just
+        // opened and analysis hasn't completed (common on cold start).
+        // Retry once after a short delay to give the server time.
+        let hover = if hover.is_none() && first_open {
+            tracing::debug!("hover returned null after first open, retrying...");
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            client.hover(&file_str, params.line, params.column).await?
+        } else {
+            hover
+        };
+
         let references = if params.include_references {
             client.find_references(&file_str, params.line, params.column, true).await?
         } else {

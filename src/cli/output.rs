@@ -365,6 +365,28 @@ impl OutputFormatter {
         }
     }
 
+    /// Extract just the type signature from hover, stripping docstrings.
+    ///
+    /// ty's hover markdown is structured as:
+    ///   ```lang\n<type info>\n```\n---\nDocstring...
+    ///
+    /// For condensed output we only want the type info code block.
+    /// Also normalises the `xml` language tag (used by ty for class types)
+    /// to `text` for cleaner display.
+    fn extract_hover_type(contents: &HoverContents) -> String {
+        let full = Self::extract_hover_text(contents);
+
+        // Strip docstring: everything after the first "\n---" separator
+        let type_part = match full.find("\n---") {
+            Some(pos) => &full[..pos],
+            None => &full,
+        };
+
+        // Normalise language tag: ty uses ```xml for class types like
+        // `<class 'Foo'>`, which confuses rendering. Replace with ```text.
+        type_part.replace("```xml", "```text")
+    }
+
     /// Short label for a `SymbolKind`, used in condensed output.
     fn kind_label(kind: &SymbolKind) -> &'static str {
         match kind {
@@ -438,7 +460,7 @@ impl OutputFormatter {
         // Type section — always shown, compact placeholder when empty
         let _ = writeln!(output, "\n{h} Type");
         if let Some(hover) = hover {
-            output.push_str(&Self::extract_hover_text(&hover.contents));
+            output.push_str(&Self::extract_hover_type(&hover.contents));
             output.push('\n');
         } else {
             output.push_str("(none)\n");
@@ -936,5 +958,65 @@ mod tests {
     #[test]
     fn test_read_source_line_nonexistent_file() {
         assert_eq!(read_source_line("/nonexistent/file.py", 1), None);
+    }
+
+    #[test]
+    fn test_extract_hover_type_strips_docstring() {
+        use crate::lsp::protocol::{HoverContents, MarkupContent};
+
+        let contents = HoverContents::Markup(MarkupContent {
+            kind: crate::lsp::protocol::MarkupKind::Markdown,
+            value: "```xml\n<class 'Animal'>\n```\n---\nBase class for animals.".to_string(),
+        });
+
+        let result = OutputFormatter::extract_hover_type(&contents);
+        // Should strip docstring after ---
+        assert!(!result.contains("Base class"));
+        assert!(!result.contains("---"));
+        // Should normalise xml → text
+        assert!(result.contains("```text"));
+        assert!(result.contains("<class 'Animal'>"));
+    }
+
+    #[test]
+    fn test_extract_hover_type_no_docstring() {
+        use crate::lsp::protocol::{HoverContents, MarkupContent};
+
+        let contents = HoverContents::Markup(MarkupContent {
+            kind: crate::lsp::protocol::MarkupKind::Markdown,
+            value: "```python\ndef hello_world() -> Unknown\n```".to_string(),
+        });
+
+        let result = OutputFormatter::extract_hover_type(&contents);
+        assert!(result.contains("def hello_world() -> Unknown"));
+        // No xml tag to replace
+        assert!(!result.contains("xml"));
+    }
+
+    #[test]
+    fn test_condensed_inspect_strips_docstring() {
+        use crate::lsp::protocol::{Hover, HoverContents, MarkupContent, Range};
+
+        let formatter = OutputFormatter::new(OutputFormat::Human);
+        let defs = [make_location("file:///test.py", 3, 6)];
+        let hover = Hover {
+            contents: HoverContents::Markup(MarkupContent {
+                kind: crate::lsp::protocol::MarkupKind::Markdown,
+                value: "```xml\n<class 'Animal'>\n```\n---\nBase class for animals.".to_string(),
+            }),
+            range: Some(Range {
+                start: crate::lsp::protocol::Position { line: 3, character: 6 },
+                end: crate::lsp::protocol::Position { line: 3, character: 12 },
+            }),
+        };
+        let entry = make_entry("Animal", Some(&SymbolKind::Class), &defs, Some(&hover), &[]);
+        let result = formatter.format_inspect(&entry);
+
+        // Type section should have the class type but not the docstring
+        assert!(result.contains("<class 'Animal'>"));
+        assert!(!result.contains("Base class"));
+        assert!(!result.contains("---"));
+        // Should use text tag, not xml
+        assert!(result.contains("```text"));
     }
 }

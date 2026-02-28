@@ -28,10 +28,29 @@ fn dedup_locations(locations: &mut Vec<Location>) {
 /// (e.g. the `class` keyword), but hover/references need the cursor on the
 /// *name* itself. This helper reads the source line and locates the name.
 fn find_name_column(file_path: &str, line_0: u32, name: &str) -> Option<u32> {
-    let content = std::fs::read_to_string(file_path).ok()?;
-    let src_line = content.lines().nth(line_0 as usize)?;
-    let col = src_line.find(name)?;
-    u32::try_from(col).ok()
+    let content = match std::fs::read_to_string(file_path) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::debug!("find_name_column: cannot read {file_path}: {e}");
+            return None;
+        }
+    };
+    let Some(src_line) = content.lines().nth(line_0 as usize) else {
+        tracing::debug!(
+            "find_name_column: line {line_0} out of range in {file_path} ({} lines)",
+            content.lines().count()
+        );
+        return None;
+    };
+    if let Some(col) = src_line.find(name) {
+        tracing::debug!(
+            "find_name_column: found '{name}' at col {col} on line {line_0} of {file_path}"
+        );
+        u32::try_from(col).ok()
+    } else {
+        tracing::debug!("find_name_column: '{name}' not found on line {line_0}: {:?}", src_line);
+        None
+    }
 }
 
 pub async fn handle_definition_command(
@@ -542,10 +561,15 @@ async fn inspect_single_symbol(
             let file_path =
                 first.location.uri.strip_prefix("file://").unwrap_or(&first.location.uri);
             let def_line = first.location.range.start.line;
+            let ws_col = first.location.range.start.character;
             // Workspace-symbol range.start points at the declaration keyword
             // (e.g. "class"), but hover/references need the symbol *name* column.
-            let def_col = find_name_column(file_path, def_line, &first.name)
-                .unwrap_or(first.location.range.start.character);
+            let name_col = find_name_column(file_path, def_line, &first.name);
+            let def_col = name_col.unwrap_or(ws_col);
+            tracing::debug!(
+                "inspect: workspace-symbol col={ws_col}, name_col={name_col:?}, using col={def_col} for '{}'",
+                first.name
+            );
             let all_definitions: Vec<Location> =
                 matched.iter().map(|s| s.location.clone()).collect();
 
@@ -560,6 +584,9 @@ async fn inspect_single_symbol(
         };
 
     // Steps 2 & 3: Get hover info (and optionally references) via single daemon call
+    tracing::debug!(
+        "inspect: querying hover/refs at {definition_file}:{def_line}:{def_col} for '{symbol}'"
+    );
     let inspect = client
         .execute_inspect(
             workspace_root.to_path_buf(),
@@ -569,6 +596,12 @@ async fn inspect_single_symbol(
             include_references,
         )
         .await?;
+
+    tracing::debug!(
+        "inspect: hover={}, refs={}",
+        if inspect.hover.is_some() { "present" } else { "NONE" },
+        inspect.references.len()
+    );
 
     Ok(InspectResult {
         symbol: symbol.to_string(),

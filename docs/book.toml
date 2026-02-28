@@ -12,3 +12,6 @@ build-dir = "book/html"
 site-url = "/ty-find/"
 git-repository-url = "https://github.com/mojzis/ty-find"
 edit-url-template = "https://github.com/mojzis/ty-find/edit/main/docs/{path}"
+default-theme = "navy"
+preferred-dark-theme = "navy"
+additional-css = ["custom.css"]

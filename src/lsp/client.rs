@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
@@ -20,6 +20,10 @@ pub struct TyLspClient {
     stdin: tokio::sync::Mutex<tokio::process::ChildStdin>,
     request_id: AtomicU64,
     pending_requests: Arc<Mutex<HashMap<u64, oneshot::Sender<LSPResponse>>>>,
+    /// URIs of documents already sent via `textDocument/didOpen`.
+    /// Duplicate opens violate LSP protocol and can cause the server to
+    /// re-analyze the file, returning null hover during the re-analysis window.
+    opened_documents: Mutex<HashSet<String>>,
 }
 
 /// Build a `file://` URI from a file path, canonicalizing it first.
@@ -53,6 +57,7 @@ impl TyLspClient {
             stdin: tokio::sync::Mutex::new(stdin),
             request_id: AtomicU64::new(1),
             pending_requests: Arc::new(Mutex::new(HashMap::new())),
+            opened_documents: Mutex::new(HashSet::new()),
         };
 
         // Must start reading responses before sending initialize,
@@ -102,8 +107,25 @@ impl TyLspClient {
         Ok(())
     }
 
-    pub async fn open_document(&self, file_path: &str) -> Result<()> {
+    /// Open a document and return whether it was newly opened.
+    ///
+    /// Returns `true` if this was the first `didOpen` for this URI.
+    /// Returns `false` if the document was already open (no notification sent).
+    ///
+    /// LSP protocol requires exactly one `didOpen` per document. Sending it
+    /// again causes the server to re-analyze from scratch, which can make
+    /// hover/references return null during the re-analysis window.
+    pub async fn open_document(&self, file_path: &str) -> Result<bool> {
         let uri = file_uri(file_path).await?;
+
+        {
+            let mut opened = self.opened_documents.lock().expect("opened_documents mutex poisoned");
+            if !opened.insert(uri.clone()) {
+                tracing::debug!("open_document: already open, skipping didOpen for {uri}");
+                return Ok(false);
+            }
+        }
+
         let text = tokio::fs::read_to_string(file_path)
             .await
             .with_context(|| format!("Failed to read file: {file_path}"))?;
@@ -119,7 +141,9 @@ impl TyLspClient {
                 }
             }),
         )
-        .await
+        .await?;
+
+        Ok(true)
     }
 
     pub async fn goto_definition(

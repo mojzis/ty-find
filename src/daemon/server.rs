@@ -23,6 +23,8 @@ use crate::daemon::protocol::{
     PingResult, ReferencesParams, ReferencesResult, ShutdownResult, WorkspaceSymbolsParams,
     WorkspaceSymbolsResult,
 };
+use crate::lsp::client::TyLspClient;
+use crate::lsp::protocol::Hover;
 
 /// The daemon server that handles client connections and LSP requests.
 pub struct DaemonServer {
@@ -228,7 +230,8 @@ impl DaemonServer {
 
         let file_str = params.file.to_string_lossy().to_string();
         client.open_document(&file_str).await?;
-        let hover = client.hover(&file_str, params.line, params.column).await?;
+
+        let hover = Self::hover_with_warmup(&client, &file_str, params.line, params.column).await?;
 
         let result = HoverResult { hover };
         Ok(serde_json::to_value(result)?)
@@ -257,7 +260,7 @@ impl DaemonServer {
 
         let client = { self.lsp_pool.lock().await.get_or_create(params.workspace).await? };
 
-        let mut symbols = client.workspace_symbols(&params.query).await?;
+        let mut symbols = Self::workspace_symbols_with_warmup(&client, &params.query).await?;
 
         // Filter by exact name if specified (avoids serializing thousands of fuzzy matches)
         if let Some(ref exact_name) = params.exact_name {
@@ -339,7 +342,8 @@ impl DaemonServer {
         let file_str = params.file.to_string_lossy().to_string();
         client.open_document(&file_str).await?;
 
-        let hover = client.hover(&file_str, params.line, params.column).await?;
+        let hover = Self::hover_with_warmup(&client, &file_str, params.line, params.column).await?;
+
         let references = if params.include_references {
             client.find_references(&file_str, params.line, params.column, true).await?
         } else {
@@ -372,6 +376,64 @@ impl DaemonServer {
             cache_size: 0, // Cache not yet implemented
         };
         Ok(serde_json::to_value(result)?)
+    }
+
+    /// Hover with retry on cold start.
+    ///
+    /// The ty LSP server may return null hover when a document was recently
+    /// opened and analysis hasn't completed. This is common on cold start
+    /// (first daemon request) but can also happen when multiple handlers
+    /// race to query a freshly-opened file. Retry a few times with
+    /// increasing delays before giving up.
+    async fn hover_with_warmup(
+        client: &TyLspClient,
+        file: &str,
+        line: u32,
+        column: u32,
+    ) -> Result<Option<Hover>> {
+        let hover = client.hover(file, line, column).await?;
+        if hover.is_some() {
+            return Ok(hover);
+        }
+
+        for delay_ms in [100, 200, 400] {
+            tracing::debug!("hover returned null, retrying in {delay_ms}ms...");
+            tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+            let hover = client.hover(file, line, column).await?;
+            if hover.is_some() {
+                return Ok(hover);
+            }
+        }
+
+        tracing::debug!("hover still null after retries");
+        Ok(None)
+    }
+
+    /// Workspace symbols with retry on cold start.
+    ///
+    /// On cold start the ty LSP server may not have finished indexing the
+    /// workspace yet, returning zero symbols. Retry with back-off so callers
+    /// (inspect, find, references) get results once indexing completes.
+    async fn workspace_symbols_with_warmup(
+        client: &TyLspClient,
+        query: &str,
+    ) -> Result<Vec<crate::lsp::protocol::SymbolInformation>> {
+        let symbols = client.workspace_symbols(query).await?;
+        if !symbols.is_empty() {
+            return Ok(symbols);
+        }
+
+        for delay_ms in [100, 200, 400] {
+            tracing::debug!("workspace symbols empty, retrying in {delay_ms}ms...");
+            tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+            let symbols = client.workspace_symbols(query).await?;
+            if !symbols.is_empty() {
+                return Ok(symbols);
+            }
+        }
+
+        tracing::debug!("workspace symbols still empty after retries");
+        Ok(Vec::new())
     }
 
     /// Handle a shutdown request.

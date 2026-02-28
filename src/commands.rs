@@ -475,6 +475,7 @@ pub async fn handle_inspect_command(
             definitions: r.definitions.as_slice(),
             hover: r.hover.as_ref(),
             references: r.references.as_slice(),
+            references_requested: include_references,
         })
         .collect();
 
@@ -624,96 +625,6 @@ async fn inspect_single_symbol(
         hover: inspect.hover,
         references: inspect.references,
     })
-}
-
-pub async fn handle_interactive_command(
-    workspace_root: &Path,
-    formatter: &OutputFormatter,
-) -> Result<()> {
-    use std::io::Write as _;
-
-    let client = TyLspClient::new(&workspace_root.to_string_lossy()).await?;
-
-    println!("tyf interactive mode");
-    println!("Commands: <file>:<line>:<column>, find <file> <symbol>, quit");
-
-    let stdin = std::io::stdin();
-
-    loop {
-        print!("> ");
-        std::io::stdout().flush()?;
-
-        let mut input = String::new();
-        stdin.read_line(&mut input)?;
-        let input = input.trim();
-
-        if input == "quit" || input == "q" {
-            break;
-        }
-
-        if input.starts_with("find ") {
-            let parts: Vec<&str> = input.split_whitespace().collect();
-            if parts.len() >= 3 {
-                let file = PathBuf::from(parts[1]);
-                let symbols: Vec<String> = parts[2..].iter().map(|s| (*s).to_string()).collect();
-
-                #[cfg(unix)]
-                let find_timeout = crate::daemon::client::DEFAULT_TIMEOUT;
-                #[cfg(not(unix))]
-                let find_timeout = Duration::from_secs(30);
-
-                if let Err(e) = handle_find_command(
-                    workspace_root,
-                    Some(&file),
-                    &symbols,
-                    false,
-                    formatter,
-                    find_timeout,
-                )
-                .await
-                {
-                    eprintln!("Error: {e}");
-                }
-            } else {
-                eprintln!("Usage: find <file> <symbol> [symbol2 ...]");
-            }
-        } else if let Some(pos) = input.rfind(':') {
-            if let Some(second_pos) = input[..pos].rfind(':') {
-                let file_part = &input[..second_pos];
-                let line_part = &input[second_pos + 1..pos];
-                let column_part = &input[pos + 1..];
-
-                if let (Ok(line), Ok(column)) =
-                    (line_part.parse::<u32>(), column_part.parse::<u32>())
-                {
-                    let file_str = file_part;
-                    let file = PathBuf::from(file_part);
-                    client.open_document(file_str).await?;
-                    let locations = client
-                        .goto_definition(file_str, line.saturating_sub(1), column.saturating_sub(1))
-                        .await;
-                    match locations {
-                        Ok(locs) => {
-                            let query_info = format!("{}:{line}:{column}", file.display());
-                            println!("{}", formatter.format_definitions(&locs, &query_info));
-                        }
-                        Err(e) => eprintln!("Error: {e}"),
-                    }
-                } else {
-                    eprintln!("Invalid line or column number");
-                }
-            } else {
-                eprintln!("Usage: <file>:<line>:<column>");
-            }
-        } else {
-            eprintln!(
-                "Unknown command. Use: <file>:<line>:<column>, find <file> <symbol>, or quit"
-            );
-        }
-    }
-
-    println!("Goodbye!");
-    Ok(())
 }
 
 #[cfg(unix)]

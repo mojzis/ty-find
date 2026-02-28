@@ -69,9 +69,6 @@ async fn run(cli: Cli) -> Result<()> {
             )
             .await?;
         }
-        Commands::Interactive { file: _ } => {
-            commands::handle_interactive_command(&workspace_root, &formatter).await?;
-        }
         Commands::References { queries, file, line, column, stdin, include_declaration } => {
             let position = line.zip(column);
             commands::handle_references_command(

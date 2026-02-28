@@ -13,7 +13,6 @@
 - [find](commands/find.md)
 - [refs](commands/refs.md)
 - [list](commands/list.md)
-- [interactive](commands/interactive.md)
 - [daemon](commands/daemon.md)
 
 # Reference

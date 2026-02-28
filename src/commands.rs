@@ -27,8 +27,8 @@ fn dedup_locations(locations: &mut Vec<Location>) {
 /// Workspace-symbol responses return the range of the full declaration
 /// (e.g. the `class` keyword), but hover/references need the cursor on the
 /// *name* itself. This helper reads the source line and locates the name.
-fn find_name_column(file_path: &str, line_0: u32, name: &str) -> Option<u32> {
-    let content = match std::fs::read_to_string(file_path) {
+async fn find_name_column(file_path: &str, line_0: u32, name: &str) -> Option<u32> {
+    let content = match tokio::fs::read_to_string(file_path).await {
         Ok(c) => c,
         Err(e) => {
             tracing::debug!("find_name_column: cannot read {file_path}: {e}");
@@ -140,6 +140,7 @@ async fn resolve_symbols_to_queries(
                     // Workspace-symbol range.start points at the declaration
                     // keyword; hover/references need the symbol *name* column.
                     let column = find_name_column(&file_path, line, &sym_info.name)
+                        .await
                         .unwrap_or(sym_info.location.range.start.character);
                     resolved.push(ResolvedQuery {
                         label: symbol.clone(),
@@ -577,7 +578,7 @@ async fn inspect_single_symbol(
             let ws_col = first.location.range.start.character;
             // Workspace-symbol range.start points at the declaration keyword
             // (e.g. "class"), but hover/references need the symbol *name* column.
-            let name_col = find_name_column(file_path, def_line, &first.name);
+            let name_col = find_name_column(file_path, def_line, &first.name).await;
             let def_col = name_col.unwrap_or(ws_col);
             tracing::debug!(
                 "inspect: workspace-symbol col={ws_col}, name_col={name_col:?}, using col={def_col} for '{}'",
@@ -627,7 +628,6 @@ async fn inspect_single_symbol(
 
 pub async fn handle_interactive_command(
     workspace_root: &Path,
-    initial_file: Option<PathBuf>,
     formatter: &OutputFormatter,
 ) -> Result<()> {
     use std::io::Write as _;
@@ -638,7 +638,6 @@ pub async fn handle_interactive_command(
     println!("Commands: <file>:<line>:<column>, find <file> <symbol>, quit");
 
     let stdin = std::io::stdin();
-    drop(initial_file);
 
     loop {
         print!("> ");
@@ -759,7 +758,7 @@ pub async fn handle_daemon_command(command: DaemonCommands) -> Result<()> {
         DaemonCommands::Start { foreground } => {
             if foreground {
                 // We are the spawned child process — actually run the daemon server
-                let socket_path = DaemonServer::get_socket_path();
+                let socket_path = DaemonServer::get_socket_path()?;
                 let server = DaemonServer::new(socket_path);
                 server.start().await?;
                 return Ok(());
@@ -857,34 +856,34 @@ mod tests {
         assert_eq!(parse_file_position("file.py:10:abc"), None);
     }
 
-    #[test]
-    fn test_find_name_column_class() {
+    #[tokio::test]
+    async fn test_find_name_column_class() {
         // "class Animal:" — "Animal" starts at column 6
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("test.py");
         std::fs::write(&file, "class Animal:\n    pass\n").unwrap();
-        assert_eq!(find_name_column(file.to_str().unwrap(), 0, "Animal"), Some(6));
+        assert_eq!(find_name_column(file.to_str().unwrap(), 0, "Animal").await, Some(6));
     }
 
-    #[test]
-    fn test_find_name_column_function() {
+    #[tokio::test]
+    async fn test_find_name_column_function() {
         // "def create_dog(name):" — "create_dog" starts at column 4
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("test.py");
         std::fs::write(&file, "def create_dog(name):\n    pass\n").unwrap();
-        assert_eq!(find_name_column(file.to_str().unwrap(), 0, "create_dog"), Some(4));
+        assert_eq!(find_name_column(file.to_str().unwrap(), 0, "create_dog").await, Some(4));
     }
 
-    #[test]
-    fn test_find_name_column_not_found() {
+    #[tokio::test]
+    async fn test_find_name_column_not_found() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("test.py");
         std::fs::write(&file, "x = 1\n").unwrap();
-        assert_eq!(find_name_column(file.to_str().unwrap(), 0, "Animal"), None);
+        assert_eq!(find_name_column(file.to_str().unwrap(), 0, "Animal").await, None);
     }
 
-    #[test]
-    fn test_find_name_column_nonexistent_file() {
-        assert_eq!(find_name_column("/nonexistent/file.py", 0, "Animal"), None);
+    #[tokio::test]
+    async fn test_find_name_column_nonexistent_file() {
+        assert_eq!(find_name_column("/nonexistent/file.py", 0, "Animal").await, None);
     }
 }

@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
-use tokio::sync::{broadcast, Mutex};
+use tokio::sync::broadcast;
 
 use crate::daemon::pool::LspClientPool;
 use crate::daemon::protocol::{
@@ -31,8 +31,12 @@ pub struct DaemonServer {
     /// Path to the Unix socket
     socket_path: PathBuf,
 
-    /// Pool of LSP clients (one per workspace)
-    lsp_pool: Arc<Mutex<LspClientPool>>,
+    /// Pool of LSP clients (one per workspace).
+    ///
+    /// `LspClientPool` uses internal locking (`std::sync::Mutex`) so no outer
+    /// async mutex is needed — this avoids holding a `MutexGuard` across the
+    /// `.await` inside `get_or_create`.
+    lsp_pool: Arc<LspClientPool>,
 
     /// Broadcast channel for shutdown signal
     shutdown_tx: broadcast::Sender<()>,
@@ -48,7 +52,7 @@ impl DaemonServer {
 
         Self {
             socket_path,
-            lsp_pool: Arc::new(Mutex::new(LspClientPool::new())),
+            lsp_pool: Arc::new(LspClientPool::new()),
             shutdown_tx,
             start_time: Instant::now(),
         }
@@ -57,8 +61,8 @@ impl DaemonServer {
     /// Get the socket path for the current user.
     ///
     /// Delegates to the canonical implementation in [`super::client::get_socket_path`].
-    pub fn get_socket_path() -> PathBuf {
-        super::client::get_socket_path().expect("Failed to determine socket path (non-Unix?)")
+    pub fn get_socket_path() -> Result<PathBuf> {
+        super::client::get_socket_path()
     }
 
     /// Start the daemon server and listen for connections.
@@ -149,7 +153,10 @@ impl DaemonServer {
             header_line.clear();
 
             // Read Content-Length header
-            let bytes_read = reader.read_line(&mut header_line).await?;
+            let bytes_read = reader
+                .read_line(&mut header_line)
+                .await
+                .context("Failed to read request header")?;
             if bytes_read == 0 {
                 // EOF - client disconnected
                 break;
@@ -171,11 +178,11 @@ impl DaemonServer {
 
             // Read empty separator line
             let mut empty_line = String::new();
-            reader.read_line(&mut empty_line).await?;
+            reader.read_line(&mut empty_line).await.context("Failed to read header separator")?;
 
             // Read request body
             let mut body = vec![0u8; content_length];
-            reader.read_exact(&mut body).await?;
+            reader.read_exact(&mut body).await.context("Failed to read request body")?;
 
             // Parse JSON-RPC request
             let Ok(request) = serde_json::from_slice::<DaemonRequest>(&body) else {
@@ -189,10 +196,11 @@ impl DaemonServer {
             let response = self.handle_request(request).await;
 
             // Send response with Content-Length framing
-            let response_json = serde_json::to_string(&response)?;
+            let response_json =
+                serde_json::to_string(&response).context("Failed to serialize response")?;
             let framed = format!("Content-Length: {}\r\n\r\n{response_json}", response_json.len());
-            writer.write_all(framed.as_bytes()).await?;
-            writer.flush().await?;
+            writer.write_all(framed.as_bytes()).await.context("Failed to write response")?;
+            writer.flush().await.context("Failed to flush response")?;
 
             tracing::debug!("Sent response for request ID {}", response.id);
         }
@@ -226,7 +234,7 @@ impl DaemonServer {
         let params: HoverParams =
             serde_json::from_value(params).context("Invalid hover parameters")?;
 
-        let client = { self.lsp_pool.lock().await.get_or_create(params.workspace).await? };
+        let client = self.lsp_pool.get_or_create(params.workspace).await?;
 
         let file_str = params.file.to_string_lossy().to_string();
         client.open_document(&file_str).await?;
@@ -242,7 +250,7 @@ impl DaemonServer {
         let params: DefinitionParams =
             serde_json::from_value(params).context("Invalid definition parameters")?;
 
-        let client = { self.lsp_pool.lock().await.get_or_create(params.workspace).await? };
+        let client = self.lsp_pool.get_or_create(params.workspace).await?;
 
         let file_str = params.file.to_string_lossy().to_string();
         client.open_document(&file_str).await?;
@@ -258,7 +266,7 @@ impl DaemonServer {
         let params: WorkspaceSymbolsParams =
             serde_json::from_value(params).context("Invalid workspace symbols parameters")?;
 
-        let client = { self.lsp_pool.lock().await.get_or_create(params.workspace).await? };
+        let client = self.lsp_pool.get_or_create(params.workspace).await?;
 
         let mut symbols = Self::workspace_symbols_with_warmup(&client, &params.query).await?;
 
@@ -281,7 +289,7 @@ impl DaemonServer {
         let params: DocumentSymbolsParams =
             serde_json::from_value(params).context("Invalid document symbols parameters")?;
 
-        let client = { self.lsp_pool.lock().await.get_or_create(params.workspace).await? };
+        let client = self.lsp_pool.get_or_create(params.workspace).await?;
 
         let file_str = params.file.to_string_lossy().to_string();
         client.open_document(&file_str).await?;
@@ -296,7 +304,7 @@ impl DaemonServer {
         let params: ReferencesParams =
             serde_json::from_value(params).context("Invalid references parameters")?;
 
-        let client = { self.lsp_pool.lock().await.get_or_create(params.workspace).await? };
+        let client = self.lsp_pool.get_or_create(params.workspace).await?;
 
         let file_str = params.file.to_string_lossy().to_string();
         client.open_document(&file_str).await?;
@@ -313,7 +321,7 @@ impl DaemonServer {
         let params: BatchReferencesParams =
             serde_json::from_value(params).context("Invalid batch references parameters")?;
 
-        let client = { self.lsp_pool.lock().await.get_or_create(params.workspace).await? };
+        let client = self.lsp_pool.get_or_create(params.workspace).await?;
 
         let mut entries = Vec::with_capacity(params.queries.len());
         for q in &params.queries {
@@ -337,7 +345,7 @@ impl DaemonServer {
         let params: InspectParams =
             serde_json::from_value(params).context("Invalid inspect parameters")?;
 
-        let client = { self.lsp_pool.lock().await.get_or_create(params.workspace).await? };
+        let client = self.lsp_pool.get_or_create(params.workspace).await?;
 
         let file_str = params.file.to_string_lossy().to_string();
         client.open_document(&file_str).await?;
@@ -364,10 +372,9 @@ impl DaemonServer {
     }
 
     /// Handle a ping request.
+    #[allow(clippy::unused_async)] // Matches async handler interface
     async fn handle_ping(&self, _params: Value) -> Result<Value> {
-        let pool = self.lsp_pool.lock().await;
-        let active_workspaces = pool.len();
-        drop(pool);
+        let active_workspaces = self.lsp_pool.len();
 
         let result = PingResult {
             status: "running".to_string(),
@@ -457,19 +464,17 @@ impl DaemonServer {
             tokio::time::sleep(check_interval).await;
 
             // Clean up idle LSP clients
-            let pool = self.lsp_pool.lock().await;
-            let removed = pool.cleanup_idle(idle_timeout);
+            let removed = self.lsp_pool.cleanup_idle(idle_timeout);
             if removed > 0 {
                 tracing::info!("Removed {removed} idle LSP clients");
             }
 
             // Check if daemon should shut down (all clients idle)
-            if pool.is_empty() && self.start_time.elapsed() > idle_timeout {
+            if self.lsp_pool.is_empty() && self.start_time.elapsed() > idle_timeout {
                 tracing::info!("Daemon idle timeout, shutting down");
                 let _ = self.shutdown_tx.send(());
                 break;
             }
-            drop(pool);
         }
     }
 
@@ -506,7 +511,7 @@ mod tests {
 
     #[test]
     fn test_get_socket_path() {
-        let path = DaemonServer::get_socket_path();
+        let path = DaemonServer::get_socket_path().expect("should return a valid socket path");
         assert!(path.to_string_lossy().contains("ty-find"));
     }
 

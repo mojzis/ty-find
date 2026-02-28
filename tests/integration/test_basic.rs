@@ -296,3 +296,185 @@ async fn test_references_file_line_col_format() {
     assert!(output.status.success(), "command failed: {stdout}");
     assert!(predicate::str::contains("test_example.py").eval(&stdout));
 }
+
+// ── Members command tests ──────────────────────────────────────────────
+
+/// Path to the members test fixture.
+fn members_fixture_path() -> PathBuf {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    manifest_dir.join("test_members.py")
+}
+
+#[tokio::test]
+async fn test_members_command_basic() {
+    require_ty();
+
+    let mut cmd = cargo_bin_cmd!("tyf");
+    cmd.arg("--workspace")
+        .arg(workspace_root())
+        .arg("members")
+        .arg("Animal")
+        .arg("--file")
+        .arg(members_fixture_path());
+
+    let output = cmd.output().expect("failed to run tyf");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "command failed: {stdout}");
+
+    // Should show class name and file location
+    assert!(
+        predicate::str::contains("Animal").eval(&stdout),
+        "should show class name, got:\n{stdout}"
+    );
+    // Should show Methods section with public methods
+    assert!(
+        predicate::str::contains("Methods:").eval(&stdout),
+        "should have Methods section, got:\n{stdout}"
+    );
+    assert!(
+        predicate::str::contains("speak").eval(&stdout),
+        "should show speak method, got:\n{stdout}"
+    );
+    assert!(
+        predicate::str::contains("describe").eval(&stdout),
+        "should show describe method, got:\n{stdout}"
+    );
+    // Should NOT show dunder methods by default
+    assert!(
+        !predicate::str::contains("__init__").eval(&stdout),
+        "should NOT show __init__ by default, got:\n{stdout}"
+    );
+    assert!(
+        !predicate::str::contains("__repr__").eval(&stdout),
+        "should NOT show __repr__ by default, got:\n{stdout}"
+    );
+}
+
+#[tokio::test]
+async fn test_members_command_all_flag() {
+    require_ty();
+
+    let mut cmd = cargo_bin_cmd!("tyf");
+    cmd.arg("--workspace")
+        .arg(workspace_root())
+        .arg("members")
+        .arg("Animal")
+        .arg("--all")
+        .arg("--file")
+        .arg(members_fixture_path());
+
+    let output = cmd.output().expect("failed to run tyf");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "command failed: {stdout}");
+
+    // --all should include dunder methods
+    assert!(
+        predicate::str::contains("__init__").eval(&stdout),
+        "--all should include __init__, got:\n{stdout}"
+    );
+}
+
+#[tokio::test]
+async fn test_members_command_non_class_error() {
+    require_ty();
+
+    let mut cmd = cargo_bin_cmd!("tyf");
+    cmd.arg("--workspace")
+        .arg(workspace_root())
+        .arg("members")
+        .arg("standalone_function")
+        .arg("--file")
+        .arg(members_fixture_path());
+
+    let output = cmd.output().expect("failed to run tyf");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    // Should print an error about not being a class
+    assert!(
+        predicate::str::contains("not a class").eval(&stderr),
+        "should indicate it's not a class, got stderr:\n{stderr}"
+    );
+}
+
+#[tokio::test]
+async fn test_members_command_multiple_classes() {
+    require_ty();
+
+    let mut cmd = cargo_bin_cmd!("tyf");
+    cmd.arg("--workspace")
+        .arg(workspace_root())
+        .arg("members")
+        .arg("Animal")
+        .arg("Dog")
+        .arg("--file")
+        .arg(members_fixture_path());
+
+    let output = cmd.output().expect("failed to run tyf");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "command failed: {stdout}");
+
+    assert!(
+        predicate::str::contains("Animal").eval(&stdout),
+        "should show Animal class, got:\n{stdout}"
+    );
+    assert!(predicate::str::contains("Dog").eval(&stdout), "should show Dog class, got:\n{stdout}");
+    assert!(
+        predicate::str::contains("fetch").eval(&stdout),
+        "should show Dog.fetch method, got:\n{stdout}"
+    );
+}
+
+#[tokio::test]
+async fn test_members_command_json_format() {
+    require_ty();
+
+    let mut cmd = cargo_bin_cmd!("tyf");
+    cmd.arg("--workspace")
+        .arg(workspace_root())
+        .arg("--format")
+        .arg("json")
+        .arg("members")
+        .arg("Animal")
+        .arg("--file")
+        .arg(members_fixture_path());
+
+    let output = cmd.output().expect("failed to run tyf");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "command failed: {stdout}");
+
+    assert!(
+        predicate::str::contains("\"class_name\"").eval(&stdout),
+        "JSON should have class_name field, got:\n{stdout}"
+    );
+    assert!(
+        predicate::str::contains("\"members\"").eval(&stdout),
+        "JSON should have members field, got:\n{stdout}"
+    );
+}
+
+#[tokio::test]
+async fn test_members_command_csv_format() {
+    require_ty();
+
+    let mut cmd = cargo_bin_cmd!("tyf");
+    cmd.arg("--workspace")
+        .arg(workspace_root())
+        .arg("--format")
+        .arg("csv")
+        .arg("members")
+        .arg("Animal")
+        .arg("--file")
+        .arg(members_fixture_path());
+
+    let output = cmd.output().expect("failed to run tyf");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "command failed: {stdout}");
+
+    assert!(
+        predicate::str::contains("class,member,kind,signature,line,column").eval(&stdout),
+        "CSV should have header, got:\n{stdout}"
+    );
+    assert!(
+        predicate::str::contains("Animal,speak").eval(&stdout),
+        "CSV should have speak member, got:\n{stdout}"
+    );
+}

@@ -664,6 +664,134 @@ pub async fn handle_document_symbols_command(
 }
 
 #[cfg(unix)]
+pub async fn handle_members_command(
+    workspace_root: &Path,
+    file: Option<&Path>,
+    symbols: &[String],
+    include_all: bool,
+    formatter: &OutputFormatter,
+    timeout: Duration,
+) -> Result<()> {
+    ensure_daemon_running().await?;
+
+    let mut results: Vec<crate::daemon::protocol::MembersResult> = Vec::new();
+
+    for symbol in symbols {
+        let result =
+            members_single_class(workspace_root, file, symbol, include_all, timeout).await?;
+        results.push(result);
+    }
+
+    // Check for non-class symbols and print appropriate errors
+    let mut has_output = false;
+    let mut valid_results: Vec<crate::daemon::protocol::MembersResult> = Vec::new();
+
+    for result in results {
+        match result.symbol_kind.as_ref() {
+            None => {
+                eprintln!("No symbol '{}' found in the project.", result.class_name);
+                has_output = true;
+            }
+            Some(kind) if !matches!(kind, crate::lsp::protocol::SymbolKind::Class) => {
+                let kind_name = match kind {
+                    crate::lsp::protocol::SymbolKind::Function => "a function",
+                    crate::lsp::protocol::SymbolKind::Method => "a method",
+                    crate::lsp::protocol::SymbolKind::Variable => "a variable",
+                    crate::lsp::protocol::SymbolKind::Constant => "a constant",
+                    crate::lsp::protocol::SymbolKind::Module => "a module",
+                    _ => "not a class",
+                };
+                eprintln!(
+                    "'{}' is {kind_name}, not a class. Use 'inspect' instead.",
+                    result.class_name
+                );
+                has_output = true;
+            }
+            Some(_) => {
+                valid_results.push(result);
+            }
+        }
+    }
+
+    if !valid_results.is_empty() {
+        if has_output {
+            // Separate error messages from valid output
+            eprintln!();
+        }
+        println!("{}", formatter.format_members_results(&valid_results));
+    }
+
+    Ok(())
+}
+
+/// Look up a single class's members via the daemon.
+#[cfg(unix)]
+async fn members_single_class(
+    workspace_root: &Path,
+    file: Option<&Path>,
+    symbol: &str,
+    include_all: bool,
+    timeout: Duration,
+) -> Result<crate::daemon::protocol::MembersResult> {
+    if let Some(file) = file {
+        // File-based: pass directly to daemon
+        let mut client = DaemonClient::connect_with_timeout(timeout).await?;
+        client
+            .execute_members(
+                workspace_root.to_path_buf(),
+                file.to_string_lossy().to_string(),
+                symbol.to_string(),
+                include_all,
+            )
+            .await
+    } else {
+        // Workspace-based: find the class via workspace symbols first
+        let mut client = DaemonClient::connect_with_timeout(timeout).await?;
+        let ws_result = client
+            .execute_workspace_symbols_exact(workspace_root.to_path_buf(), symbol.to_string())
+            .await?;
+
+        if ws_result.symbols.is_empty() {
+            return Ok(crate::daemon::protocol::MembersResult {
+                class_name: symbol.to_string(),
+                file_uri: String::new(),
+                class_line: 0,
+                class_column: 0,
+                symbol_kind: None,
+                members: Vec::new(),
+            });
+        }
+
+        let first = &ws_result.symbols[0];
+        let file_path =
+            first.location.uri.strip_prefix("file://").unwrap_or(&first.location.uri).to_string();
+
+        client
+            .execute_members(
+                workspace_root.to_path_buf(),
+                file_path,
+                symbol.to_string(),
+                include_all,
+            )
+            .await
+    }
+}
+
+#[cfg(not(unix))]
+pub async fn handle_members_command(
+    _workspace_root: &Path,
+    _file: Option<&Path>,
+    _symbols: &[String],
+    _include_all: bool,
+    _formatter: &OutputFormatter,
+    _timeout: Duration,
+) -> Result<()> {
+    anyhow::bail!(
+        "The 'members' command requires the background daemon, which is only supported on Unix systems"
+    )
+}
+
+#[cfg(unix)]
 pub async fn handle_daemon_command(command: DaemonCommands) -> Result<()> {
     match command {
         DaemonCommands::Start { foreground } => {

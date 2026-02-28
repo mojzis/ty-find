@@ -18,9 +18,9 @@ use tokio::time::timeout;
 use super::protocol::{
     BatchReferencesParams, BatchReferencesQuery, BatchReferencesResult, DaemonRequest,
     DaemonResponse, DefinitionParams, DefinitionResult, DocumentSymbolsParams,
-    DocumentSymbolsResult, HoverParams, HoverResult, InspectParams, InspectResult, Method,
-    PingParams, PingResult, ReferencesParams, ReferencesResult, ShutdownParams, ShutdownResult,
-    WorkspaceSymbolsParams, WorkspaceSymbolsResult,
+    DocumentSymbolsResult, HoverParams, HoverResult, InspectParams, InspectResult, MembersParams,
+    MembersResult, Method, PingParams, PingResult, ReferencesParams, ReferencesResult,
+    ShutdownParams, ShutdownResult, WorkspaceSymbolsParams, WorkspaceSymbolsResult,
 };
 
 /// Default timeout for daemon operations (30 seconds).
@@ -287,6 +287,19 @@ impl DaemonClient {
             include_references,
         };
         self.execute(Method::Inspect, params).await
+    }
+
+    /// Execute a members request (class members with type signatures).
+    pub async fn execute_members(
+        &mut self,
+        workspace: PathBuf,
+        file: String,
+        class_name: String,
+        include_all: bool,
+    ) -> Result<MembersResult> {
+        let params =
+            MembersParams { workspace, file: PathBuf::from(file), class_name, include_all };
+        self.execute(Method::Members, params).await
     }
 
     /// Send a ping request to check daemon health.

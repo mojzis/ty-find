@@ -32,6 +32,9 @@ tyf [OPTIONS] <COMMAND>
 **[refs](refs.md)**
 : All usages of a symbol across the codebase (by name or file:line:col)
 
+**[members](members.md)**
+: Public interface of a class: methods, properties, and class variables
+
 **[list](list.md)**
 : All functions, classes, and variables defined in a file
 

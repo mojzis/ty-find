@@ -86,6 +86,17 @@ async fn run(cli: Cli) -> Result<()> {
             )
             .await?;
         }
+        Commands::Members { file, symbols, all } => {
+            commands::handle_members_command(
+                &workspace_root,
+                file.as_deref(),
+                &symbols,
+                all,
+                &formatter,
+                timeout,
+            )
+            .await?;
+        }
         Commands::DocumentSymbols { file } => {
             commands::handle_document_symbols_command(&workspace_root, &file, &formatter, timeout)
                 .await?;

@@ -1,4 +1,6 @@
 use crate::cli::args::{OutputDetail, OutputFormat};
+#[cfg(unix)]
+use crate::daemon::protocol::{MemberInfo, MembersResult};
 use crate::lsp::protocol::{
     DocumentSymbol, Hover, HoverContents, Location, MarkedStringOrString, SymbolInformation,
     SymbolKind,
@@ -679,6 +681,163 @@ impl OutputFormatter {
     }
 }
 
+/// Categorize members into Methods, Properties, and Class variables.
+#[cfg(unix)]
+fn categorize_members(
+    members: &[MemberInfo],
+) -> (Vec<&MemberInfo>, Vec<&MemberInfo>, Vec<&MemberInfo>) {
+    let mut methods = Vec::new();
+    let mut properties = Vec::new();
+    let mut class_vars = Vec::new();
+
+    for m in members {
+        match m.kind {
+            SymbolKind::Method | SymbolKind::Function | SymbolKind::Constructor => {
+                methods.push(m);
+            }
+            SymbolKind::Property => {
+                properties.push(m);
+            }
+            _ => {
+                class_vars.push(m);
+            }
+        }
+    }
+
+    (methods, properties, class_vars)
+}
+
+/// Format members as human-readable text for a single class.
+#[cfg(unix)]
+fn format_members_human(result: &MembersResult, file_path: &str) -> String {
+    let mut output = String::new();
+
+    let class_line = result.class_line + 1;
+    let class_col = result.class_column + 1;
+    let _ = writeln!(output, "{} ({file_path}:{class_line}:{class_col})", result.class_name);
+
+    if result.members.is_empty() {
+        let _ = writeln!(output, "  (no public members)");
+        return output;
+    }
+
+    let (methods, properties, class_vars) = categorize_members(&result.members);
+
+    if !methods.is_empty() {
+        let _ = writeln!(output, "  Methods:");
+        for m in &methods {
+            let sig = m.signature.as_deref().unwrap_or(&m.name);
+            let line = m.line + 1;
+            let col = m.column + 1;
+            let _ = writeln!(output, "    {sig:<60} :{line}:{col}");
+        }
+    }
+
+    if !properties.is_empty() {
+        let _ = writeln!(output, "  Properties:");
+        for m in &properties {
+            let sig = m.signature.as_deref().unwrap_or(&m.name);
+            let line = m.line + 1;
+            let col = m.column + 1;
+            let _ = writeln!(output, "    {sig:<60} :{line}:{col}");
+        }
+    }
+
+    if !class_vars.is_empty() {
+        let _ = writeln!(output, "  Class variables:");
+        for m in &class_vars {
+            let sig = m.signature.as_deref().unwrap_or(&m.name);
+            let line = m.line + 1;
+            let col = m.column + 1;
+            let _ = writeln!(output, "    {sig:<60} :{line}:{col}");
+        }
+    }
+
+    output
+}
+
+#[cfg(unix)]
+impl OutputFormatter {
+    /// Format a single class members result.
+    pub fn format_members_result(&self, result: &MembersResult) -> String {
+        let file_path = self.uri_to_path(&result.file_uri);
+
+        match self.format {
+            OutputFormat::Human => format_members_human(result, &file_path),
+            OutputFormat::Json => {
+                serde_json::to_string_pretty(result).unwrap_or_else(|_| "{}".to_string())
+            }
+            OutputFormat::Csv => {
+                let mut output = String::from("class,member,kind,signature,line,column\n");
+                for m in &result.members {
+                    let sig = m.signature.as_deref().unwrap_or("");
+                    let line = m.line + 1;
+                    let col = m.column + 1;
+                    let _ = writeln!(
+                        output,
+                        "{},{},{},\"{}\",{line},{col}",
+                        result.class_name,
+                        m.name,
+                        Self::kind_label(&m.kind),
+                        sig.replace('"', "\"\""),
+                    );
+                }
+                output
+            }
+            OutputFormat::Paths => file_path,
+        }
+    }
+
+    /// Format results for one or more class members queries.
+    pub fn format_members_results(&self, results: &[MembersResult]) -> String {
+        if results.len() == 1 {
+            return self.format_members_result(&results[0]);
+        }
+
+        match self.format {
+            OutputFormat::Human => {
+                let mut output = String::new();
+                for result in results {
+                    output.push_str(&self.format_members_result(result));
+                    output.push('\n');
+                }
+                output.trim_end().to_string()
+            }
+            OutputFormat::Json => {
+                serde_json::to_string_pretty(results).unwrap_or_else(|_| "[]".to_string())
+            }
+            OutputFormat::Csv => {
+                let mut output = String::from("class,member,kind,signature,line,column\n");
+                for result in results {
+                    let file_path = self.uri_to_path(&result.file_uri);
+                    let _ = file_path; // included in class context
+                    for m in &result.members {
+                        let sig = m.signature.as_deref().unwrap_or("");
+                        let line = m.line + 1;
+                        let col = m.column + 1;
+                        let _ = writeln!(
+                            output,
+                            "{},{},{},\"{}\",{line},{col}",
+                            result.class_name,
+                            m.name,
+                            Self::kind_label(&m.kind),
+                            sig.replace('"', "\"\""),
+                        );
+                    }
+                }
+                output
+            }
+            OutputFormat::Paths => {
+                let mut paths: Vec<String> =
+                    results.iter().map(|r| self.uri_to_path(&r.file_uri)).collect();
+                paths.sort();
+                paths.dedup();
+                paths.join("\n")
+            }
+        }
+    }
+}
+
 fn format_document_symbols_recursive(
     symbols: &[DocumentSymbol],
     indent: usize,
@@ -1010,5 +1169,137 @@ mod tests {
         assert!(result.contains("# Doc\nBase class for animals."));
         // No raw --- separator in output
         assert!(!result.contains("\n---\n"));
+    }
+
+    #[cfg(unix)]
+    mod members_tests {
+        use super::*;
+        use crate::daemon::protocol::{MemberInfo, MembersResult};
+
+        fn make_members_result() -> MembersResult {
+            MembersResult {
+                class_name: "Animal".to_string(),
+                file_uri: "file:///src/models.py".to_string(),
+                class_line: 4,
+                class_column: 0,
+                symbol_kind: Some(SymbolKind::Class),
+                members: vec![
+                    MemberInfo {
+                        name: "speak".to_string(),
+                        kind: SymbolKind::Method,
+                        signature: Some("speak(self) -> str".to_string()),
+                        line: 10,
+                        column: 4,
+                    },
+                    MemberInfo {
+                        name: "name".to_string(),
+                        kind: SymbolKind::Property,
+                        signature: Some("name: str".to_string()),
+                        line: 7,
+                        column: 4,
+                    },
+                    MemberInfo {
+                        name: "MAX_LEGS".to_string(),
+                        kind: SymbolKind::Variable,
+                        signature: Some("MAX_LEGS: int".to_string()),
+                        line: 5,
+                        column: 4,
+                    },
+                ],
+            }
+        }
+
+        #[test]
+        fn test_format_members_human() {
+            let formatter = OutputFormatter::new(OutputFormat::Human);
+            let result = make_members_result();
+            let output = formatter.format_members_result(&result);
+
+            assert!(output.contains("Animal"), "should show class name");
+            assert!(output.contains(":5:1"), "should show class location (1-based)");
+            assert!(output.contains("Methods:"), "should have Methods section");
+            assert!(output.contains("speak(self) -> str"), "should show method sig");
+            assert!(output.contains("Properties:"), "should have Properties section");
+            assert!(output.contains("name: str"), "should show property sig");
+            assert!(output.contains("Class variables:"), "should have Class variables section");
+            assert!(output.contains("MAX_LEGS: int"), "should show class var sig");
+        }
+
+        #[test]
+        fn test_format_members_json() {
+            let formatter = OutputFormatter::new(OutputFormat::Json);
+            let result = make_members_result();
+            let output = formatter.format_members_result(&result);
+
+            let parsed: serde_json::Value = serde_json::from_str(&output).unwrap();
+            assert_eq!(parsed["class_name"], "Animal");
+            assert!(parsed["members"].is_array());
+            assert_eq!(parsed["members"].as_array().unwrap().len(), 3);
+        }
+
+        #[test]
+        fn test_format_members_csv() {
+            let formatter = OutputFormatter::new(OutputFormat::Csv);
+            let result = make_members_result();
+            let output = formatter.format_members_result(&result);
+
+            assert!(output.starts_with("class,member,kind,signature,line,column\n"));
+            assert!(output.contains("Animal,speak,method"));
+            assert!(output.contains("Animal,name,prop"));
+            assert!(output.contains("Animal,MAX_LEGS,var"));
+        }
+
+        #[test]
+        fn test_format_members_paths() {
+            let formatter = OutputFormatter::new(OutputFormat::Paths);
+            let result = make_members_result();
+            let output = formatter.format_members_result(&result);
+
+            assert!(output.contains("models.py"));
+        }
+
+        #[test]
+        fn test_format_members_empty_class() {
+            let formatter = OutputFormatter::new(OutputFormat::Human);
+            let result = MembersResult {
+                class_name: "Empty".to_string(),
+                file_uri: "file:///empty.py".to_string(),
+                class_line: 0,
+                class_column: 0,
+                symbol_kind: Some(SymbolKind::Class),
+                members: Vec::new(),
+            };
+            let output = formatter.format_members_result(&result);
+
+            assert!(output.contains("Empty"));
+            assert!(output.contains("(no public members)"));
+        }
+
+        #[test]
+        fn test_format_members_multiple_classes() {
+            let formatter = OutputFormatter::new(OutputFormat::Human);
+            let results = vec![
+                make_members_result(),
+                MembersResult {
+                    class_name: "Dog".to_string(),
+                    file_uri: "file:///src/models.py".to_string(),
+                    class_line: 20,
+                    class_column: 0,
+                    symbol_kind: Some(SymbolKind::Class),
+                    members: vec![MemberInfo {
+                        name: "fetch".to_string(),
+                        kind: SymbolKind::Method,
+                        signature: Some("fetch(self, item: str) -> str".to_string()),
+                        line: 25,
+                        column: 4,
+                    }],
+                },
+            ];
+            let output = formatter.format_members_results(&results);
+
+            assert!(output.contains("Animal"), "should show first class");
+            assert!(output.contains("Dog"), "should show second class");
+            assert!(output.contains("fetch(self, item: str) -> str"));
+        }
     }
 }

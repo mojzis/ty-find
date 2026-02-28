@@ -56,6 +56,20 @@ tyf refs file.py:10:5 my_func              # mixed
 ... | tyf refs --stdin                      # piped input
 ```
 
+### members — Public interface of a class
+
+Shows the public interface of a class: methods with signatures, properties,
+and class variables with types. Like `list` scoped to a class, with type info.
+Excludes private/dunder members by default; `--all` includes everything.
+Only shows directly-defined members, not inherited ones.
+
+```
+tyf members MyClass
+tyf members MyClass UserService          # multiple classes at once
+tyf members MyClass --all                # include __init__, __repr__, etc
+tyf members MyClass --file src/models.py # narrow to one file
+```
+
 ### list — All functions, classes, and variables defined in a file
 
 Shows all functions, classes, and variables defined in a file — like a table

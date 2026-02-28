@@ -19,12 +19,12 @@ use crate::daemon::pool::LspClientPool;
 use crate::daemon::protocol::{
     BatchReferencesEntry, BatchReferencesParams, BatchReferencesResult, DaemonError, DaemonRequest,
     DaemonResponse, DefinitionParams, DefinitionResult, DiagnosticsResult, DocumentSymbolsParams,
-    DocumentSymbolsResult, HoverParams, HoverResult, InspectParams, InspectResult, Method,
-    PingResult, ReferencesParams, ReferencesResult, ShutdownResult, WorkspaceSymbolsParams,
-    WorkspaceSymbolsResult,
+    DocumentSymbolsResult, HoverParams, HoverResult, InspectParams, InspectResult, MemberInfo,
+    MembersParams, MembersResult, Method, PingResult, ReferencesParams, ReferencesResult,
+    ShutdownResult, WorkspaceSymbolsParams, WorkspaceSymbolsResult,
 };
 use crate::lsp::client::TyLspClient;
-use crate::lsp::protocol::Hover;
+use crate::lsp::protocol::{Hover, SymbolKind};
 
 /// The daemon server that handles client connections and LSP requests.
 pub struct DaemonServer {
@@ -210,6 +210,7 @@ impl DaemonServer {
             Method::References => self.handle_references(request.params).await,
             Method::BatchReferences => self.handle_batch_references(request.params).await,
             Method::Inspect => self.handle_inspect(request.params).await,
+            Method::Members => self.handle_members(request.params).await,
             Method::Diagnostics => self.handle_diagnostics(request.params).await,
             Method::Ping => self.handle_ping(request.params).await,
             Method::Shutdown => self.handle_shutdown(request.params).await,
@@ -352,6 +353,154 @@ impl DaemonServer {
 
         let result = InspectResult { hover, references };
         Ok(serde_json::to_value(result)?)
+    }
+
+    /// Handle a members request.
+    ///
+    /// Retrieves document symbols for the file, finds the target class,
+    /// extracts its children, and calls hover on each to get type signatures.
+    /// This is N+1 LSP calls per class (1 documentSymbol + N hovers).
+    async fn handle_members(&self, params: Value) -> Result<Value> {
+        let params: MembersParams =
+            serde_json::from_value(params).context("Invalid members parameters")?;
+
+        let client = { self.lsp_pool.lock().await.get_or_create(params.workspace).await? };
+
+        let file_str = params.file.to_string_lossy().to_string();
+        client.open_document(&file_str).await?;
+
+        let doc_symbols = client.document_symbols(&file_str).await?;
+
+        // Find the target class among top-level symbols
+        let target = doc_symbols.iter().find(|s| s.name == params.class_name);
+
+        let Some(class_sym) = target else {
+            // Symbol not found in file
+            let result = MembersResult {
+                class_name: params.class_name,
+                file_uri: file_str,
+                class_line: 0,
+                class_column: 0,
+                symbol_kind: None,
+                members: Vec::new(),
+            };
+            return Ok(serde_json::to_value(result)?);
+        };
+
+        // Check that it's actually a class
+        if !matches!(class_sym.kind, SymbolKind::Class) {
+            let result = MembersResult {
+                class_name: params.class_name,
+                file_uri: file_str,
+                class_line: class_sym.selection_range.start.line,
+                class_column: class_sym.selection_range.start.character,
+                symbol_kind: Some(class_sym.kind.clone()),
+                members: Vec::new(),
+            };
+            return Ok(serde_json::to_value(result)?);
+        }
+
+        let children = class_sym.children.as_deref().unwrap_or(&[]);
+
+        // Filter members based on include_all flag
+        let filtered: Vec<_> = children
+            .iter()
+            .filter(|child| {
+                if params.include_all {
+                    return true;
+                }
+                // Exclude private (_prefixed) and dunder (__dunder__) members
+                !child.name.starts_with('_')
+            })
+            .collect();
+
+        // Get hover info for each member (N LSP calls — sequential, single pipe)
+        let mut members = Vec::with_capacity(filtered.len());
+        for child in &filtered {
+            let hover_line = child.selection_range.start.line;
+            let hover_col = child.selection_range.start.character;
+            let hover = Self::hover_with_warmup(&client, &file_str, hover_line, hover_col).await?;
+
+            let signature = hover.as_ref().map(|h| Self::extract_member_signature(&h.contents));
+
+            members.push(MemberInfo {
+                name: child.name.clone(),
+                kind: child.kind.clone(),
+                signature,
+                line: child.selection_range.start.line,
+                column: child.selection_range.start.character,
+            });
+        }
+
+        let result = MembersResult {
+            class_name: params.class_name,
+            file_uri: file_str,
+            class_line: class_sym.selection_range.start.line,
+            class_column: class_sym.selection_range.start.character,
+            symbol_kind: Some(class_sym.kind.clone()),
+            members,
+        };
+        Ok(serde_json::to_value(result)?)
+    }
+
+    /// Extract a clean member signature from hover contents.
+    ///
+    /// ty's hover markdown looks like:
+    ///   ```python\ndef method(self, x: int) -> str\n```\n---\nDocstring
+    ///
+    /// We want just the signature: `method(self, x: int) -> str`
+    fn extract_member_signature(contents: &crate::lsp::protocol::HoverContents) -> String {
+        use crate::lsp::protocol::HoverContents;
+
+        let full = match contents {
+            HoverContents::Scalar(s) => s.clone(),
+            HoverContents::Markup(markup) => markup.value.clone(),
+            HoverContents::MarkedString(ms) => ms.value.clone(),
+            HoverContents::Array(arr) => {
+                use crate::lsp::protocol::MarkedStringOrString;
+                arr.iter()
+                    .map(|item| match item {
+                        MarkedStringOrString::String(s) => s.clone(),
+                        MarkedStringOrString::MarkedString(ms) => ms.value.clone(),
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            }
+        };
+
+        // Strip docstring (everything after "\n---")
+        let type_part = match full.find("\n---") {
+            Some(pos) => &full[..pos],
+            None => &full,
+        };
+
+        // Strip markdown code fences
+        let trimmed = type_part.trim();
+        let cleaned = trimmed
+            .strip_prefix("```python")
+            .or_else(|| trimmed.strip_prefix("```xml"))
+            .or_else(|| trimmed.strip_prefix("```text"))
+            .or_else(|| trimmed.strip_prefix("```"))
+            .unwrap_or(trimmed);
+
+        let cleaned = cleaned.trim().strip_suffix("```").unwrap_or(cleaned).trim();
+
+        // Strip leading `def ` for method signatures — show just `name(params) -> ret`
+        let cleaned = cleaned.strip_prefix("def ").unwrap_or(cleaned);
+
+        // Strip leading `(method) `, `(property) `, etc. prefixes ty may add
+        let cleaned = if let Some(rest) = cleaned.strip_prefix('(') {
+            if let Some(pos) = rest.find(") ") {
+                let after = &rest[pos + 2..];
+                after.strip_prefix("def ").unwrap_or(after)
+            } else {
+                cleaned
+            }
+        } else {
+            cleaned
+        };
+
+        cleaned.to_string()
     }
 
     /// Handle a diagnostics request.
@@ -530,5 +679,64 @@ mod tests {
         assert_eq!(value["cache_size"], 0);
         // Uptime should be a small number since the server was just created
         assert!(value["uptime"].as_u64().unwrap() < 5);
+    }
+
+    #[test]
+    fn test_extract_member_signature_method() {
+        use crate::lsp::protocol::{HoverContents, MarkupContent, MarkupKind};
+
+        let contents = HoverContents::Markup(MarkupContent {
+            kind: MarkupKind::Markdown,
+            value: "```python\ndef speak(self) -> str\n```".to_string(),
+        });
+        let sig = DaemonServer::extract_member_signature(&contents);
+        assert_eq!(sig, "speak(self) -> str");
+    }
+
+    #[test]
+    fn test_extract_member_signature_property() {
+        use crate::lsp::protocol::{HoverContents, MarkupContent, MarkupKind};
+
+        let contents = HoverContents::Markup(MarkupContent {
+            kind: MarkupKind::Markdown,
+            value: "```python\n(property) name: str\n```".to_string(),
+        });
+        let sig = DaemonServer::extract_member_signature(&contents);
+        assert_eq!(sig, "name: str");
+    }
+
+    #[test]
+    fn test_extract_member_signature_with_docstring() {
+        use crate::lsp::protocol::{HoverContents, MarkupContent, MarkupKind};
+
+        let contents = HoverContents::Markup(MarkupContent {
+            kind: MarkupKind::Markdown,
+            value: "```python\ndef describe(self) -> str\n```\n---\nDescribe the animal."
+                .to_string(),
+        });
+        let sig = DaemonServer::extract_member_signature(&contents);
+        assert_eq!(sig, "describe(self) -> str");
+        assert!(!sig.contains("Describe"));
+    }
+
+    #[test]
+    fn test_extract_member_signature_class_variable() {
+        use crate::lsp::protocol::{HoverContents, MarkupContent, MarkupKind};
+
+        let contents = HoverContents::Markup(MarkupContent {
+            kind: MarkupKind::Markdown,
+            value: "```python\nMAX_LEGS: int\n```".to_string(),
+        });
+        let sig = DaemonServer::extract_member_signature(&contents);
+        assert_eq!(sig, "MAX_LEGS: int");
+    }
+
+    #[test]
+    fn test_extract_member_signature_scalar() {
+        use crate::lsp::protocol::HoverContents;
+
+        let contents = HoverContents::Scalar("int".to_string());
+        let sig = DaemonServer::extract_member_signature(&contents);
+        assert_eq!(sig, "int");
     }
 }

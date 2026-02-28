@@ -17,6 +17,7 @@ Symbol Lookup:
   inspect      Definition, type signature, and usages of a symbol by name
   find         Find where a symbol is defined by name (--fuzzy for partial matching)
   refs         All usages of a symbol across the codebase (by name or file:line:col)
+  members      Public interface of a class: methods, properties, and class variables
 
 Browsing:
   list         All functions, classes, and variables defined in a file
@@ -146,6 +147,33 @@ pub enum Commands {
         include_declaration: bool,
     },
 
+    /// Public interface of a class: methods, properties, and class variables
+    #[command(
+        long_about = "Public interface of a class \u{2014} methods with signatures, properties, \
+        and class variables with types. Like 'list' scoped to a class, with type info included.\n\n\
+        Excludes private (_prefixed) and dunder (__dunder__) members by default; \
+        use --all to include everything.\n\n\
+        Note: only shows members defined directly on the class, not inherited members.\n\n\
+        Examples:\n  \
+        tyf members MyClass\n  \
+        tyf members MyClass UserService        # multiple classes\n  \
+        tyf members MyClass --all              # include __init__, __repr__, etc\n  \
+        tyf members MyClass -f src/models.py   # narrow to one file"
+    )]
+    Members {
+        /// Class name(s) to inspect (supports multiple classes)
+        #[arg(required = true, num_args = 1..)]
+        symbols: Vec<String>,
+
+        /// Narrow the search to a specific file (searches whole project if omitted)
+        #[arg(short, long)]
+        file: Option<PathBuf>,
+
+        /// Include dunder methods and private members (excluded by default)
+        #[arg(long, default_value_t = false)]
+        all: bool,
+    },
+
     // -- Browsing --
     /// All functions, classes, and variables defined in a file
     #[command(
@@ -265,7 +293,8 @@ mod tests {
         cmd.write_help(&mut buf).unwrap();
         let help = String::from_utf8(buf).unwrap();
 
-        let expected_subcommands = &["inspect", "find", "refs", "list", "interactive", "daemon"];
+        let expected_subcommands =
+            &["inspect", "find", "refs", "members", "list", "interactive", "daemon"];
 
         for subcmd in expected_subcommands {
             assert!(

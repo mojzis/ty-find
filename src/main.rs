@@ -54,7 +54,7 @@ async fn run(cli: Cli) -> Result<()> {
             .context("Failed to canonicalize workspace path")?
     };
 
-    let formatter = OutputFormatter::new(cli.format);
+    let formatter = OutputFormatter::with_detail(cli.format, cli.detail);
     let timeout = cli.timeout.map_or(DEFAULT_TIMEOUT, Duration::from_secs);
 
     match cli.command {

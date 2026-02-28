@@ -41,6 +41,10 @@ pub struct Cli {
     #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
     pub format: OutputFormat,
 
+    /// Output detail level: condensed (token-efficient, default) or full (verbose)
+    #[arg(long, value_enum, default_value_t = OutputDetail::Condensed)]
+    pub detail: OutputDetail,
+
     /// Timeout in seconds for daemon operations (default: 30)
     #[arg(long, value_name = "SECONDS")]
     pub timeout: Option<u64>,
@@ -228,4 +232,13 @@ pub enum OutputFormat {
     Json,
     Csv,
     Paths,
+}
+
+#[derive(Clone, Default, ValueEnum)]
+pub enum OutputDetail {
+    /// Minimal output optimized for token efficiency (default)
+    #[default]
+    Condensed,
+    /// Verbose output with numbered lists, section headers, and full labels
+    Full,
 }

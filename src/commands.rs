@@ -436,8 +436,12 @@ pub async fn handle_inspect_command(
 
     let entries: Vec<InspectEntry<'_>> = results
         .iter()
-        .map(|r| {
-            (r.symbol.as_str(), r.definitions.as_slice(), r.hover.as_ref(), r.references.as_slice())
+        .map(|r| InspectEntry {
+            symbol: r.symbol.as_str(),
+            kind: r.kind.as_ref(),
+            definitions: r.definitions.as_slice(),
+            hover: r.hover.as_ref(),
+            references: r.references.as_slice(),
         })
         .collect();
 
@@ -463,6 +467,7 @@ pub async fn handle_inspect_command(
 #[cfg(unix)]
 struct InspectResult {
     symbol: String,
+    kind: Option<crate::lsp::protocol::SymbolKind>,
     definitions: Vec<Location>,
     hover: Option<crate::lsp::protocol::Hover>,
     references: Vec<Location>,
@@ -477,70 +482,82 @@ async fn inspect_single_symbol(
     include_references: bool,
 ) -> Result<InspectResult> {
     // Step 1: Find the symbol's location(s)
-    let (mut client, definition_file, def_line, def_col, all_definitions) = if let Some(file) = file
-    {
-        let file_str = file.to_string_lossy();
-        let finder = SymbolFinder::new(&file_str).await?;
-        let positions = finder.find_symbol_positions(symbol);
+    let (mut client, definition_file, def_line, def_col, all_definitions, symbol_kind) =
+        if let Some(file) = file {
+            let file_str = file.to_string_lossy();
+            let finder = SymbolFinder::new(&file_str).await?;
+            let positions = finder.find_symbol_positions(symbol);
 
-        if positions.is_empty() {
-            return Ok(InspectResult {
-                symbol: symbol.to_string(),
-                definitions: Vec::new(),
-                hover: None,
-                references: Vec::new(),
-            });
-        }
-
-        let (first_line, first_col) = positions[0];
-
-        let mut client = DaemonClient::connect_with_timeout(timeout).await?;
-        let mut all_definitions = Vec::new();
-        for (line, column) in &positions {
-            let result = client
-                .execute_definition(
-                    workspace_root.to_path_buf(),
-                    file_str.to_string(),
-                    *line,
-                    *column,
-                )
-                .await?;
-            if let Some(loc) = result.location {
-                all_definitions.push(loc);
+            if positions.is_empty() {
+                return Ok(InspectResult {
+                    symbol: symbol.to_string(),
+                    kind: None,
+                    definitions: Vec::new(),
+                    hover: None,
+                    references: Vec::new(),
+                });
             }
-        }
-        dedup_locations(&mut all_definitions);
 
-        (client, file_str.to_string(), first_line, first_col, all_definitions)
-    } else {
-        // Use exact_name filter to avoid transferring thousands of fuzzy matches
-        let mut client = DaemonClient::connect_with_timeout(timeout).await?;
-        let result = client
-            .execute_workspace_symbols_exact(workspace_root.to_path_buf(), symbol.to_string())
-            .await?;
+            let (first_line, first_col) = positions[0];
 
-        let matched = &result.symbols;
+            let mut client = DaemonClient::connect_with_timeout(timeout).await?;
+            let mut all_definitions = Vec::new();
+            for (line, column) in &positions {
+                let result = client
+                    .execute_definition(
+                        workspace_root.to_path_buf(),
+                        file_str.to_string(),
+                        *line,
+                        *column,
+                    )
+                    .await?;
+                if let Some(loc) = result.location {
+                    all_definitions.push(loc);
+                }
+            }
+            dedup_locations(&mut all_definitions);
 
-        if matched.is_empty() {
-            return Ok(InspectResult {
-                symbol: symbol.to_string(),
-                definitions: Vec::new(),
-                hover: None,
-                references: Vec::new(),
-            });
-        }
+            // File-based search doesn't provide symbol kind
+            (client, file_str.to_string(), first_line, first_col, all_definitions, None)
+        } else {
+            // Use exact_name filter to avoid transferring thousands of fuzzy matches
+            let mut client = DaemonClient::connect_with_timeout(timeout).await?;
+            let result = client
+                .execute_workspace_symbols_exact(workspace_root.to_path_buf(), symbol.to_string())
+                .await?;
 
-        let first = &matched[0];
-        let file_path = first.location.uri.strip_prefix("file://").unwrap_or(&first.location.uri);
-        let def_line = first.location.range.start.line;
-        // Workspace-symbol range.start points at the declaration keyword
-        // (e.g. "class"), but hover/references need the symbol *name* column.
-        let def_col = find_name_column(file_path, def_line, &first.name)
-            .unwrap_or(first.location.range.start.character);
-        let all_definitions: Vec<Location> = matched.iter().map(|s| s.location.clone()).collect();
+            let matched = &result.symbols;
 
-        (client, file_path.to_string(), def_line, def_col, all_definitions)
-    };
+            if matched.is_empty() {
+                return Ok(InspectResult {
+                    symbol: symbol.to_string(),
+                    kind: None,
+                    definitions: Vec::new(),
+                    hover: None,
+                    references: Vec::new(),
+                });
+            }
+
+            let first = &matched[0];
+            let file_path =
+                first.location.uri.strip_prefix("file://").unwrap_or(&first.location.uri);
+            let def_line = first.location.range.start.line;
+            // Workspace-symbol range.start points at the declaration keyword
+            // (e.g. "class"), but hover/references need the symbol *name* column.
+            let def_col = find_name_column(file_path, def_line, &first.name)
+                .unwrap_or(first.location.range.start.character);
+            let all_definitions: Vec<Location> =
+                matched.iter().map(|s| s.location.clone()).collect();
+
+            (
+                client,
+                file_path.to_string(),
+                def_line,
+                def_col,
+                all_definitions,
+                Some(first.kind.clone()),
+            )
+        };
 
     // Steps 2 & 3: Get hover info (and optionally references) via single daemon call
     let inspect = client
@@ -555,6 +572,7 @@ async fn inspect_single_symbol(
 
     Ok(InspectResult {
         symbol: symbol.to_string(),
+        kind: symbol_kind,
         definitions: all_definitions,
         hover: inspect.hover,
         references: inspect.references,

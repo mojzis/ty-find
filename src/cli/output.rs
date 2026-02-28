@@ -1,15 +1,23 @@
-use crate::cli::args::OutputFormat;
+use crate::cli::args::{OutputDetail, OutputFormat};
 use crate::lsp::protocol::{
     DocumentSymbol, Hover, HoverContents, Location, MarkedStringOrString, SymbolInformation,
+    SymbolKind,
 };
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
 
-/// A single inspect result: (`symbol_name`, definitions, hover, references).
-pub type InspectEntry<'a> = (&'a str, &'a [Location], Option<&'a Hover>, &'a [Location]);
+/// A single inspect result with optional symbol kind.
+pub struct InspectEntry<'a> {
+    pub symbol: &'a str,
+    pub kind: Option<&'a SymbolKind>,
+    pub definitions: &'a [Location],
+    pub hover: Option<&'a Hover>,
+    pub references: &'a [Location],
+}
 
 pub struct OutputFormatter {
     format: OutputFormat,
+    detail: OutputDetail,
     cwd: PathBuf,
 }
 
@@ -20,8 +28,13 @@ fn read_source_line(file_path: &str, line: u32) -> Option<String> {
 }
 
 impl OutputFormatter {
+    #[cfg(test)]
     pub fn new(format: OutputFormat) -> Self {
-        Self { format, cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")) }
+        Self::with_detail(format, OutputDetail::default())
+    }
+
+    pub fn with_detail(format: OutputFormat, detail: OutputDetail) -> Self {
+        Self { format, detail, cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")) }
     }
 
     pub fn format_definitions(&self, locations: &[Location], query_info: &str) -> String {
@@ -352,83 +365,187 @@ impl OutputFormatter {
         }
     }
 
-    pub fn format_inspect(
+    /// Short label for a `SymbolKind`, used in condensed output.
+    fn kind_label(kind: &SymbolKind) -> &'static str {
+        match kind {
+            SymbolKind::Function => "func",
+            SymbolKind::Method => "method",
+            SymbolKind::Class => "class",
+            SymbolKind::Variable => "var",
+            SymbolKind::Constant => "const",
+            SymbolKind::Module => "module",
+            SymbolKind::Property => "prop",
+            SymbolKind::Field => "field",
+            SymbolKind::Constructor => "ctor",
+            SymbolKind::Enum => "enum",
+            SymbolKind::Interface => "iface",
+            SymbolKind::Struct => "struct",
+            SymbolKind::EnumMember => "member",
+            SymbolKind::TypeParameter => "type",
+            _ => "symbol",
+        }
+    }
+
+    /// Format a single symbol inspect, using the header level appropriate for context.
+    /// `h_level` controls markdown heading depth (1 = `#`, 2 = `##`).
+    fn format_inspect_human(
+        &self,
+        symbol: &str,
+        kind: Option<&SymbolKind>,
+        definitions: &[Location],
+        hover: Option<&Hover>,
+        references: &[Location],
+        h_level: u8,
+    ) -> String {
+        match self.detail {
+            OutputDetail::Condensed => {
+                self.format_inspect_condensed(kind, definitions, hover, references, h_level)
+            }
+            OutputDetail::Full => {
+                self.format_inspect_full(symbol, definitions, hover, references, h_level)
+            }
+        }
+    }
+
+    fn format_inspect_condensed(
+        &self,
+        kind: Option<&SymbolKind>,
+        definitions: &[Location],
+        hover: Option<&Hover>,
+        references: &[Location],
+        h_level: u8,
+    ) -> String {
+        let h = "#".repeat(h_level as usize);
+        let mut output = String::new();
+
+        // Def section — paths only, no source snippets (symbol name is already known)
+        if let Some(kind) = kind {
+            let _ = writeln!(output, "{h} Def ({})", Self::kind_label(kind));
+        } else {
+            let _ = writeln!(output, "{h} Def");
+        }
+        if definitions.is_empty() {
+            output.push_str("(none)\n");
+        } else {
+            for location in definitions {
+                let file_path = self.uri_to_path(&location.uri);
+                let line = location.range.start.line + 1;
+                let column = location.range.start.character + 1;
+                let _ = writeln!(output, "{file_path}:{line}:{column}");
+            }
+        }
+
+        // Type section — skip entirely when empty
+        if let Some(hover) = hover {
+            let _ = writeln!(output, "\n{h} Type");
+            output.push_str(&Self::extract_hover_text(&hover.contents));
+            output.push('\n');
+        }
+
+        // Refs section — paths only, only show when there are actual references
+        if !references.is_empty() {
+            let _ = writeln!(output, "\n{h} Refs ({})", references.len());
+            for location in references {
+                let file_path = self.uri_to_path(&location.uri);
+                let line = location.range.start.line + 1;
+                let column = location.range.start.character + 1;
+                let _ = writeln!(output, "{file_path}:{line}:{column}");
+            }
+        }
+
+        output
+    }
+
+    fn format_inspect_full(
         &self,
         symbol: &str,
         definitions: &[Location],
         hover: Option<&Hover>,
         references: &[Location],
+        h_level: u8,
     ) -> String {
-        match self.format {
-            OutputFormat::Human => {
-                let mut output = format!("=== Inspect: {symbol} ===\n\n");
+        let h = "#".repeat(h_level as usize);
+        let h2 = "#".repeat(h_level as usize + 1);
+        let mut output = format!("{h} Inspect: {symbol}\n\n");
 
-                // Definition section
-                output.push_str("--- Definition ---\n");
-                if definitions.is_empty() {
-                    output.push_str("No definitions found.\n");
-                } else {
-                    for (i, location) in definitions.iter().enumerate() {
-                        let file_path = self.uri_to_path(&location.uri);
-                        let line = location.range.start.line + 1;
-                        let column = location.range.start.character + 1;
-                        let _ = writeln!(output, "{}. {file_path}:{line}:{column}", i + 1);
+        // Definition section
+        let _ = writeln!(output, "{h2} Definition");
+        if definitions.is_empty() {
+            output.push_str("No definitions found.\n");
+        } else {
+            for (i, location) in definitions.iter().enumerate() {
+                let file_path = self.uri_to_path(&location.uri);
+                let line = location.range.start.line + 1;
+                let column = location.range.start.character + 1;
+                let _ = writeln!(output, "{}. {file_path}:{line}:{column}", i + 1);
 
-                        if let Some(src) = read_source_line(&file_path, line) {
-                            let _ = writeln!(output, "   {src}");
-                        }
-                    }
+                if let Some(src) = read_source_line(&file_path, line) {
+                    let _ = writeln!(output, "   {src}");
                 }
-                output.push('\n');
-
-                // Hover section
-                output.push_str("--- Type Info ---\n");
-                if let Some(hover) = hover {
-                    output.push_str(&Self::extract_hover_text(&hover.contents));
-                    output.push('\n');
-                } else {
-                    output.push_str("No hover information available.\n");
-                }
-                output.push('\n');
-
-                // References section
-                output.push_str("--- References ---\n");
-                if references.is_empty() {
-                    output.push_str("No references found.\n");
-                } else {
-                    let _ = writeln!(output, "{} reference(s):", references.len());
-                    for (i, location) in references.iter().enumerate() {
-                        let file_path = self.uri_to_path(&location.uri);
-                        let line = location.range.start.line + 1;
-                        let column = location.range.start.character + 1;
-                        let _ = writeln!(output, "{}. {file_path}:{line}:{column}", i + 1);
-
-                        if let Some(src) = read_source_line(&file_path, line) {
-                            let _ = writeln!(output, "   {src}");
-                        }
-                    }
-                }
-
-                output
             }
+        }
+        output.push('\n');
+
+        // Type section
+        let _ = writeln!(output, "{h2} Type Info");
+        if let Some(hover) = hover {
+            output.push_str(&Self::extract_hover_text(&hover.contents));
+            output.push('\n');
+        } else {
+            output.push_str("No hover information available.\n");
+        }
+        output.push('\n');
+
+        // References section
+        let _ = writeln!(output, "{h2} References");
+        if references.is_empty() {
+            output.push_str("No references found.\n");
+        } else {
+            let _ = writeln!(output, "{} reference(s):", references.len());
+            for (i, location) in references.iter().enumerate() {
+                let file_path = self.uri_to_path(&location.uri);
+                let line = location.range.start.line + 1;
+                let column = location.range.start.character + 1;
+                let _ = writeln!(output, "{}. {file_path}:{line}:{column}", i + 1);
+
+                if let Some(src) = read_source_line(&file_path, line) {
+                    let _ = writeln!(output, "   {src}");
+                }
+            }
+        }
+
+        output
+    }
+
+    pub fn format_inspect(&self, entry: &InspectEntry<'_>) -> String {
+        match self.format {
+            OutputFormat::Human => self.format_inspect_human(
+                entry.symbol,
+                entry.kind,
+                entry.definitions,
+                entry.hover,
+                entry.references,
+                1,
+            ),
             OutputFormat::Json => {
                 let json_val = serde_json::json!({
-                    "symbol": symbol,
-                    "definitions": definitions,
-                    "hover": hover,
-                    "references": references,
+                    "symbol": entry.symbol,
+                    "kind": entry.kind.map(Self::kind_label),
+                    "definitions": entry.definitions,
+                    "hover": entry.hover,
+                    "references": entry.references,
                 });
                 serde_json::to_string_pretty(&json_val).unwrap_or_else(|_| "{}".to_string())
             }
             OutputFormat::Csv => {
                 let mut output = String::from("section,file,line,column\n");
-                for location in definitions {
+                for location in entry.definitions {
                     let file_path = self.uri_to_path(&location.uri);
                     let line = location.range.start.line + 1;
                     let column = location.range.start.character + 1;
                     let _ = writeln!(output, "definition,{file_path},{line},{column}");
                 }
-                for location in references {
+                for location in entry.references {
                     let file_path = self.uri_to_path(&location.uri);
                     let line = location.range.start.line + 1;
                     let column = location.range.start.character + 1;
@@ -437,9 +554,10 @@ impl OutputFormatter {
                 output
             }
             OutputFormat::Paths => {
-                let mut paths: Vec<String> = definitions
+                let mut paths: Vec<String> = entry
+                    .definitions
                     .iter()
-                    .chain(references.iter())
+                    .chain(entry.references.iter())
                     .map(|loc| self.uri_to_path(&loc.uri))
                     .collect();
                 paths.sort();
@@ -452,15 +570,23 @@ impl OutputFormatter {
     /// Format results for one or more symbol inspect queries, grouped by symbol.
     pub fn format_inspect_results(&self, results: &[InspectEntry<'_>]) -> String {
         if results.len() == 1 {
-            let (symbol, definitions, hover, references) = &results[0];
-            return self.format_inspect(symbol, definitions, *hover, references);
+            return self.format_inspect(&results[0]);
         }
 
         match self.format {
             OutputFormat::Human => {
                 let mut output = String::new();
-                for (symbol, definitions, hover, references) in results {
-                    output.push_str(&self.format_inspect(symbol, definitions, *hover, references));
+                for entry in results {
+                    // Multi-symbol: symbol name gets top-level heading, sections get sub-headings
+                    let _ = writeln!(output, "# {}", entry.symbol);
+                    output.push_str(&self.format_inspect_human(
+                        entry.symbol,
+                        entry.kind,
+                        entry.definitions,
+                        entry.hover,
+                        entry.references,
+                        2,
+                    ));
                     output.push('\n');
                 }
                 output.trim_end().to_string()
@@ -468,12 +594,13 @@ impl OutputFormatter {
             OutputFormat::Json => {
                 let grouped: Vec<serde_json::Value> = results
                     .iter()
-                    .map(|(symbol, definitions, hover, references)| {
+                    .map(|entry| {
                         serde_json::json!({
-                            "symbol": symbol,
-                            "definitions": definitions,
-                            "hover": hover,
-                            "references": references,
+                            "symbol": entry.symbol,
+                            "kind": entry.kind.map(Self::kind_label),
+                            "definitions": entry.definitions,
+                            "hover": entry.hover,
+                            "references": entry.references,
                         })
                     })
                     .collect();
@@ -481,19 +608,26 @@ impl OutputFormatter {
             }
             OutputFormat::Csv => {
                 let mut output = String::from("symbol,section,file,line,column\n");
-                for (symbol, definitions, _, references) in results {
-                    for location in *definitions {
+                for entry in results {
+                    for location in entry.definitions {
                         let file_path = self.uri_to_path(&location.uri);
                         let line = location.range.start.line + 1;
                         let column = location.range.start.character + 1;
-                        let _ =
-                            writeln!(output, "{symbol},definition,{file_path},{line},{column}",);
+                        let _ = writeln!(
+                            output,
+                            "{},definition,{file_path},{line},{column}",
+                            entry.symbol
+                        );
                     }
-                    for location in *references {
+                    for location in entry.references {
                         let file_path = self.uri_to_path(&location.uri);
                         let line = location.range.start.line + 1;
                         let column = location.range.start.character + 1;
-                        let _ = writeln!(output, "{symbol},reference,{file_path},{line},{column}",);
+                        let _ = writeln!(
+                            output,
+                            "{},reference,{file_path},{line},{column}",
+                            entry.symbol
+                        );
                     }
                 }
                 output
@@ -501,10 +635,11 @@ impl OutputFormatter {
             OutputFormat::Paths => {
                 let mut paths: Vec<String> = results
                     .iter()
-                    .flat_map(|(_, definitions, _, references)| {
-                        definitions
+                    .flat_map(|entry| {
+                        entry
+                            .definitions
                             .iter()
-                            .chain(references.iter())
+                            .chain(entry.references.iter())
                             .map(|loc| self.uri_to_path(&loc.uri))
                     })
                     .collect();
@@ -706,25 +841,78 @@ mod tests {
         assert_eq!(result, "https://example.com");
     }
 
-    #[test]
-    fn test_format_inspect_empty_results() {
-        let formatter = OutputFormatter::new(OutputFormat::Human);
-        let result = formatter.format_inspect("missing", &[], None, &[]);
+    fn make_entry<'a>(
+        symbol: &'a str,
+        kind: Option<&'a SymbolKind>,
+        definitions: &'a [Location],
+        hover: Option<&'a Hover>,
+        references: &'a [Location],
+    ) -> InspectEntry<'a> {
+        InspectEntry { symbol, kind, definitions, hover, references }
+    }
 
-        assert!(result.contains("=== Inspect: missing ==="));
+    #[test]
+    fn test_format_inspect_condensed_empty() {
+        let formatter = OutputFormatter::new(OutputFormat::Human);
+        let entry = make_entry("missing", None, &[], None, &[]);
+        let result = formatter.format_inspect(&entry);
+
+        // Condensed: no symbol header for single symbol, short section names
+        assert!(result.contains("# Def"));
+        assert!(result.contains("(none)"));
+        // No Type or Refs sections when empty in condensed
+        assert!(!result.contains("# Type"));
+        assert!(!result.contains("# Refs"));
+    }
+
+    #[test]
+    fn test_format_inspect_condensed_with_kind() {
+        let formatter = OutputFormatter::new(OutputFormat::Human);
+        let defs = [make_location("file:///test.py", 0, 0)];
+        let entry = make_entry("foo", Some(&SymbolKind::Function), &defs, None, &[]);
+        let result = formatter.format_inspect(&entry);
+
+        assert!(result.contains("# Def (func)"));
+        assert!(result.contains("test.py:1:1"));
+    }
+
+    #[test]
+    fn test_format_inspect_full_empty() {
+        let formatter = OutputFormatter::with_detail(OutputFormat::Human, OutputDetail::Full);
+        let entry = make_entry("missing", None, &[], None, &[]);
+        let result = formatter.format_inspect(&entry);
+
+        assert!(result.contains("# Inspect: missing"));
+        assert!(result.contains("## Definition"));
         assert!(result.contains("No definitions found."));
         assert!(result.contains("No hover information available."));
         assert!(result.contains("No references found."));
     }
 
     #[test]
+    fn test_format_inspect_condensed_with_defs() {
+        let formatter = OutputFormatter::new(OutputFormat::Human);
+        let defs = [make_location("file:///test.py", 0, 0)];
+        let entry = make_entry("foo", None, &defs, None, &[]);
+        let result = formatter.format_inspect(&entry);
+
+        // Should show path:line:col on one line (no numbering)
+        assert!(result.contains("test.py:1:1"));
+        assert!(result.contains("# Def"));
+        // No symbol name header for single symbol in condensed
+        assert!(!result.contains("foo"));
+    }
+
+    #[test]
     fn test_format_inspect_json() {
         let formatter = OutputFormatter::new(OutputFormat::Json);
         let defs = [make_location("file:///test.py", 0, 0)];
-        let result = formatter.format_inspect("foo", &defs, None, &[]);
+        let entry = make_entry("foo", Some(&SymbolKind::Function), &defs, None, &[]);
+        let result = formatter.format_inspect(&entry);
 
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(parsed["symbol"], "foo");
+        assert_eq!(parsed["kind"], "func");
         assert!(parsed["definitions"].is_array());
     }
 

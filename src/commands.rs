@@ -474,6 +474,7 @@ pub async fn handle_inspect_command(
             definitions: r.definitions.as_slice(),
             hover: r.hover.as_ref(),
             references: r.references.as_slice(),
+            references_requested: include_references,
         })
         .collect();
 

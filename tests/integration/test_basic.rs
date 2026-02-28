@@ -307,7 +307,7 @@ fn members_fixture_path() -> PathBuf {
 
 #[tokio::test]
 async fn test_members_command_basic() {
-    require_ty();
+    common::require_ty();
 
     let mut cmd = cargo_bin_cmd!("tyf");
     cmd.arg("--workspace")
@@ -352,7 +352,7 @@ async fn test_members_command_basic() {
 
 #[tokio::test]
 async fn test_members_command_all_flag() {
-    require_ty();
+    common::require_ty();
 
     let mut cmd = cargo_bin_cmd!("tyf");
     cmd.arg("--workspace")
@@ -376,7 +376,7 @@ async fn test_members_command_all_flag() {
 
 #[tokio::test]
 async fn test_members_command_non_class_error() {
-    require_ty();
+    common::require_ty();
 
     let mut cmd = cargo_bin_cmd!("tyf");
     cmd.arg("--workspace")
@@ -397,7 +397,7 @@ async fn test_members_command_non_class_error() {
 
 #[tokio::test]
 async fn test_members_command_multiple_classes() {
-    require_ty();
+    common::require_ty();
 
     let mut cmd = cargo_bin_cmd!("tyf");
     cmd.arg("--workspace")
@@ -425,7 +425,7 @@ async fn test_members_command_multiple_classes() {
 
 #[tokio::test]
 async fn test_members_command_json_format() {
-    require_ty();
+    common::require_ty();
 
     let mut cmd = cargo_bin_cmd!("tyf");
     cmd.arg("--workspace")
@@ -453,7 +453,7 @@ async fn test_members_command_json_format() {
 
 #[tokio::test]
 async fn test_members_command_csv_format() {
-    require_ty();
+    common::require_ty();
 
     let mut cmd = cargo_bin_cmd!("tyf");
     cmd.arg("--workspace")

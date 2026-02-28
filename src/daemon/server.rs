@@ -372,7 +372,7 @@ impl DaemonServer {
         let params: MembersParams =
             serde_json::from_value(params).context("Invalid members parameters")?;
 
-        let client = { self.lsp_pool.lock().await.get_or_create(params.workspace).await? };
+        let client = self.lsp_pool.get_or_create(params.workspace).await?;
 
         let file_str = params.file.to_string_lossy().to_string();
         client.open_document(&file_str).await?;

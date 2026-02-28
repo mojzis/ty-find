@@ -126,6 +126,46 @@ async fn test_inspect_command() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(output.status.success(), "command failed: {stdout}");
     assert!(predicate::str::contains("hello_world").eval(&stdout));
+    // Verify hover / type info is actually returned (not just the name)
+    assert!(
+        !predicate::str::contains("No hover information").eval(&stdout),
+        "inspect should return hover info, got:\n{stdout}"
+    );
+}
+
+#[tokio::test]
+async fn test_inspect_command_with_references() {
+    require_ty();
+
+    // Inspect `hello_world` with --references to verify all three sections
+    let mut cmd = cargo_bin_cmd!("ty-find");
+    cmd.arg("--workspace")
+        .arg(workspace_root())
+        .arg("inspect")
+        .arg("hello_world")
+        .arg("--file")
+        .arg(fixture_path())
+        .arg("--references");
+
+    let output = cmd.output().expect("failed to run ty-find");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "command failed: {stdout}");
+
+    // Definition
+    assert!(
+        predicate::str::contains("hello_world").eval(&stdout),
+        "should find hello_world definition, got:\n{stdout}"
+    );
+    // Hover
+    assert!(
+        !predicate::str::contains("No hover information").eval(&stdout),
+        "inspect should return hover info, got:\n{stdout}"
+    );
+    // References
+    assert!(
+        !predicate::str::contains("No references found").eval(&stdout),
+        "inspect --references should find usages, got:\n{stdout}"
+    );
 }
 
 #[tokio::test]

@@ -326,7 +326,10 @@ impl DaemonServer {
         Ok(serde_json::to_value(result)?)
     }
 
-    /// Handle an inspect request (hover, and optionally references in parallel).
+    /// Handle an inspect request (hover, and optionally references).
+    ///
+    /// Requests are sequential because the LSP client communicates through a
+    /// single stdin/stdout pipe — concurrent requests race on response routing.
     async fn handle_inspect(&self, params: Value) -> Result<Value> {
         let params: InspectParams =
             serde_json::from_value(params).context("Invalid inspect parameters")?;
@@ -336,18 +339,14 @@ impl DaemonServer {
         let file_str = params.file.to_string_lossy().to_string();
         client.open_document(&file_str).await?;
 
-        let result = if params.include_references {
-            // Run hover and references in parallel on the same LSP client
-            let (hover, references) = tokio::join!(
-                client.hover(&file_str, params.line, params.column),
-                client.find_references(&file_str, params.line, params.column, true),
-            );
-            InspectResult { hover: hover?, references: references? }
+        let hover = client.hover(&file_str, params.line, params.column).await?;
+        let references = if params.include_references {
+            client.find_references(&file_str, params.line, params.column, true).await?
         } else {
-            let hover = client.hover(&file_str, params.line, params.column).await?;
-            InspectResult { hover, references: Vec::new() }
+            Vec::new()
         };
 
+        let result = InspectResult { hover, references };
         Ok(serde_json::to_value(result)?)
     }
 

@@ -22,6 +22,18 @@ fn dedup_locations(locations: &mut Vec<Location>) {
     locations.retain(|loc| seen.insert((loc.uri.clone(), loc.range.start.line)));
 }
 
+/// Find the column where `name` appears on a given 0-indexed line of a file.
+///
+/// Workspace-symbol responses return the range of the full declaration
+/// (e.g. the `class` keyword), but hover/references need the cursor on the
+/// *name* itself. This helper reads the source line and locates the name.
+fn find_name_column(file_path: &str, line_0: u32, name: &str) -> Option<u32> {
+    let content = std::fs::read_to_string(file_path).ok()?;
+    let src_line = content.lines().nth(line_0 as usize)?;
+    let col = src_line.find(name)?;
+    u32::try_from(col).ok()
+}
+
 pub async fn handle_definition_command(
     workspace_root: &Path,
     file: &Path,
@@ -126,11 +138,16 @@ async fn resolve_symbols_to_queries(
                         .strip_prefix("file://")
                         .unwrap_or(&sym_info.location.uri)
                         .to_string();
+                    let line = sym_info.location.range.start.line;
+                    // Workspace-symbol range.start points at the declaration
+                    // keyword; hover/references need the symbol *name* column.
+                    let column = find_name_column(&file_path, line, &sym_info.name)
+                        .unwrap_or(sym_info.location.range.start.character);
                     resolved.push(ResolvedQuery {
                         label: symbol.clone(),
                         file: file_path,
-                        line: sym_info.location.range.start.line,
-                        column: sym_info.location.range.start.character,
+                        line,
+                        column,
                     });
                 }
             }
@@ -516,7 +533,10 @@ async fn inspect_single_symbol(
         let first = &matched[0];
         let file_path = first.location.uri.strip_prefix("file://").unwrap_or(&first.location.uri);
         let def_line = first.location.range.start.line;
-        let def_col = first.location.range.start.character;
+        // Workspace-symbol range.start points at the declaration keyword
+        // (e.g. "class"), but hover/references need the symbol *name* column.
+        let def_col = find_name_column(file_path, def_line, &first.name)
+            .unwrap_or(first.location.range.start.character);
         let all_definitions: Vec<Location> = matched.iter().map(|s| s.location.clone()).collect();
 
         (client, file_path.to_string(), def_line, def_col, all_definitions)
@@ -846,5 +866,36 @@ mod tests {
         // Non-numeric parts
         assert_eq!(parse_file_position("file.py:abc:5"), None);
         assert_eq!(parse_file_position("file.py:10:abc"), None);
+    }
+
+    #[test]
+    fn test_find_name_column_class() {
+        // "class Animal:" — "Animal" starts at column 6
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.py");
+        std::fs::write(&file, "class Animal:\n    pass\n").unwrap();
+        assert_eq!(find_name_column(file.to_str().unwrap(), 0, "Animal"), Some(6));
+    }
+
+    #[test]
+    fn test_find_name_column_function() {
+        // "def create_dog(name):" — "create_dog" starts at column 4
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.py");
+        std::fs::write(&file, "def create_dog(name):\n    pass\n").unwrap();
+        assert_eq!(find_name_column(file.to_str().unwrap(), 0, "create_dog"), Some(4));
+    }
+
+    #[test]
+    fn test_find_name_column_not_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.py");
+        std::fs::write(&file, "x = 1\n").unwrap();
+        assert_eq!(find_name_column(file.to_str().unwrap(), 0, "Animal"), None);
+    }
+
+    #[test]
+    fn test_find_name_column_nonexistent_file() {
+        assert_eq!(find_name_column("/nonexistent/file.py", 0, "Animal"), None);
     }
 }

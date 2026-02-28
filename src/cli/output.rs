@@ -387,6 +387,20 @@ impl OutputFormatter {
         type_part.replace("```xml", "```text")
     }
 
+    /// Extract just the docstring portion from hover, if present.
+    ///
+    /// Returns `None` if there is no `---` separator (i.e. no docstring).
+    fn extract_hover_doc(contents: &HoverContents) -> Option<String> {
+        let full = Self::extract_hover_text(contents);
+        let pos = full.find("\n---")?;
+        let doc = full[pos + 4..].trim(); // skip "\n---"
+        if doc.is_empty() {
+            None
+        } else {
+            Some(doc.to_string())
+        }
+    }
+
     /// Short label for a `SymbolKind`, used in condensed output.
     fn kind_label(kind: &SymbolKind) -> &'static str {
         match kind {
@@ -464,6 +478,15 @@ impl OutputFormatter {
             output.push('\n');
         } else {
             output.push_str("(none)\n");
+        }
+
+        // Doc section — only shown when a docstring is present
+        if let Some(hover) = hover {
+            if let Some(doc) = Self::extract_hover_doc(&hover.contents) {
+                let _ = writeln!(output, "\n{h} Doc");
+                output.push_str(&doc);
+                output.push('\n');
+            }
         }
 
         // Refs section — always shown, paths only
@@ -994,7 +1017,27 @@ mod tests {
     }
 
     #[test]
-    fn test_condensed_inspect_strips_docstring() {
+    fn test_extract_hover_doc() {
+        use crate::lsp::protocol::{HoverContents, MarkupContent};
+
+        let with_doc = HoverContents::Markup(MarkupContent {
+            kind: crate::lsp::protocol::MarkupKind::Markdown,
+            value: "```xml\n<class 'Animal'>\n```\n---\nBase class for animals.".to_string(),
+        });
+        assert_eq!(
+            OutputFormatter::extract_hover_doc(&with_doc),
+            Some("Base class for animals.".to_string())
+        );
+
+        let without_doc = HoverContents::Markup(MarkupContent {
+            kind: crate::lsp::protocol::MarkupKind::Markdown,
+            value: "```python\ndef foo() -> int\n```".to_string(),
+        });
+        assert_eq!(OutputFormatter::extract_hover_doc(&without_doc), None);
+    }
+
+    #[test]
+    fn test_condensed_inspect_separates_doc() {
         use crate::lsp::protocol::{Hover, HoverContents, MarkupContent, Range};
 
         let formatter = OutputFormatter::new(OutputFormat::Human);
@@ -1013,10 +1056,10 @@ mod tests {
         let result = formatter.format_inspect(&entry);
 
         // Type section should have the class type but not the docstring
-        assert!(result.contains("<class 'Animal'>"));
-        assert!(!result.contains("Base class"));
-        assert!(!result.contains("---"));
-        // Should use text tag, not xml
-        assert!(result.contains("```text"));
+        assert!(result.contains("# Type\n```text\n<class 'Animal'>"));
+        // Doc section should have the docstring separately
+        assert!(result.contains("# Doc\nBase class for animals."));
+        // No raw --- separator in output
+        assert!(!result.contains("\n---\n"));
     }
 }

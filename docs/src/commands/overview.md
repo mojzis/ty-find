@@ -38,9 +38,6 @@ tyf [OPTIONS] <COMMAND>
 **[list](list.md)**
 : All functions, classes, and variables defined in a file
 
-**[interactive](interactive.md)**
-: Interactive REPL for exploring code
-
 **[daemon](daemon.md)**
 : Manage the background LSP server (auto-starts on first use)
 

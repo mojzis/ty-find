@@ -214,13 +214,6 @@ fn write_examples(out: &mut String, name: &str, cmd: &Command) {
             let _ = writeln!(out, "# Inspect a symbol in a specific file");
             let _ = writeln!(out, "tyf inspect MyClass --file src/module.py");
         }
-        "interactive" => {
-            let _ = writeln!(out, "# Start interactive REPL");
-            let _ = writeln!(out, "tyf interactive");
-            let _ = writeln!(out);
-            let _ = writeln!(out, "# Start with a file context");
-            let _ = writeln!(out, "tyf interactive main.py");
-        }
         "refs" => {
             let _ = writeln!(out, "# Find all references to a symbol");
             let _ = writeln!(out, "tyf refs main.py --line 10 --column 5");

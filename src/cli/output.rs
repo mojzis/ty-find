@@ -15,6 +15,8 @@ pub struct InspectEntry<'a> {
     pub definitions: &'a [Location],
     pub hover: Option<&'a Hover>,
     pub references: &'a [Location],
+    /// Whether references were actually requested (false = not searched, not "none found").
+    pub references_requested: bool,
 }
 
 pub struct OutputFormatter {
@@ -404,46 +406,27 @@ impl OutputFormatter {
 
     /// Format a single symbol inspect, using the header level appropriate for context.
     /// `h_level` controls markdown heading depth (1 = `#`, 2 = `##`).
-    fn format_inspect_human(
-        &self,
-        symbol: &str,
-        kind: Option<&SymbolKind>,
-        definitions: &[Location],
-        hover: Option<&Hover>,
-        references: &[Location],
-        h_level: u8,
-    ) -> String {
+    fn format_inspect_human(&self, entry: &InspectEntry<'_>, h_level: u8) -> String {
         match self.detail {
-            OutputDetail::Condensed => {
-                self.format_inspect_condensed(kind, definitions, hover, references, h_level)
-            }
-            OutputDetail::Full => {
-                self.format_inspect_full(symbol, definitions, hover, references, h_level)
-            }
+            OutputDetail::Condensed => self.format_inspect_condensed(entry, h_level),
+            OutputDetail::Full => self.format_inspect_full(entry, h_level),
         }
     }
 
-    fn format_inspect_condensed(
-        &self,
-        kind: Option<&SymbolKind>,
-        definitions: &[Location],
-        hover: Option<&Hover>,
-        references: &[Location],
-        h_level: u8,
-    ) -> String {
+    fn format_inspect_condensed(&self, entry: &InspectEntry<'_>, h_level: u8) -> String {
         let h = "#".repeat(h_level as usize);
         let mut output = String::new();
 
         // Def section — paths only, no source snippets (symbol name is already known)
-        if let Some(kind) = kind {
+        if let Some(kind) = entry.kind {
             let _ = writeln!(output, "{h} Def ({})", Self::kind_label(kind));
         } else {
             let _ = writeln!(output, "{h} Def");
         }
-        if definitions.is_empty() {
+        if entry.definitions.is_empty() {
             output.push_str("(none)\n");
         } else {
-            for location in definitions {
+            for location in entry.definitions {
                 let file_path = self.uri_to_path(&location.uri);
                 let line = location.range.start.line + 1;
                 let column = location.range.start.character + 1;
@@ -453,7 +436,7 @@ impl OutputFormatter {
 
         // Type section — always shown, compact placeholder when empty
         let _ = writeln!(output, "\n{h} Type");
-        if let Some(hover) = hover {
+        if let Some(hover) = entry.hover {
             output.push_str(&Self::extract_hover_type(&hover.contents));
             output.push('\n');
         } else {
@@ -461,7 +444,7 @@ impl OutputFormatter {
         }
 
         // Doc section — only shown when a docstring is present
-        if let Some(hover) = hover {
+        if let Some(hover) = entry.hover {
             if let Some(doc) = Self::extract_hover_doc(&hover.contents) {
                 let _ = writeln!(output, "\n{h} Doc");
                 output.push_str(&doc);
@@ -470,12 +453,16 @@ impl OutputFormatter {
         }
 
         // Refs section — always shown, paths only
-        if references.is_empty() {
+        if entry.references.is_empty() {
             let _ = writeln!(output, "\n{h} Refs");
-            output.push_str("(none)\n");
+            if entry.references_requested {
+                output.push_str("(none)\n");
+            } else {
+                output.push_str("(use -r to find)\n");
+            }
         } else {
-            let _ = writeln!(output, "\n{h} Refs ({})", references.len());
-            for location in references {
+            let _ = writeln!(output, "\n{h} Refs ({})", entry.references.len());
+            for location in entry.references {
                 let file_path = self.uri_to_path(&location.uri);
                 let line = location.range.start.line + 1;
                 let column = location.range.start.character + 1;
@@ -486,24 +473,17 @@ impl OutputFormatter {
         output
     }
 
-    fn format_inspect_full(
-        &self,
-        symbol: &str,
-        definitions: &[Location],
-        hover: Option<&Hover>,
-        references: &[Location],
-        h_level: u8,
-    ) -> String {
+    fn format_inspect_full(&self, entry: &InspectEntry<'_>, h_level: u8) -> String {
         let h = "#".repeat(h_level as usize);
         let h2 = "#".repeat(h_level as usize + 1);
-        let mut output = format!("{h} Inspect: {symbol}\n\n");
+        let mut output = format!("{h} Inspect: {}\n\n", entry.symbol);
 
         // Definition section
         let _ = writeln!(output, "{h2} Definition");
-        if definitions.is_empty() {
+        if entry.definitions.is_empty() {
             output.push_str("No definitions found.\n");
         } else {
-            for (i, location) in definitions.iter().enumerate() {
+            for (i, location) in entry.definitions.iter().enumerate() {
                 let file_path = self.uri_to_path(&location.uri);
                 let line = location.range.start.line + 1;
                 let column = location.range.start.character + 1;
@@ -518,7 +498,7 @@ impl OutputFormatter {
 
         // Type section
         let _ = writeln!(output, "{h2} Type Info");
-        if let Some(hover) = hover {
+        if let Some(hover) = entry.hover {
             output.push_str(&Self::extract_hover_text(&hover.contents));
             output.push('\n');
         } else {
@@ -528,11 +508,15 @@ impl OutputFormatter {
 
         // References section
         let _ = writeln!(output, "{h2} References");
-        if references.is_empty() {
-            output.push_str("No references found.\n");
+        if entry.references.is_empty() {
+            if entry.references_requested {
+                output.push_str("No references found.\n");
+            } else {
+                output.push_str("Use --references (-r) to search for usages.\n");
+            }
         } else {
-            let _ = writeln!(output, "{} reference(s):", references.len());
-            for (i, location) in references.iter().enumerate() {
+            let _ = writeln!(output, "{} reference(s):", entry.references.len());
+            for (i, location) in entry.references.iter().enumerate() {
                 let file_path = self.uri_to_path(&location.uri);
                 let line = location.range.start.line + 1;
                 let column = location.range.start.character + 1;
@@ -549,14 +533,7 @@ impl OutputFormatter {
 
     pub fn format_inspect(&self, entry: &InspectEntry<'_>) -> String {
         match self.format {
-            OutputFormat::Human => self.format_inspect_human(
-                entry.symbol,
-                entry.kind,
-                entry.definitions,
-                entry.hover,
-                entry.references,
-                1,
-            ),
+            OutputFormat::Human => self.format_inspect_human(entry, 1),
             OutputFormat::Json => {
                 let json_val = serde_json::json!({
                     "symbol": entry.symbol,
@@ -609,14 +586,7 @@ impl OutputFormatter {
                 for entry in results {
                     // Multi-symbol: symbol name gets top-level heading, sections get sub-headings
                     let _ = writeln!(output, "# {}", entry.symbol);
-                    output.push_str(&self.format_inspect_human(
-                        entry.symbol,
-                        entry.kind,
-                        entry.definitions,
-                        entry.hover,
-                        entry.references,
-                        2,
-                    ));
+                    output.push_str(&self.format_inspect_human(entry, 2));
                     output.push('\n');
                 }
                 output.trim_end().to_string()
@@ -1006,7 +976,7 @@ mod tests {
         hover: Option<&'a Hover>,
         references: &'a [Location],
     ) -> InspectEntry<'a> {
-        InspectEntry { symbol, kind, definitions, hover, references }
+        InspectEntry { symbol, kind, definitions, hover, references, references_requested: true }
     }
 
     #[test]
@@ -1021,6 +991,44 @@ mod tests {
         // Type and Refs sections always shown, even when empty (with "(none)" placeholder)
         assert!(result.contains("# Type"));
         assert!(result.contains("# Refs"));
+    }
+
+    #[test]
+    fn test_format_inspect_refs_not_requested_condensed() {
+        let formatter = OutputFormatter::new(OutputFormat::Human);
+        let defs = [make_location("file:///test.py", 0, 0)];
+        let entry = InspectEntry {
+            symbol: "Animal",
+            kind: Some(&SymbolKind::Class),
+            definitions: &defs,
+            hover: None,
+            references: &[],
+            references_requested: false,
+        };
+        let result = formatter.format_inspect(&entry);
+
+        assert!(result.contains("(use -r to find)"));
+        // The Refs section should NOT say "(none)" — that's for when refs were searched but empty
+        let refs_section = result.split("# Refs").nth(1).unwrap();
+        assert!(!refs_section.contains("(none)"));
+    }
+
+    #[test]
+    fn test_format_inspect_refs_not_requested_full() {
+        let formatter = OutputFormatter::with_detail(OutputFormat::Human, OutputDetail::Full);
+        let defs = [make_location("file:///test.py", 0, 0)];
+        let entry = InspectEntry {
+            symbol: "Animal",
+            kind: Some(&SymbolKind::Class),
+            definitions: &defs,
+            hover: None,
+            references: &[],
+            references_requested: false,
+        };
+        let result = formatter.format_inspect(&entry);
+
+        assert!(result.contains("Use --references (-r) to search for usages."));
+        assert!(!result.contains("No references found."));
     }
 
     #[test]

@@ -57,7 +57,6 @@ tyf find handle_ --fuzzy                 # fuzzy/prefix match
 tyf inspect MyClass my_function          # inspect multiple symbols at once
 tyf members MyClass                      # public interface of a class
 tyf members MyClass --all                # include dunder/private members
-tyf interactive
 ```
 
 ### Releasing
@@ -93,7 +92,7 @@ If formatting fails, fix it with `cargo fmt` and re-run the checks.
 1. **LSP Client (`src/lsp/`)** - JSON-RPC client that communicates with ty's LSP server
 2. **CLI Interface (`src/cli/`)** - Command-line argument parsing and output formatting
 3. **Workspace Detection (`src/workspace/`)** - Python project detection and symbol finding
-4. **Main Application (`src/main.rs`)** - Orchestrates the main modes: find, inspect, refs, members, list, interactive
+4. **Main Application (`src/main.rs`)** - Orchestrates the main modes: find, inspect, refs, members, list
 
 ### Key Architectural Patterns
 
@@ -107,7 +106,7 @@ If formatting fails, fix it with `cargo fmt` and re-run the checks.
 - `pyproject.toml` uses maturin backend (`bindings = "bin"`) to package the Rust binary as a Python wheel
 
 **Command Processing**:
-- Main commands: `inspect` (all-in-one), `find` (definitions), `refs` (references), `members` (class interface), `list` (file outline), `interactive` (REPL)
+- Main commands: `inspect` (all-in-one), `find` (definitions), `refs` (references), `members` (class interface), `list` (file outline)
 - `find` supports `--fuzzy` for partial/prefix matching via workspace symbols
 - `find`, `inspect`, `refs`, and `members` accept multiple symbols in one call to reduce tool invocations (results grouped by symbol)
 - `SymbolFinder` does text-based symbol matching with whole-word detection

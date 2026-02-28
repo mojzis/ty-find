@@ -12,10 +12,10 @@
 
 body { font-family: var(--font-sans) !important; }
 code, pre, .hljs { font-family: var(--font-mono) !important; }
-.content main { font-size: 0.95rem; line-height: 1.7; }
+.content main { font-size: 1.05rem; line-height: 1.7; }
 
 /* --- Sidebar --- */
-.sidebar { font-family: var(--font-sans) !important; font-size: 0.85rem !important; }
+.sidebar { font-family: var(--font-sans) !important; font-size: 0.9rem !important; }
 
 .sidebar .chapter-item.spacer {
   height: 1px !important; margin: 12px 16px !important; padding: 0 !important;
@@ -23,7 +23,7 @@ code, pre, .hljs { font-family: var(--font-mono) !important; }
 }
 
 .sidebar .chapter-item .part-title, .sidebar .part-title {
-  text-transform: uppercase; font-size: 0.65rem !important; font-weight: 600 !important;
+  text-transform: uppercase; font-size: 0.7rem !important; font-weight: 600 !important;
   letter-spacing: 0.1em; opacity: 0.5; margin-top: 18px !important;
   margin-bottom: 4px !important; padding-left: 16px; pointer-events: none;
 }
@@ -44,7 +44,7 @@ code, pre, .hljs { font-family: var(--font-mono) !important; }
 }
 
 .sidebar ol.chapter li.chapter-item ol a {
-  padding-left: 32px !important; font-size: 0.82rem; opacity: 0.8;
+  padding-left: 24px !important; font-size: 0.88rem; opacity: 0.8;
 }
 .sidebar ol.chapter li.chapter-item ol a:hover { opacity: 1; }
 
@@ -106,5 +106,5 @@ code, pre, .hljs { font-family: var(--font-mono) !important; }
 .nav-chapters:hover { color: var(--ty-accent) !important; }
 
 /* --- Responsive --- */
-@media (max-width: 1080px) { .content main { font-size: 0.92rem; } }
+@media (max-width: 1080px) { .content main { font-size: 1rem; } }
 @media (max-width: 600px) { .sidebar .chapter-item a, .sidebar ol.chapter a { margin: 1px 4px !important; } }

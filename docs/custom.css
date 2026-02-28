@@ -23,6 +23,9 @@ html code, html pre, html pre > code, html .hljs {
 html .content main {
   font-size: 0.95em;
   line-height: 1.7;
+  max-width: 900px;
+  margin-inline-start: 0;
+  margin-inline-end: auto;
 }
 
 /* ==========================================================
@@ -88,14 +91,22 @@ html .sidebar ol.chapter li.chapter-item li a.active {
   padding-left: 13px !important;
 }
 
-/* Sub-items (section headers within a page) */
-html .sidebar ol.chapter li.chapter-item li a {
-  padding-left: 32px !important;
-  font-size: 0.96em !important;
-  opacity: 0.75;
+/* On-this-page section (in-page headings shown under the active item) */
+html .sidebar .on-this-page {
+  margin-left: 12px !important;
 }
 
-html .sidebar ol.chapter li.chapter-item li a:hover {
+html .sidebar .on-this-page ol {
+  padding-left: 0 !important;
+}
+
+html .sidebar .on-this-page li a {
+  padding-left: 10px !important;
+  font-size: 0.9em !important;
+  opacity: 0.6;
+}
+
+html .sidebar .on-this-page li a:hover {
   opacity: 1 !important;
 }
 

@@ -37,10 +37,10 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-bench-
 
-      - name: Build ty-find (release)
+      - name: Build tyf (release)
         run: cargo build --release
 
-      - name: Add ty-find to PATH
+      - name: Add tyf to PATH
         run: echo "${{ github.workspace }}/target/release" >> "$GITHUB_PATH"
 
       - name: Install ty

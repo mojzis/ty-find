@@ -318,10 +318,10 @@ pub async fn handle_references_command(
     if all_queries.is_empty() {
         anyhow::bail!(
             "Provide symbol names, file:line:col positions, or --file with --line/--column.\n\
-             Position mode:  ty-find references -f file.py -l 10 -c 5\n\
-             Symbol mode:    ty-find references my_func my_class\n\
-             Mixed/pipe:     ty-find references file.py:10:5 my_func\n\
-             Stdin:          ... | ty-find references --stdin"
+             Position mode:  tyf refs -f file.py -l 10 -c 5\n\
+             Symbol mode:    tyf refs my_func my_class\n\
+             Mixed/pipe:     tyf refs file.py:10:5 my_func\n\
+             Stdin:          ... | tyf refs --stdin"
         );
     }
 
@@ -347,7 +347,7 @@ pub async fn handle_references_command(
     _timeout: Duration,
 ) -> Result<()> {
     anyhow::bail!(
-        "The 'references' command requires the background daemon, which is only supported on Unix systems"
+        "The 'refs' command requires the background daemon, which is only supported on Unix systems"
     )
 }
 
@@ -621,7 +621,7 @@ pub async fn handle_interactive_command(
 
     let _client = TyLspClient::new(&workspace_root.to_string_lossy()).await?;
 
-    println!("ty-find interactive mode");
+    println!("tyf interactive mode");
     println!("Commands: <file>:<line>:<column>, find <file> <symbol>, quit");
 
     let stdin = std::io::stdin();
@@ -740,7 +740,7 @@ pub async fn handle_hover_command(
     _timeout: Duration,
 ) -> Result<()> {
     anyhow::bail!(
-        "The 'hover' command requires the background daemon, which is only supported on Unix systems"
+        "The 'type' command requires the background daemon, which is only supported on Unix systems"
     )
 }
 
@@ -811,7 +811,7 @@ pub async fn handle_document_symbols_command(
     _timeout: Duration,
 ) -> Result<()> {
     anyhow::bail!(
-        "The 'document-symbols' command requires the background daemon, which is only supported on Unix systems"
+        "The 'list' command requires the background daemon, which is only supported on Unix systems"
     )
 }
 

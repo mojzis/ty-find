@@ -1,6 +1,6 @@
 //! JSON-RPC 2.0 protocol types for daemon communication.
 //!
-//! This module defines the communication protocol between the ty-find CLI
+//! This module defines the communication protocol between the tyf CLI
 //! and the persistent daemon server. The protocol uses JSON-RPC 2.0 over
 //! Unix domain sockets.
 

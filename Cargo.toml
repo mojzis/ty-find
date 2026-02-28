@@ -38,7 +38,7 @@ name = "test_project_smoke"
 path = "tests/integration/test_project_smoke.rs"
 
 [[bin]]
-name = "ty-find"
+name = "tyf"
 path = "src/main.rs"
 
 [profile.release]

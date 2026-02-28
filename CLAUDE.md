@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-ty-find is a command-line tool that interfaces with ty's LSP server to provide go-to-definition functionality for Python functions, classes, and variables from the terminal. It's a hybrid Rust/Python project that builds a Rust binary but packages it as a Python package using maturin for easy distribution via pip/uv.
+ty-find is a command-line tool that interfaces with ty's LSP server to provide go-to-definition functionality for Python functions, classes, and variables from the terminal. It's a hybrid Rust/Python project that builds a Rust binary (`tyf`) but packages it as a Python package using maturin for easy distribution via pip/uv.
 
 ## Prerequisites
 
@@ -51,11 +51,11 @@ maturin build --release
 ### Testing with ty LSP server
 ```bash
 # Requires ty to be installed: uv add --dev ty
-ty-find definition test_example.py --line 6 --column 5
-ty-find find calculate_sum
-ty-find find calculate_sum multiply divide   # multiple symbols in one call
-ty-find inspect MyClass my_function          # inspect multiple symbols at once
-ty-find interactive
+tyf definition test_example.py --line 6 --column 5
+tyf find calculate_sum
+tyf find calculate_sum multiply divide   # multiple symbols in one call
+tyf inspect MyClass my_function          # inspect multiple symbols at once
+tyf interactive
 ```
 
 ### Releasing
@@ -89,7 +89,7 @@ If formatting fails, fix it with `cargo fmt` and re-run the checks.
 
 ### Core Components
 1. **LSP Client (`src/lsp/`)** - JSON-RPC client that communicates with ty's LSP server
-2. **CLI Interface (`src/cli/`)** - Command-line argument parsing and output formatting  
+2. **CLI Interface (`src/cli/`)** - Command-line argument parsing and output formatting
 3. **Workspace Detection (`src/workspace/`)** - Python project detection and symbol finding
 4. **Main Application (`src/main.rs`)** - Orchestrates the three main modes: definition, find, interactive
 

@@ -58,15 +58,12 @@ async fn run(cli: Cli) -> Result<()> {
     let timeout = cli.timeout.map_or(DEFAULT_TIMEOUT, Duration::from_secs);
 
     match cli.command {
-        Commands::Definition { file, line, column } => {
-            commands::handle_definition_command(&workspace_root, &file, line, column, &formatter)
-                .await?;
-        }
-        Commands::Find { file, symbols } => {
+        Commands::Find { file, symbols, fuzzy } => {
             commands::handle_find_command(
                 &workspace_root,
                 file.as_deref(),
                 &symbols,
+                fuzzy,
                 &formatter,
                 timeout,
             )
@@ -84,26 +81,6 @@ async fn run(cli: Cli) -> Result<()> {
                 position,
                 stdin,
                 include_declaration,
-                &formatter,
-                timeout,
-            )
-            .await?;
-        }
-        Commands::Hover { file, line, column } => {
-            commands::handle_hover_command(
-                &workspace_root,
-                &file,
-                line,
-                column,
-                &formatter,
-                timeout,
-            )
-            .await?;
-        }
-        Commands::WorkspaceSymbols { query } => {
-            commands::handle_workspace_symbols_command(
-                &workspace_root,
-                &query,
                 &formatter,
                 timeout,
             )

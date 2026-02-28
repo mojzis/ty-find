@@ -27,22 +27,13 @@ tyf [OPTIONS] <COMMAND>
 : Definition, type signature, and usages of a symbol by name
 
 **[find](find.md)**
-: Find where a symbol is defined by name
-
-**[type](type.md)**
-: Type signature and docs at a file position (line:col)
-
-**[definition](definition.md)**
-: Resolve definition at a file position (line:col) — use 'find' for name search
+: Find where a symbol is defined by name (--fuzzy for partial matching)
 
 **[refs](refs.md)**
-: All usages of a symbol across the codebase
+: All usages of a symbol across the codebase (by name or file:line:col)
 
 **[list](list.md)**
 : All functions, classes, and variables defined in a file
-
-**[workspace-symbols](workspace-symbols.md)**
-: Search symbols by name with fuzzy matching (may be merged into find)
 
 **[interactive](interactive.md)**
 : Interactive REPL for exploring code

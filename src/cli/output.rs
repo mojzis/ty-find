@@ -257,28 +257,6 @@ impl OutputFormatter {
         }
     }
 
-    pub fn format_hover(&self, hover: &Hover, query_info: &str) -> String {
-        match self.format {
-            OutputFormat::Human => {
-                let mut output = format!("Hover information for: {query_info}\n\n");
-
-                let content_str = Self::extract_hover_text(&hover.contents);
-
-                output.push_str(&content_str);
-                output.push('\n');
-
-                output
-            }
-            OutputFormat::Json => {
-                serde_json::to_string_pretty(hover).unwrap_or_else(|_| "{}".to_string())
-            }
-            OutputFormat::Csv | OutputFormat::Paths => {
-                // CSV and Paths formats don't make sense for hover, fall back to human
-                Self::extract_hover_text(&hover.contents)
-            }
-        }
-    }
-
     pub fn format_workspace_symbols(&self, symbols: &[SymbolInformation]) -> String {
         match self.format {
             OutputFormat::Human => {
@@ -739,9 +717,7 @@ fn format_document_symbols_csv(symbols: &[DocumentSymbol], output: &mut String) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lsp::protocol::{
-        HoverContents, MarkupContent, MarkupKind, Position, Range, SymbolKind,
-    };
+    use crate::lsp::protocol::{Position, Range, SymbolKind};
 
     fn make_location(uri: &str, line: u32, character: u32) -> Location {
         Location {
@@ -829,33 +805,6 @@ mod tests {
         let formatter = OutputFormatter::new(OutputFormat::Human);
         let result = formatter.format_references(&[], "test:1:1");
         assert_eq!(result, "No references found for: test:1:1");
-    }
-
-    #[test]
-    fn test_format_hover_markup() {
-        let formatter = OutputFormatter::new(OutputFormat::Human);
-        let hover = Hover {
-            contents: HoverContents::Markup(MarkupContent {
-                kind: MarkupKind::Markdown,
-                value: "def foo() -> int".to_string(),
-            }),
-            range: None,
-        };
-        let result = formatter.format_hover(&hover, "test:1:1");
-
-        assert!(result.contains("Hover information for: test:1:1"));
-        assert!(result.contains("def foo() -> int"));
-    }
-
-    #[test]
-    fn test_format_hover_json() {
-        let formatter = OutputFormatter::new(OutputFormat::Json);
-        let hover = Hover { contents: HoverContents::Scalar("hello".to_string()), range: None };
-        let result = formatter.format_hover(&hover, "test");
-
-        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
-        assert!(parsed.is_object());
-        assert!(parsed.get("contents").is_some());
     }
 
     #[test]

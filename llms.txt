@@ -34,44 +34,26 @@ tyf --format json inspect MyClass           # JSON output for scripting
 
 Given a symbol name, returns the file and line where it's defined.
 Searches the whole project — no need to know which file it's in.
+Use `--fuzzy` for partial/prefix matching with richer output (kind + container).
 
 ```
 tyf find calculate_sum
 tyf find calculate_sum multiply divide      # multiple symbols at once
 tyf find handler --file src/routes.py       # narrow to one file
-```
-
-### type — Type signature and docs at a file position
-
-Point at a specific position in a file and get back the type signature and
-any documentation for whatever is there. Useful for understanding what a
-variable holds, what a function returns, or what a class provides.
-
-```
-tyf type src/main.py -l 45 -c 12
-tyf --format json type src/main.py -l 45 -c 12
-```
-
-### definition — Resolve definition at a file position
-
-Like `find`, but instead of searching by name, you point at a specific
-position (file + line + column) and it follows the symbol to where it's
-defined. Use this when you already have coordinates (e.g., from a stack trace
-or editor). For name-based search, use `find` or `inspect` instead.
-
-```
-tyf definition myfile.py -l 10 -c 5
+tyf find handle_ --fuzzy                    # fuzzy/prefix match
 ```
 
 ### refs — All usages of a symbol across the codebase
 
-Point at a symbol and get back every location in the codebase that references
-it. Essential before renaming or removing code — tells you exactly what will
-break.
+Find every location in the codebase that references a symbol. Supports both
+name-based and position-based lookup. Essential before renaming or removing
+code — tells you exactly what will break.
 
 ```
-tyf refs myfile.py -l 10 -c 5
-tyf refs myfile.py -l 10 -c 5 --no-include-declaration
+tyf refs my_func my_class                   # by name
+tyf refs -f myfile.py -l 10 -c 5           # by position
+tyf refs file.py:10:5 my_func              # mixed
+... | tyf refs --stdin                      # piped input
 ```
 
 ### list — All functions, classes, and variables defined in a file
@@ -81,16 +63,6 @@ of contents. Useful for getting an overview of a file you haven't seen before.
 
 ```
 tyf list src/services/user.py
-```
-
-### workspace-symbols — Search symbols by name with fuzzy matching
-
-Fuzzy-search for functions, classes, and variables by name across every file
-in the project. Returns matching symbols with their locations.
-
-```
-tyf workspace-symbols -q "UserService"
-tyf workspace-symbols -q "handle_"
 ```
 
 ### interactive — Interactive REPL

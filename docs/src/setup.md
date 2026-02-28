@@ -16,7 +16,6 @@ Run `tyf --help` to see all commands. Run `tyf <cmd> --help` for details.
 - Symbol overview (definition + type + refs): `tyf inspect SymbolName`
 - Find definition: `tyf find SymbolName`
 - All usages before refactoring: `tyf refs SymbolName` or `tyf refs -f file.py -l LINE -c COL`
-- Type info: `tyf type file.py -l LINE -c COL`
 - File outline: `tyf list file.py`
 
 Grep is still appropriate for string literals, config values, TODOs, and non-symbol text.

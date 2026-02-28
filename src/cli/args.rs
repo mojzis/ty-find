@@ -15,20 +15,15 @@ const HELP_TEMPLATE: &str = "\
 
 Symbol Lookup:
   inspect      Definition, type signature, and usages of a symbol by name
-  find         Find where a symbol is defined by name
-  refs         All usages of a symbol across the codebase
-  type         Type signature and docs at a file position (line:col)
+  find         Find where a symbol is defined by name (--fuzzy for partial matching)
+  refs         All usages of a symbol across the codebase (by name or file:line:col)
 
 Browsing:
   list         All functions, classes, and variables defined in a file
 
-Positional:
-  definition   Resolve definition at a file position (line:col) \u{2014} use 'find' for name search
-
 Infrastructure:
-  workspace-symbols  Search symbols by name with fuzzy matching (may be merged into find)
-  interactive        Interactive REPL for exploring code
-  daemon             Manage the background LSP server (auto-starts on first use)
+  interactive  Interactive REPL for exploring code
+  daemon       Manage the background LSP server (auto-starts on first use)
 
 {options}";
 
@@ -90,13 +85,16 @@ pub enum Commands {
         references: bool,
     },
 
-    /// Find where a symbol is defined by name
+    /// Find where a symbol is defined by name (--fuzzy for partial matching)
     #[command(long_about = "Find where a function, class, or variable is defined. Searches the \
         whole project by name \u{2014} no need to know which file it's in.\n\n\
+        Use --fuzzy for partial/prefix matching (returns richer symbol information \
+        including kind and container name).\n\n\
         Examples:\n  \
         tyf find calculate_sum\n  \
         tyf find calculate_sum multiply divide   # multiple symbols at once\n  \
-        tyf find handler --file src/routes.py    # narrow to one file")]
+        tyf find handler --file src/routes.py    # narrow to one file\n  \
+        tyf find handle_ --fuzzy                 # fuzzy/prefix match")]
     Find {
         /// Symbol name(s) to find (supports multiple symbols)
         #[arg(required = true, num_args = 1..)]
@@ -105,45 +103,10 @@ pub enum Commands {
         /// Narrow the search to a specific file (searches whole project if omitted)
         #[arg(short, long)]
         file: Option<PathBuf>,
-    },
 
-    // -- Positional --
-    /// Type signature and docs at a file position (line:col)
-    #[command(
-        name = "type",
-        long_about = "Type signature and documentation for the symbol at a specific \
-        position in a file. Useful for understanding what a variable holds, what a function \
-        returns, or what a class provides.\n\n\
-        Examples:\n  \
-        tyf type src/main.py -l 45 -c 12\n  \
-        tyf --format json type src/main.py -l 45 -c 12   # JSON for scripting"
-    )]
-    Hover {
-        file: PathBuf,
-
-        #[arg(short, long)]
-        line: u32,
-
-        #[arg(short, long)]
-        column: u32,
-    },
-
-    /// Resolve definition at a file position (line:col) \u{2014} use 'find' for name search
-    #[command(
-        long_about = "Resolve where a symbol is defined, given its exact location in a file. \
-        Use this when you already know the file, line, and column (e.g., from an editor). \
-        For name-based search, use 'find' or 'inspect' instead.\n\n\
-        Examples:\n  \
-        tyf definition myfile.py -l 10 -c 5"
-    )]
-    Definition {
-        file: PathBuf,
-
-        #[arg(short, long)]
-        line: u32,
-
-        #[arg(short, long)]
-        column: u32,
+        /// Use fuzzy/prefix matching via workspace symbols (richer output with kind + container)
+        #[arg(long, default_value_t = false)]
+        fuzzy: bool,
     },
 
     /// All usages of a symbol across the codebase
@@ -195,19 +158,6 @@ pub enum Commands {
     DocumentSymbols { file: PathBuf },
 
     // -- Infrastructure --
-    /// Search symbols by name with fuzzy matching (may be merged into find)
-    #[command(
-        long_about = "Search for functions, classes, and variables by name across the whole \
-        project. Returns matching symbols with their file locations.\n\n\
-        Examples:\n  \
-        tyf workspace-symbols -q \"UserService\"\n  \
-        tyf workspace-symbols -q \"handle_\""
-    )]
-    WorkspaceSymbols {
-        #[arg(short, long)]
-        query: String,
-    },
-
     /// Interactive REPL for exploring code
     Interactive { file: Option<PathBuf> },
 
@@ -315,17 +265,7 @@ mod tests {
         cmd.write_help(&mut buf).unwrap();
         let help = String::from_utf8(buf).unwrap();
 
-        let expected_subcommands = &[
-            "inspect",
-            "find",
-            "type",
-            "definition",
-            "refs",
-            "list",
-            "workspace-symbols",
-            "interactive",
-            "daemon",
-        ];
+        let expected_subcommands = &["inspect", "find", "refs", "list", "interactive", "daemon"];
 
         for subcmd in expected_subcommands {
             assert!(

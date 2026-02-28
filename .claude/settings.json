@@ -3,13 +3,13 @@
     "SessionStart": [
       {
         "type": "command",
-        "command": "uv sync --dev"
+        "command": "uv sync --dev && pip install prek && prek install"
       }
     ],
     "TaskCompleted": [
       {
         "type": "command",
-        "command": "cargo fmt --check && cargo clippy --all-features -- -D warnings"
+        "command": "cargo fmt --all -- --check && cargo clippy --all-targets --all-features -- -D warnings && cargo test --all-features --bins"
       }
     ]
   }

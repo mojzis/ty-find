@@ -371,8 +371,8 @@ impl DaemonServer {
 
         let doc_symbols = client.document_symbols(&file_str).await?;
 
-        // Find the target class among top-level symbols
-        let target = doc_symbols.iter().find(|s| s.name == params.class_name);
+        // Find the target class anywhere in the symbol tree (may be nested)
+        let target = Self::find_symbol_recursive(&doc_symbols, &params.class_name);
 
         let Some(class_sym) = target else {
             // Symbol not found in file
@@ -441,6 +441,27 @@ impl DaemonServer {
             members,
         };
         Ok(serde_json::to_value(result)?)
+    }
+
+    /// Recursively search document symbols for a symbol with the given name.
+    ///
+    /// `document_symbols` returns a hierarchical tree — classes nested inside
+    /// other classes or functions only appear as children, not at the top level.
+    fn find_symbol_recursive<'a>(
+        symbols: &'a [crate::lsp::protocol::DocumentSymbol],
+        name: &str,
+    ) -> Option<&'a crate::lsp::protocol::DocumentSymbol> {
+        for s in symbols {
+            if s.name == name {
+                return Some(s);
+            }
+            if let Some(children) = &s.children {
+                if let Some(found) = Self::find_symbol_recursive(children, name) {
+                    return Some(found);
+                }
+            }
+        }
+        None
     }
 
     /// Extract a clean member signature from hover contents.
@@ -679,6 +700,80 @@ mod tests {
         assert_eq!(value["cache_size"], 0);
         // Uptime should be a small number since the server was just created
         assert!(value["uptime"].as_u64().unwrap() < 5);
+    }
+
+    #[test]
+    fn test_find_symbol_recursive_top_level() {
+        use crate::lsp::protocol::{DocumentSymbol, Position, Range, SymbolKind};
+
+        let range = Range {
+            start: Position { line: 0, character: 0 },
+            end: Position { line: 5, character: 0 },
+        };
+        let symbols = vec![DocumentSymbol {
+            name: "Animal".to_string(),
+            detail: None,
+            kind: SymbolKind::Class,
+            tags: None,
+            deprecated: None,
+            range: range.clone(),
+            selection_range: range.clone(),
+            children: None,
+        }];
+
+        let found = DaemonServer::find_symbol_recursive(&symbols, "Animal");
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().name, "Animal");
+
+        let not_found = DaemonServer::find_symbol_recursive(&symbols, "Dog");
+        assert!(not_found.is_none());
+    }
+
+    #[test]
+    fn test_find_symbol_recursive_nested() {
+        use crate::lsp::protocol::{DocumentSymbol, Position, Range, SymbolKind};
+
+        let range = Range {
+            start: Position { line: 0, character: 0 },
+            end: Position { line: 20, character: 0 },
+        };
+        let inner_range = Range {
+            start: Position { line: 10, character: 4 },
+            end: Position { line: 15, character: 0 },
+        };
+
+        let nested_class = DocumentSymbol {
+            name: "InnerWidget".to_string(),
+            detail: None,
+            kind: SymbolKind::Class,
+            tags: None,
+            deprecated: None,
+            range: inner_range.clone(),
+            selection_range: inner_range,
+            children: None,
+        };
+
+        let outer_class = DocumentSymbol {
+            name: "OuterPanel".to_string(),
+            detail: None,
+            kind: SymbolKind::Class,
+            tags: None,
+            deprecated: None,
+            range: range.clone(),
+            selection_range: range,
+            children: Some(vec![nested_class]),
+        };
+
+        let symbols = vec![outer_class];
+
+        // Should find the nested class
+        let found = DaemonServer::find_symbol_recursive(&symbols, "InnerWidget");
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().name, "InnerWidget");
+
+        // Should still find the outer class
+        let found = DaemonServer::find_symbol_recursive(&symbols, "OuterPanel");
+        assert!(found.is_some());
     }
 
     #[test]

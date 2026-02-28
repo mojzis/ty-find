@@ -1,5 +1,7 @@
 /* ty-find docs — custom mdbook overrides
-   Fonts loaded via theme/head.hbs, NOT @import */
+   Fonts loaded via theme/head.hbs, NOT @import
+   IMPORTANT: mdbook sets :root { font-size: 62.5% } making 1rem = 10px.
+   Always use `em` (not `rem`) for font sizes to avoid undersized text. */
 
 :root {
   --font-sans: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, sans-serif;
@@ -19,7 +21,7 @@ html code, html pre, html pre > code, html .hljs {
 }
 
 html .content main {
-  font-size: 0.95rem;
+  font-size: 0.95em;
   line-height: 1.7;
 }
 
@@ -31,7 +33,7 @@ html .content main {
 
 html .sidebar {
   font-family: var(--font-sans) !important;
-  font-size: 0.85rem !important;
+  font-size: 0.85em !important;
 }
 
 /* Spacers between sections */
@@ -47,7 +49,7 @@ html .sidebar .chapter-item.spacer {
 /* Part titles (GETTING STARTED, COMMANDS, REFERENCE) */
 html .sidebar .part-title {
   text-transform: uppercase !important;
-  font-size: 0.65rem !important;
+  font-size: 0.76em !important;
   font-weight: 600 !important;
   letter-spacing: 0.1em !important;
   opacity: 0.5;
@@ -89,7 +91,7 @@ html .sidebar ol.chapter li.chapter-item li a.active {
 /* Sub-items (section headers within a page) */
 html .sidebar ol.chapter li.chapter-item li a {
   padding-left: 32px !important;
-  font-size: 0.82rem !important;
+  font-size: 0.96em !important;
   opacity: 0.75;
 }
 
@@ -111,7 +113,7 @@ html .sidebar .section-number {
 /* Headings */
 html .content main h1 {
   font-weight: 600 !important;
-  font-size: 1.8rem !important;
+  font-size: 1.8em !important;
   letter-spacing: -0.02em;
   margin-top: 0;
   padding-bottom: 0.3em;
@@ -120,21 +122,21 @@ html .content main h1 {
 
 html .content main h2 {
   font-weight: 600 !important;
-  font-size: 1.3rem !important;
+  font-size: 1.3em !important;
   letter-spacing: -0.01em;
   margin-top: 2em;
 }
 
 html .content main h3 {
   font-weight: 500 !important;
-  font-size: 1.1rem !important;
+  font-size: 1.1em !important;
 }
 
 /* Code blocks */
 html .content pre {
   border-radius: 8px !important;
   padding: 1em 1.2em !important;
-  font-size: 0.85rem !important;
+  font-size: 0.875em !important;
   line-height: 1.6 !important;
   border: 1px solid rgba(128, 128, 128, 0.15) !important;
 }
@@ -159,7 +161,7 @@ html .content table {
 
 html .content table th {
   font-weight: 600 !important;
-  font-size: 0.85rem !important;
+  font-size: 0.85em !important;
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
@@ -206,15 +208,15 @@ html .content p strong code {
    TOP BAR & NAV ARROWS
    ========================================================== */
 
-html #menu-bar {
+html #mdbook-menu-bar {
   border-bottom: 1px solid rgba(128, 128, 128, 0.15) !important;
 }
 
-html #menu-bar .icon-button {
+html #mdbook-menu-bar .icon-button {
   transition: color 0.15s ease;
 }
 
-html #menu-bar .icon-button:hover {
+html #mdbook-menu-bar .icon-button:hover {
   color: var(--ty-accent) !important;
 }
 
@@ -231,7 +233,7 @@ html .nav-chapters:hover {
    ========================================================== */
 
 @media (max-width: 1080px) {
-  html .content main { font-size: 0.92rem; }
+  html .content main { font-size: 0.92em; }
 }
 
 @media (max-width: 600px) {

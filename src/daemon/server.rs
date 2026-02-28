@@ -260,7 +260,7 @@ impl DaemonServer {
 
         let client = { self.lsp_pool.lock().await.get_or_create(params.workspace).await? };
 
-        let mut symbols = client.workspace_symbols(&params.query).await?;
+        let mut symbols = Self::workspace_symbols_with_warmup(&client, &params.query).await?;
 
         // Filter by exact name if specified (avoids serializing thousands of fuzzy matches)
         if let Some(ref exact_name) = params.exact_name {
@@ -407,6 +407,33 @@ impl DaemonServer {
 
         tracing::debug!("hover still null after retries");
         Ok(None)
+    }
+
+    /// Workspace symbols with retry on cold start.
+    ///
+    /// On cold start the ty LSP server may not have finished indexing the
+    /// workspace yet, returning zero symbols. Retry with back-off so callers
+    /// (inspect, find, references) get results once indexing completes.
+    async fn workspace_symbols_with_warmup(
+        client: &TyLspClient,
+        query: &str,
+    ) -> Result<Vec<crate::lsp::protocol::SymbolInformation>> {
+        let symbols = client.workspace_symbols(query).await?;
+        if !symbols.is_empty() {
+            return Ok(symbols);
+        }
+
+        for delay_ms in [100, 200, 400] {
+            tracing::debug!("workspace symbols empty, retrying in {delay_ms}ms...");
+            tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+            let symbols = client.workspace_symbols(query).await?;
+            if !symbols.is_empty() {
+                return Ok(symbols);
+            }
+        }
+
+        tracing::debug!("workspace symbols still empty after retries");
+        Ok(Vec::new())
     }
 
     /// Handle a shutdown request.

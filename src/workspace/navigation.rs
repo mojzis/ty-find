@@ -1,18 +1,19 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 #[allow(dead_code)]
 pub struct SymbolFinder {
-    content: String,
     lines: Vec<String>,
 }
 
 #[allow(dead_code)]
 impl SymbolFinder {
     pub async fn new(file_path: &str) -> Result<Self> {
-        let content = tokio::fs::read_to_string(file_path).await?;
+        let content = tokio::fs::read_to_string(file_path)
+            .await
+            .with_context(|| format!("Failed to read file: {file_path}"))?;
         let lines: Vec<String> = content.lines().map(String::from).collect();
 
-        Ok(Self { content, lines })
+        Ok(Self { lines })
     }
 
     pub fn find_symbol_positions(&self, symbol: &str) -> Vec<(u32, u32)> {

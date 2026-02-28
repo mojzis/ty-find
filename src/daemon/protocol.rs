@@ -414,7 +414,7 @@ pub struct BatchReferencesParams {
 /// Parameters for inspect request.
 ///
 /// Runs hover and optionally references on the daemon side.
-/// When references are included, hover and references run in parallel.
+/// Requests are sequential because the LSP client uses a single stdin/stdout pipe.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct InspectParams {
     /// Workspace root directory

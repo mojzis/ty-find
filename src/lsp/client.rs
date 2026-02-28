@@ -297,15 +297,15 @@ impl TyLspClient {
     }
 
     async fn send_message<T: serde::Serialize>(&self, message: &T) -> Result<()> {
-        let content = serde_json::to_string(message)?;
+        let content = serde_json::to_string(message).context("Failed to serialize LSP message")?;
         self.send_raw_message(&content).await
     }
 
     async fn send_raw_message(&self, content: &str) -> Result<()> {
         let message = format!("Content-Length: {}\r\n\r\n{content}", content.len());
         let mut stdin = self.stdin.lock().await;
-        stdin.write_all(message.as_bytes()).await?;
-        stdin.flush().await?;
+        stdin.write_all(message.as_bytes()).await.context("Failed to write to LSP stdin")?;
+        stdin.flush().await.context("Failed to flush LSP stdin")?;
         Ok(())
     }
 

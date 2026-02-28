@@ -36,7 +36,7 @@ fn test_daemon_start_does_not_fork_bomb() {
 
     // Snapshot existing tyf PIDs *before* spawning so we ignore processes
     // from concurrently-running test binaries (test_basic, test_project_smoke).
-    let pids_before = get_ty_find_pids(&bin_path);
+    let pids_before = get_ty_find_pids(bin_path);
 
     // Spawn the CLI command (not --foreground, so it goes through the
     // spawn_background path).
@@ -52,7 +52,7 @@ fn test_daemon_start_does_not_fork_bomb() {
     std::thread::sleep(Duration::from_secs(2));
 
     // Count only NEW tyf processes (not in the pre-spawn snapshot).
-    let pids_after = get_ty_find_pids(&bin_path);
+    let pids_after = get_ty_find_pids(bin_path);
     let new_count = pids_after.difference(&pids_before).count();
 
     // Clean up: kill the parent (and any children) we started.
@@ -165,7 +165,7 @@ fn get_ty_find_pids(bin_path: &std::path::Path) -> HashSet<String> {
         ps_output
             .lines()
             .filter(|line| line.contains(bin_name.as_ref()) && !line.contains("grep"))
-            .filter_map(|line| line.trim().split_whitespace().next().map(String::from))
+            .filter_map(|line| line.split_whitespace().next().map(String::from))
             .collect()
     }
 }

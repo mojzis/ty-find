@@ -44,7 +44,7 @@ code, pre, .hljs { font-family: var(--font-mono) !important; }
 }
 
 .sidebar ol.chapter li.chapter-item ol a {
-  padding-left: 24px !important; font-size: 0.85rem; opacity: 0.8;
+  padding-left: 24px !important; font-size: 0.88rem; opacity: 0.8;
 }
 .sidebar ol.chapter li.chapter-item ol a:hover { opacity: 1; }
 

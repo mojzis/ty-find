@@ -67,7 +67,6 @@ ty-find builds and installs on all platforms, but the background daemon requires
 | Command | Linux / macOS | Windows |
 |---------|:---:|:---:|
 | `find --file` | Yes | Yes |
-| `interactive` | Yes | Yes |
 | `find` (no file) | Yes | No |
 | `find --fuzzy` | Yes | No |
 | `inspect` | Yes | No |
@@ -131,12 +130,6 @@ tyf refs file.py:10:5 my_func
 
 ```bash
 tyf list src/services/user.py
-```
-
-### Interactive Mode
-
-```bash
-tyf interactive
 ```
 
 ### Daemon Management

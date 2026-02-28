@@ -31,10 +31,10 @@
       "grep_median_s": null,
       "command": "ty-find inspect DataFrame Series"
     },
-    "workspace-symbols": {
+    "find-fuzzy": {
       "ty_find_median_s": 0.03993076342,
       "grep_median_s": 0.22067302612,
-      "command": "ty-find workspace-symbols --query DataFrame"
+      "command": "tyf find DataFrame --fuzzy"
     }
   },
   "startup": {

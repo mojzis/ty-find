@@ -315,16 +315,46 @@ impl DaemonClient {
     }
 }
 
+/// Version of the current binary, used to detect stale daemons after upgrades.
+pub const CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 /// Ensure the daemon is running, starting it if necessary.
+///
+/// If an existing daemon is running but was built from a different version of
+/// the binary (e.g. after `pip install --upgrade`), it is shut down and a fresh
+/// one is spawned so the user always talks to a daemon matching their CLI.
 pub async fn ensure_daemon_running() -> Result<()> {
     let socket_path = get_socket_path()?;
 
     // Check if socket already exists and is connectable
     if socket_path.exists() {
         match DaemonClient::connect().await {
-            Ok(_) => {
-                tracing::debug!("Daemon already running");
-                return Ok(());
+            Ok(mut client) => {
+                // Verify the running daemon has the same version as this binary.
+                match client.ping().await {
+                    Ok(ping) if ping.version == CLIENT_VERSION => {
+                        tracing::debug!("Daemon already running (v{})", ping.version);
+                        return Ok(());
+                    }
+                    Ok(ping) => {
+                        tracing::warn!(
+                            "Daemon version mismatch: daemon v{}, client v{} — restarting",
+                            ping.version,
+                            CLIENT_VERSION,
+                        );
+                        // Best-effort shutdown; ignore errors (e.g. if it already exited).
+                        let _ = client.shutdown().await;
+                        // Give the old daemon a moment to release the socket.
+                        tokio::time::sleep(Duration::from_millis(200)).await;
+                        let _ = std::fs::remove_file(&socket_path);
+                    }
+                    Err(e) => {
+                        tracing::warn!("Ping failed on existing daemon: {e} — restarting");
+                        let _ = client.shutdown().await;
+                        tokio::time::sleep(Duration::from_millis(200)).await;
+                        let _ = std::fs::remove_file(&socket_path);
+                    }
+                }
             }
             Err(e) => {
                 tracing::warn!("Socket exists but connection failed: {e}");
@@ -412,6 +442,13 @@ pub fn get_socket_path() -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_client_version_matches_cargo_pkg() {
+        // CLIENT_VERSION should be the same as Cargo.toml version at compile time
+        assert!(!CLIENT_VERSION.is_empty());
+        assert_eq!(CLIENT_VERSION, env!("CARGO_PKG_VERSION"));
+    }
 
     #[test]
     fn test_get_socket_path() {

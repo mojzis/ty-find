@@ -648,6 +648,9 @@ pub struct PingResult {
     /// Daemon status message
     pub status: String,
 
+    /// Daemon binary version (from `CARGO_PKG_VERSION` at compile time)
+    pub version: String,
+
     /// Daemon uptime in seconds
     pub uptime: u64,
 
@@ -754,6 +757,24 @@ mod tests {
         assert_eq!(DiagnosticSeverity::Warning as u8, 2);
         assert_eq!(DiagnosticSeverity::Information as u8, 3);
         assert_eq!(DiagnosticSeverity::Hint as u8, 4);
+    }
+
+    #[test]
+    fn test_ping_result_includes_version() {
+        let result = PingResult {
+            status: "running".to_string(),
+            version: "0.1.11".to_string(),
+            uptime: 42,
+            active_workspaces: 2,
+            cache_size: 0,
+        };
+
+        let json = serde_json::to_value(&result).unwrap();
+        assert_eq!(json["version"], "0.1.11");
+
+        // Roundtrip
+        let parsed: PingResult = serde_json::from_value(json).unwrap();
+        assert_eq!(parsed.version, "0.1.11");
     }
 
     #[test]

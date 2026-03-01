@@ -1,3 +1,6 @@
+#[path = "common.rs"]
+mod common;
+
 use assert_cmd::cargo::cargo_bin_cmd;
 use predicates::prelude::*;
 use std::io::Write as _;
@@ -15,39 +18,9 @@ fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
-/// Ensure `ty` is available, either directly on PATH or via `uvx`.
-/// Panics with install instructions if neither works.
-fn require_ty() {
-    let direct = process::Command::new("ty")
-        .arg("--version")
-        .stdout(process::Stdio::null())
-        .stderr(process::Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
-
-    if direct {
-        return;
-    }
-
-    let via_uvx = process::Command::new("uvx")
-        .arg("ty")
-        .arg("--version")
-        .stdout(process::Stdio::null())
-        .stderr(process::Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
-
-    assert!(
-        via_uvx,
-        "ty is not installed and uvx fallback failed. Install it with: uv add --dev ty"
-    );
-}
-
 #[tokio::test]
 async fn test_find_command() {
-    require_ty();
+    common::require_ty();
 
     // Find the `add` method in test_example.py
     let mut cmd = cargo_bin_cmd!("tyf");
@@ -66,7 +39,7 @@ async fn test_find_command() {
 
 #[tokio::test]
 async fn test_json_output() {
-    require_ty();
+    common::require_ty();
 
     // Find `calculate_sum` with JSON output
     let mut cmd = cargo_bin_cmd!("tyf");
@@ -88,7 +61,7 @@ async fn test_json_output() {
 
 #[tokio::test]
 async fn test_inspect_command_with_file() {
-    require_ty();
+    common::require_ty();
 
     // Inspect the `hello_world` function (--file path, uses SymbolFinder)
     let mut cmd = cargo_bin_cmd!("tyf");
@@ -121,7 +94,7 @@ async fn test_inspect_command_with_file() {
 
 #[tokio::test]
 async fn test_inspect_command_workspace_symbols() {
-    require_ty();
+    common::require_ty();
 
     // Inspect `hello_world` WITHOUT --file (uses workspace symbols + find_name_column)
     let mut cmd = cargo_bin_cmd!("tyf");
@@ -147,7 +120,7 @@ async fn test_inspect_command_workspace_symbols() {
 
 #[tokio::test]
 async fn test_inspect_class_workspace_symbols() {
-    require_ty();
+    common::require_ty();
 
     // Inspect `Calculator` class WITHOUT --file — this is the case where
     // workspace symbols return column at "class" keyword, and find_name_column
@@ -175,7 +148,7 @@ async fn test_inspect_class_workspace_symbols() {
 
 #[tokio::test]
 async fn test_inspect_command_with_references() {
-    require_ty();
+    common::require_ty();
 
     // Inspect `hello_world` with --references to verify all three sections
     let mut cmd = cargo_bin_cmd!("tyf");
@@ -215,7 +188,7 @@ async fn test_inspect_command_with_references() {
 
 #[tokio::test]
 async fn test_references_by_position() {
-    require_ty();
+    common::require_ty();
 
     // Find references to `hello_world` via its definition at line 1, col 5
     let mut cmd = cargo_bin_cmd!("tyf");
@@ -237,7 +210,7 @@ async fn test_references_by_position() {
 
 #[tokio::test]
 async fn test_references_by_symbol_name() {
-    require_ty();
+    common::require_ty();
 
     // Find references to `calculate_sum` by symbol name
     let mut cmd = cargo_bin_cmd!("tyf");
@@ -256,7 +229,7 @@ async fn test_references_by_symbol_name() {
 
 #[tokio::test]
 async fn test_references_multiple_symbols() {
-    require_ty();
+    common::require_ty();
 
     // Find references to multiple symbols in one call (batched via daemon)
     let mut cmd = cargo_bin_cmd!("tyf");
@@ -277,7 +250,7 @@ async fn test_references_multiple_symbols() {
 
 #[tokio::test]
 async fn test_references_stdin_piping() {
-    require_ty();
+    common::require_ty();
 
     // Pipe symbol names via stdin using std::process::Command
     let fixture = fixture_path();
@@ -310,7 +283,7 @@ async fn test_references_stdin_piping() {
 
 #[tokio::test]
 async fn test_references_file_line_col_format() {
-    require_ty();
+    common::require_ty();
 
     // Use file:line:col auto-detection format
     let fixture = fixture_path();
@@ -334,7 +307,7 @@ fn members_fixture_path() -> PathBuf {
 
 #[tokio::test]
 async fn test_members_command_basic() {
-    require_ty();
+    common::require_ty();
 
     let mut cmd = cargo_bin_cmd!("tyf");
     cmd.arg("--workspace")
@@ -379,7 +352,7 @@ async fn test_members_command_basic() {
 
 #[tokio::test]
 async fn test_members_command_all_flag() {
-    require_ty();
+    common::require_ty();
 
     let mut cmd = cargo_bin_cmd!("tyf");
     cmd.arg("--workspace")
@@ -403,7 +376,7 @@ async fn test_members_command_all_flag() {
 
 #[tokio::test]
 async fn test_members_command_non_class_error() {
-    require_ty();
+    common::require_ty();
 
     let mut cmd = cargo_bin_cmd!("tyf");
     cmd.arg("--workspace")
@@ -424,7 +397,7 @@ async fn test_members_command_non_class_error() {
 
 #[tokio::test]
 async fn test_members_command_multiple_classes() {
-    require_ty();
+    common::require_ty();
 
     let mut cmd = cargo_bin_cmd!("tyf");
     cmd.arg("--workspace")
@@ -452,7 +425,7 @@ async fn test_members_command_multiple_classes() {
 
 #[tokio::test]
 async fn test_members_command_json_format() {
-    require_ty();
+    common::require_ty();
 
     let mut cmd = cargo_bin_cmd!("tyf");
     cmd.arg("--workspace")
@@ -480,7 +453,7 @@ async fn test_members_command_json_format() {
 
 #[tokio::test]
 async fn test_members_command_csv_format() {
-    require_ty();
+    common::require_ty();
 
     let mut cmd = cargo_bin_cmd!("tyf");
     cmd.arg("--workspace")

@@ -106,29 +106,32 @@ impl LspClientPool {
     /// # }
     /// ```
     pub async fn get_or_create(&self, workspace: PathBuf) -> Result<Arc<TyLspClient>> {
-        // First, check if we already have a client for this workspace
+        // Fast path: return existing client without any async work.
         {
             let mut entries = self.entries.lock().expect("pool mutex poisoned");
             if let Some(entry) = entries.get_mut(&workspace) {
-                // Update last access time
                 entry.last_access = Instant::now();
                 return Ok(Arc::clone(&entry.client));
             }
         }
+        // Lock is dropped here — no MutexGuard held across the `.await` below.
 
-        // No existing client, create a new one
+        // Slow path: create a new LSP client (spawns a `ty` process).
         let workspace_str = workspace.to_str().context("Invalid workspace path")?;
-
         let client =
             TyLspClient::new(workspace_str).await.context("Failed to create LSP client")?;
-
         let client_arc = Arc::new(client);
 
-        // Store the client in the pool
+        // Re-check: another task may have created a client for this workspace
+        // while we were awaiting. Use theirs if so (ours gets dropped).
         {
             let mut entries = self.entries.lock().expect("pool mutex poisoned");
+            if let Some(entry) = entries.get_mut(&workspace) {
+                entry.last_access = Instant::now();
+                return Ok(Arc::clone(&entry.client));
+            }
             entries.insert(
-                workspace.clone(),
+                workspace,
                 PoolEntry { client: Arc::clone(&client_arc), last_access: Instant::now() },
             );
         }

@@ -1,5 +1,6 @@
 #![cfg(unix)]
 
+use std::collections::HashSet;
 use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
@@ -8,10 +9,11 @@ use std::time::Duration;
 ///
 /// Strategy: run the binary with `daemon start` while the daemon socket is
 /// absent.  If the bug is present the process will recursively spawn copies of
-/// itself.  We give it a short window (2 s) then count how many `ty-find`
-/// processes exist.  A correct implementation spawns at most **2** processes
-/// (the original CLI invocation + one background child).  A fork bomb would
-/// create dozens or hundreds.
+/// itself.  We give it a short window (2 s) then count how many **new**
+/// `ty-find` processes appeared (ignoring any that were already running from
+/// concurrent test binaries).  A correct implementation spawns at most **2**
+/// processes (the original CLI invocation + one background child).  A fork bomb
+/// would create dozens or hundreds.
 ///
 /// Because the real daemon needs a working `ty` LSP server (which may not be
 /// available in CI), the child process will likely fail to bind the socket or
@@ -32,6 +34,10 @@ fn test_daemon_start_does_not_fork_bomb() {
     let socket_path = format!("/tmp/ty-find-{}.sock", unsafe { libc::getuid() });
     let _ = std::fs::remove_file(&socket_path);
 
+    // Snapshot existing tyf PIDs *before* spawning so we ignore processes
+    // from concurrently-running test binaries (test_basic, test_project_smoke).
+    let pids_before = get_ty_find_pids(bin_path);
+
     // Spawn the CLI command (not --foreground, so it goes through the
     // spawn_background path).
     let mut child = Command::new(bin_path.as_os_str())
@@ -45,9 +51,9 @@ fn test_daemon_start_does_not_fork_bomb() {
     // Give it a moment to potentially fork-bomb.
     std::thread::sleep(Duration::from_secs(2));
 
-    // Count tyf processes.  We look for the binary name in the process
-    // list via `pgrep`.
-    let count = count_ty_find_processes(bin_path);
+    // Count only NEW tyf processes (not in the pre-spawn snapshot).
+    let pids_after = get_ty_find_pids(bin_path);
+    let new_count = pids_after.difference(&pids_before).count();
 
     // Clean up: kill the parent (and any children) we started.
     let _ = child.kill();
@@ -59,13 +65,14 @@ fn test_daemon_start_does_not_fork_bomb() {
     // Clean up stale socket.
     let _ = std::fs::remove_file(&socket_path);
 
-    // A correct implementation should have at most 2 processes (parent + one
-    // background child).  Allow a small margin but anything above 5 is a
+    // A correct implementation should have at most 2 new processes (parent +
+    // one background child).  Allow a small margin but anything above 5 is a
     // clear fork bomb.
     assert!(
-        count <= 5,
-        "Detected {count} tyf processes — likely a fork bomb! \
-         Expected at most 2 (parent + 1 background child).",
+        new_count <= 5,
+        "Detected {new_count} new tyf processes — likely a fork bomb! \
+         Expected at most 2 (parent + 1 background child). \
+         Before: {pids_before:?}, After: {pids_after:?}",
     );
 }
 
@@ -141,24 +148,24 @@ fn test_daemon_auto_start_on_first_request() {
     );
 }
 
-/// Count how many processes match the ty-find binary path.
-fn count_ty_find_processes(bin_path: &std::path::Path) -> usize {
+/// Return the set of PIDs that match the ty-find binary path.
+fn get_ty_find_pids(bin_path: &std::path::Path) -> HashSet<String> {
     // Use `pgrep -f` to match the full command line against the binary path.
     let output = Command::new("pgrep").arg("-f").arg(bin_path.to_string_lossy().as_ref()).output();
 
     if let Ok(out) = output {
-        // pgrep outputs one PID per line.
         let stdout = String::from_utf8_lossy(&out.stdout);
-        stdout.lines().filter(|l| !l.trim().is_empty()).count()
+        stdout.lines().filter(|l| !l.trim().is_empty()).map(|l| l.trim().to_string()).collect()
     } else {
         // pgrep not available — fall back to ps + grep.
-        let ps = Command::new("ps").arg("aux").output().expect("ps command failed");
+        let ps = Command::new("ps").arg("-eo").arg("pid,args").output().expect("ps command failed");
         let ps_output = String::from_utf8_lossy(&ps.stdout);
         let bin_name =
             bin_path.file_name().expect("binary should have a filename").to_string_lossy();
         ps_output
             .lines()
             .filter(|line| line.contains(bin_name.as_ref()) && !line.contains("grep"))
-            .count()
+            .filter_map(|line| line.split_whitespace().next().map(String::from))
+            .collect()
     }
 }

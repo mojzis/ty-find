@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
-use tokio::sync::{broadcast, Mutex};
+use tokio::sync::broadcast;
 
 use crate::daemon::pool::LspClientPool;
 use crate::daemon::protocol::{
@@ -31,8 +31,12 @@ pub struct DaemonServer {
     /// Path to the Unix socket
     socket_path: PathBuf,
 
-    /// Pool of LSP clients (one per workspace)
-    lsp_pool: Arc<Mutex<LspClientPool>>,
+    /// Pool of LSP clients (one per workspace).
+    ///
+    /// `LspClientPool` uses internal locking (`std::sync::Mutex`) so no outer
+    /// async mutex is needed — this avoids holding a `MutexGuard` across the
+    /// `.await` inside `get_or_create`.
+    lsp_pool: Arc<LspClientPool>,
 
     /// Broadcast channel for shutdown signal
     shutdown_tx: broadcast::Sender<()>,
@@ -48,7 +52,7 @@ impl DaemonServer {
 
         Self {
             socket_path,
-            lsp_pool: Arc::new(Mutex::new(LspClientPool::new())),
+            lsp_pool: Arc::new(LspClientPool::new()),
             shutdown_tx,
             start_time: Instant::now(),
         }
@@ -57,8 +61,8 @@ impl DaemonServer {
     /// Get the socket path for the current user.
     ///
     /// Delegates to the canonical implementation in [`super::client::get_socket_path`].
-    pub fn get_socket_path() -> PathBuf {
-        super::client::get_socket_path().expect("Failed to determine socket path (non-Unix?)")
+    pub fn get_socket_path() -> Result<PathBuf> {
+        super::client::get_socket_path()
     }
 
     /// Start the daemon server and listen for connections.
@@ -149,7 +153,10 @@ impl DaemonServer {
             header_line.clear();
 
             // Read Content-Length header
-            let bytes_read = reader.read_line(&mut header_line).await?;
+            let bytes_read = reader
+                .read_line(&mut header_line)
+                .await
+                .context("Failed to read request header")?;
             if bytes_read == 0 {
                 // EOF - client disconnected
                 break;
@@ -171,11 +178,11 @@ impl DaemonServer {
 
             // Read empty separator line
             let mut empty_line = String::new();
-            reader.read_line(&mut empty_line).await?;
+            reader.read_line(&mut empty_line).await.context("Failed to read header separator")?;
 
             // Read request body
             let mut body = vec![0u8; content_length];
-            reader.read_exact(&mut body).await?;
+            reader.read_exact(&mut body).await.context("Failed to read request body")?;
 
             // Parse JSON-RPC request
             let Ok(request) = serde_json::from_slice::<DaemonRequest>(&body) else {
@@ -189,10 +196,11 @@ impl DaemonServer {
             let response = self.handle_request(request).await;
 
             // Send response with Content-Length framing
-            let response_json = serde_json::to_string(&response)?;
+            let response_json =
+                serde_json::to_string(&response).context("Failed to serialize response")?;
             let framed = format!("Content-Length: {}\r\n\r\n{response_json}", response_json.len());
-            writer.write_all(framed.as_bytes()).await?;
-            writer.flush().await?;
+            writer.write_all(framed.as_bytes()).await.context("Failed to write response")?;
+            writer.flush().await.context("Failed to flush response")?;
 
             tracing::debug!("Sent response for request ID {}", response.id);
         }
@@ -227,7 +235,7 @@ impl DaemonServer {
         let params: HoverParams =
             serde_json::from_value(params).context("Invalid hover parameters")?;
 
-        let client = { self.lsp_pool.lock().await.get_or_create(params.workspace).await? };
+        let client = self.lsp_pool.get_or_create(params.workspace).await?;
 
         let file_str = params.file.to_string_lossy().to_string();
         client.open_document(&file_str).await?;
@@ -243,7 +251,7 @@ impl DaemonServer {
         let params: DefinitionParams =
             serde_json::from_value(params).context("Invalid definition parameters")?;
 
-        let client = { self.lsp_pool.lock().await.get_or_create(params.workspace).await? };
+        let client = self.lsp_pool.get_or_create(params.workspace).await?;
 
         let file_str = params.file.to_string_lossy().to_string();
         client.open_document(&file_str).await?;
@@ -259,7 +267,7 @@ impl DaemonServer {
         let params: WorkspaceSymbolsParams =
             serde_json::from_value(params).context("Invalid workspace symbols parameters")?;
 
-        let client = { self.lsp_pool.lock().await.get_or_create(params.workspace).await? };
+        let client = self.lsp_pool.get_or_create(params.workspace).await?;
 
         let mut symbols = Self::workspace_symbols_with_warmup(&client, &params.query).await?;
 
@@ -282,7 +290,7 @@ impl DaemonServer {
         let params: DocumentSymbolsParams =
             serde_json::from_value(params).context("Invalid document symbols parameters")?;
 
-        let client = { self.lsp_pool.lock().await.get_or_create(params.workspace).await? };
+        let client = self.lsp_pool.get_or_create(params.workspace).await?;
 
         let file_str = params.file.to_string_lossy().to_string();
         client.open_document(&file_str).await?;
@@ -297,7 +305,7 @@ impl DaemonServer {
         let params: ReferencesParams =
             serde_json::from_value(params).context("Invalid references parameters")?;
 
-        let client = { self.lsp_pool.lock().await.get_or_create(params.workspace).await? };
+        let client = self.lsp_pool.get_or_create(params.workspace).await?;
 
         let file_str = params.file.to_string_lossy().to_string();
         client.open_document(&file_str).await?;
@@ -314,7 +322,7 @@ impl DaemonServer {
         let params: BatchReferencesParams =
             serde_json::from_value(params).context("Invalid batch references parameters")?;
 
-        let client = { self.lsp_pool.lock().await.get_or_create(params.workspace).await? };
+        let client = self.lsp_pool.get_or_create(params.workspace).await?;
 
         let mut entries = Vec::with_capacity(params.queries.len());
         for q in &params.queries {
@@ -338,7 +346,7 @@ impl DaemonServer {
         let params: InspectParams =
             serde_json::from_value(params).context("Invalid inspect parameters")?;
 
-        let client = { self.lsp_pool.lock().await.get_or_create(params.workspace).await? };
+        let client = self.lsp_pool.get_or_create(params.workspace).await?;
 
         let file_str = params.file.to_string_lossy().to_string();
         client.open_document(&file_str).await?;
@@ -364,15 +372,15 @@ impl DaemonServer {
         let params: MembersParams =
             serde_json::from_value(params).context("Invalid members parameters")?;
 
-        let client = { self.lsp_pool.lock().await.get_or_create(params.workspace).await? };
+        let client = self.lsp_pool.get_or_create(params.workspace).await?;
 
         let file_str = params.file.to_string_lossy().to_string();
         client.open_document(&file_str).await?;
 
         let doc_symbols = client.document_symbols(&file_str).await?;
 
-        // Find the target class among top-level symbols
-        let target = doc_symbols.iter().find(|s| s.name == params.class_name);
+        // Find the target class anywhere in the symbol tree (may be nested)
+        let target = Self::find_symbol_recursive(&doc_symbols, &params.class_name);
 
         let Some(class_sym) = target else {
             // Symbol not found in file
@@ -421,7 +429,8 @@ impl DaemonServer {
             let hover_col = child.selection_range.start.character;
             let hover = Self::hover_with_warmup(&client, &file_str, hover_line, hover_col).await?;
 
-            let signature = hover.as_ref().map(|h| Self::extract_member_signature(&h.contents));
+            let signature =
+                hover.as_ref().map(|h| Self::extract_member_signature(&h.contents, &child.name));
 
             members.push(MemberInfo {
                 name: child.name.clone(),
@@ -443,13 +452,40 @@ impl DaemonServer {
         Ok(serde_json::to_value(result)?)
     }
 
+    /// Recursively search document symbols for a symbol with the given name.
+    ///
+    /// `document_symbols` returns a hierarchical tree — classes nested inside
+    /// other classes or functions only appear as children, not at the top level.
+    fn find_symbol_recursive<'a>(
+        symbols: &'a [crate::lsp::protocol::DocumentSymbol],
+        name: &str,
+    ) -> Option<&'a crate::lsp::protocol::DocumentSymbol> {
+        for s in symbols {
+            if s.name == name {
+                return Some(s);
+            }
+            if let Some(children) = &s.children {
+                if let Some(found) = Self::find_symbol_recursive(children, name) {
+                    return Some(found);
+                }
+            }
+        }
+        None
+    }
+
     /// Extract a clean member signature from hover contents.
     ///
     /// ty's hover markdown looks like:
     ///   ```python\ndef method(self, x: int) -> str\n```\n---\nDocstring
     ///
     /// We want just the signature: `method(self, x: int) -> str`
-    fn extract_member_signature(contents: &crate::lsp::protocol::HoverContents) -> String {
+    ///
+    /// `member_name` is used to prefix bare type signatures (e.g. class
+    /// variables where ty returns just the type like `int`).
+    fn extract_member_signature(
+        contents: &crate::lsp::protocol::HoverContents,
+        member_name: &str,
+    ) -> String {
         use crate::lsp::protocol::HoverContents;
 
         let full = match contents {
@@ -500,7 +536,56 @@ impl DaemonServer {
             cleaned
         };
 
-        cleaned.to_string()
+        // Collapse multi-line signatures (ty wraps long parameter lists)
+        // e.g. "assist(\n    self,\n    task: str\n) -> str" → "assist(self, task: str) -> str"
+        let cleaned = Self::collapse_signature(cleaned);
+
+        // If the signature is a bare type (no name prefix, no parens), prepend
+        // the member name so it reads like `registry: dict[str, X]` instead of
+        // just `dict[str, X]`.
+        if !cleaned.contains('(') && !cleaned.contains(':') && cleaned != member_name {
+            format!("{member_name}: {cleaned}")
+        } else {
+            cleaned
+        }
+    }
+
+    /// Collapse a multi-line signature into a single line.
+    ///
+    /// ty formats long signatures like:
+    /// ```text
+    /// assist(
+    ///     self,
+    ///     task: str,
+    ///     duration_minutes: int = 30
+    /// ) -> str
+    /// ```
+    ///
+    /// This collapses them to: `assist(self, task: str, duration_minutes: int = 30) -> str`
+    fn collapse_signature(sig: &str) -> String {
+        if !sig.contains('\n') {
+            return sig.to_string();
+        }
+        // Replace newlines + surrounding whitespace with a single space,
+        // then clean up spaces around parentheses and commas.
+        let collapsed: String = sig.lines().map(str::trim).collect::<Vec<_>>().join(" ");
+        // Normalize "( " → "(", " )" → ")", ",  " → ", "
+        let collapsed = collapsed.replace("( ", "(").replace(" )", ")");
+        // Collapse multiple spaces
+        let mut result = String::with_capacity(collapsed.len());
+        let mut prev_space = false;
+        for ch in collapsed.chars() {
+            if ch == ' ' {
+                if !prev_space {
+                    result.push(ch);
+                }
+                prev_space = true;
+            } else {
+                prev_space = false;
+                result.push(ch);
+            }
+        }
+        result
     }
 
     /// Handle a diagnostics request.
@@ -513,10 +598,9 @@ impl DaemonServer {
     }
 
     /// Handle a ping request.
+    #[allow(clippy::unused_async)] // Matches async handler interface
     async fn handle_ping(&self, _params: Value) -> Result<Value> {
-        let pool = self.lsp_pool.lock().await;
-        let active_workspaces = pool.len();
-        drop(pool);
+        let active_workspaces = self.lsp_pool.len();
 
         let result = PingResult {
             status: "running".to_string(),
@@ -606,19 +690,17 @@ impl DaemonServer {
             tokio::time::sleep(check_interval).await;
 
             // Clean up idle LSP clients
-            let pool = self.lsp_pool.lock().await;
-            let removed = pool.cleanup_idle(idle_timeout);
+            let removed = self.lsp_pool.cleanup_idle(idle_timeout);
             if removed > 0 {
                 tracing::info!("Removed {removed} idle LSP clients");
             }
 
             // Check if daemon should shut down (all clients idle)
-            if pool.is_empty() && self.start_time.elapsed() > idle_timeout {
+            if self.lsp_pool.is_empty() && self.start_time.elapsed() > idle_timeout {
                 tracing::info!("Daemon idle timeout, shutting down");
                 let _ = self.shutdown_tx.send(());
                 break;
             }
-            drop(pool);
         }
     }
 
@@ -655,7 +737,7 @@ mod tests {
 
     #[test]
     fn test_get_socket_path() {
-        let path = DaemonServer::get_socket_path();
+        let path = DaemonServer::get_socket_path().expect("should return a valid socket path");
         assert!(path.to_string_lossy().contains("ty-find"));
     }
 
@@ -682,6 +764,80 @@ mod tests {
     }
 
     #[test]
+    fn test_find_symbol_recursive_top_level() {
+        use crate::lsp::protocol::{DocumentSymbol, Position, Range, SymbolKind};
+
+        let range = Range {
+            start: Position { line: 0, character: 0 },
+            end: Position { line: 5, character: 0 },
+        };
+        let symbols = vec![DocumentSymbol {
+            name: "Animal".to_string(),
+            detail: None,
+            kind: SymbolKind::Class,
+            tags: None,
+            deprecated: None,
+            range: range.clone(),
+            selection_range: range,
+            children: None,
+        }];
+
+        let found = DaemonServer::find_symbol_recursive(&symbols, "Animal");
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().name, "Animal");
+
+        let not_found = DaemonServer::find_symbol_recursive(&symbols, "Dog");
+        assert!(not_found.is_none());
+    }
+
+    #[test]
+    fn test_find_symbol_recursive_nested() {
+        use crate::lsp::protocol::{DocumentSymbol, Position, Range, SymbolKind};
+
+        let range = Range {
+            start: Position { line: 0, character: 0 },
+            end: Position { line: 20, character: 0 },
+        };
+        let inner_range = Range {
+            start: Position { line: 10, character: 4 },
+            end: Position { line: 15, character: 0 },
+        };
+
+        let nested_class = DocumentSymbol {
+            name: "InnerWidget".to_string(),
+            detail: None,
+            kind: SymbolKind::Class,
+            tags: None,
+            deprecated: None,
+            range: inner_range.clone(),
+            selection_range: inner_range,
+            children: None,
+        };
+
+        let outer_class = DocumentSymbol {
+            name: "OuterPanel".to_string(),
+            detail: None,
+            kind: SymbolKind::Class,
+            tags: None,
+            deprecated: None,
+            range: range.clone(),
+            selection_range: range,
+            children: Some(vec![nested_class]),
+        };
+
+        let symbols = vec![outer_class];
+
+        // Should find the nested class
+        let found = DaemonServer::find_symbol_recursive(&symbols, "InnerWidget");
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().name, "InnerWidget");
+
+        // Should still find the outer class
+        let found = DaemonServer::find_symbol_recursive(&symbols, "OuterPanel");
+        assert!(found.is_some());
+    }
+
+    #[test]
     fn test_extract_member_signature_method() {
         use crate::lsp::protocol::{HoverContents, MarkupContent, MarkupKind};
 
@@ -689,7 +845,7 @@ mod tests {
             kind: MarkupKind::Markdown,
             value: "```python\ndef speak(self) -> str\n```".to_string(),
         });
-        let sig = DaemonServer::extract_member_signature(&contents);
+        let sig = DaemonServer::extract_member_signature(&contents, "speak");
         assert_eq!(sig, "speak(self) -> str");
     }
 
@@ -701,7 +857,7 @@ mod tests {
             kind: MarkupKind::Markdown,
             value: "```python\n(property) name: str\n```".to_string(),
         });
-        let sig = DaemonServer::extract_member_signature(&contents);
+        let sig = DaemonServer::extract_member_signature(&contents, "name");
         assert_eq!(sig, "name: str");
     }
 
@@ -714,7 +870,7 @@ mod tests {
             value: "```python\ndef describe(self) -> str\n```\n---\nDescribe the animal."
                 .to_string(),
         });
-        let sig = DaemonServer::extract_member_signature(&contents);
+        let sig = DaemonServer::extract_member_signature(&contents, "describe");
         assert_eq!(sig, "describe(self) -> str");
         assert!(!sig.contains("Describe"));
     }
@@ -727,7 +883,7 @@ mod tests {
             kind: MarkupKind::Markdown,
             value: "```python\nMAX_LEGS: int\n```".to_string(),
         });
-        let sig = DaemonServer::extract_member_signature(&contents);
+        let sig = DaemonServer::extract_member_signature(&contents, "MAX_LEGS");
         assert_eq!(sig, "MAX_LEGS: int");
     }
 
@@ -736,7 +892,43 @@ mod tests {
         use crate::lsp::protocol::HoverContents;
 
         let contents = HoverContents::Scalar("int".to_string());
-        let sig = DaemonServer::extract_member_signature(&contents);
-        assert_eq!(sig, "int");
+        let sig = DaemonServer::extract_member_signature(&contents, "count");
+        assert_eq!(sig, "count: int");
+    }
+
+    #[test]
+    fn test_extract_member_signature_multiline() {
+        use crate::lsp::protocol::{HoverContents, MarkupContent, MarkupKind};
+
+        let contents = HoverContents::Markup(MarkupContent {
+            kind: MarkupKind::Markdown,
+            value: "```python\ndef assist(\n    self,\n    task: str,\n    duration_minutes: int = 30\n) -> str\n```".to_string(),
+        });
+        let sig = DaemonServer::extract_member_signature(&contents, "assist");
+        assert_eq!(sig, "assist(self, task: str, duration_minutes: int = 30) -> str");
+    }
+
+    #[test]
+    fn test_extract_member_signature_bare_type() {
+        use crate::lsp::protocol::{HoverContents, MarkupContent, MarkupKind};
+
+        let contents = HoverContents::Markup(MarkupContent {
+            kind: MarkupKind::Markdown,
+            value: "```python\ndict[str, ServiceDog]\n```".to_string(),
+        });
+        let sig = DaemonServer::extract_member_signature(&contents, "registry");
+        assert_eq!(sig, "registry: dict[str, ServiceDog]");
+    }
+
+    #[test]
+    fn test_extract_member_signature_bare_property() {
+        use crate::lsp::protocol::{HoverContents, MarkupContent, MarkupKind};
+
+        let contents = HoverContents::Markup(MarkupContent {
+            kind: MarkupKind::Markdown,
+            value: "```python\nproperty\n```".to_string(),
+        });
+        let sig = DaemonServer::extract_member_signature(&contents, "is_certified");
+        assert_eq!(sig, "is_certified: property");
     }
 }

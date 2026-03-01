@@ -9,44 +9,17 @@
 /// All sub-cases live inside a single `#[tokio::test]` to avoid flaky failures
 /// from concurrent daemon access (each test process talks to the shared daemon
 /// socket, so parallel execution can cause race conditions).
+#[path = "common.rs"]
+mod common;
+
 use assert_cmd::cargo::cargo_bin_cmd;
 use predicates::prelude::*;
 use std::path::PathBuf;
-use std::process;
 
 /// Workspace root pointing at the `test_project` directory.
 fn test_project_root() -> PathBuf {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     manifest_dir.join("test_project")
-}
-
-/// Ensure `ty` is available, either directly on PATH or via `uvx`.
-fn require_ty() {
-    let direct = process::Command::new("ty")
-        .arg("--version")
-        .stdout(process::Stdio::null())
-        .stderr(process::Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
-
-    if direct {
-        return;
-    }
-
-    let via_uvx = process::Command::new("uvx")
-        .arg("ty")
-        .arg("--version")
-        .stdout(process::Stdio::null())
-        .stderr(process::Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
-
-    assert!(
-        via_uvx,
-        "ty is not installed and uvx fallback failed. Install it with: uv add --dev ty"
-    );
 }
 
 /// Run tyf with the given arguments against `test_project` and return stdout.
@@ -64,7 +37,7 @@ fn run_tyf(args: &[&str]) -> String {
 
 #[tokio::test]
 async fn test_project_inspect_and_references() {
-    require_ty();
+    common::require_ty();
 
     // ── 1. inspect class via workspace symbols (no --file) ──────────
     let out = run_tyf(&["inspect", "Animal"]);

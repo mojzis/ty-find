@@ -81,7 +81,7 @@ Version is defined in `Cargo.toml` and `pyproject.toml` picks it up automaticall
 **Always run all checks before committing to avoid CI pipeline failures:**
 
 ```bash
-cargo fmt --check && cargo clippy --all-features -- -D warnings && cargo test --all-features
+cargo fmt --check && cargo clippy --all-targets --all-features -- -D warnings && cargo test --all-features
 ```
 
 If formatting fails, fix it with `cargo fmt` and re-run the checks.
@@ -129,6 +129,16 @@ The project uses maturin to bridge Rust and Python ecosystems:
 - **Rust toolchain** required for building from source
 - **tokio** for async LSP communication and process management
 - **clap** for CLI parsing with subcommands and multiple output formats
+
+## Branch Hygiene
+
+**Always merge `main` into your feature branch before creating a PR.** This catches integration issues (compilation errors, test failures) from recently-merged PRs before CI runs. Run:
+
+```bash
+git fetch origin main && git merge origin/main
+```
+
+Then re-run the full check suite (`cargo fmt --check && cargo clippy --all-targets --all-features -- -D warnings && cargo test --all-features`) to verify the merge didn't introduce breakage.
 
 ## Review Before Completing Work
 

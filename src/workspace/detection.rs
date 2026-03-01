@@ -1,4 +1,3 @@
-use anyhow::Result;
 use std::path::{Path, PathBuf};
 
 #[allow(dead_code)]
@@ -37,17 +36,6 @@ impl WorkspaceDetector {
         ];
 
         markers.iter().any(|marker| path.join(marker).exists())
-    }
-
-    pub async fn check_ty_availability() -> Result<String> {
-        let output = tokio::process::Command::new("ty").arg("--version").output().await?;
-
-        if output.status.success() {
-            let version = String::from_utf8_lossy(&output.stdout);
-            Ok(version.trim().to_string())
-        } else {
-            anyhow::bail!("ty is not available or failed to run")
-        }
     }
 }
 

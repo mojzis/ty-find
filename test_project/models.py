@@ -1,5 +1,7 @@
 """Models module with classes and functions for testing ty-find."""
 
+from dataclasses import dataclass
+
 
 class Animal:
     """Base class for animals."""
@@ -79,3 +81,19 @@ def create_dog(name: str) -> Dog:
 def create_cat(name: str) -> Cat:
     """Create a new Cat instance."""
     return Cat(name)
+
+
+@dataclass
+class Config:
+    """Base configuration dataclass."""
+
+    host: str
+    port: int
+
+
+@dataclass
+class AppConfig(Config):
+    """Extended configuration with app-specific fields."""
+
+    debug: bool = False
+    workers: int = 4

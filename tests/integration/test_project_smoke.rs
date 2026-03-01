@@ -36,6 +36,7 @@ fn run_tyf(args: &[&str]) -> String {
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn test_project_inspect_and_references() {
     common::require_ty();
 
@@ -125,7 +126,36 @@ async fn test_project_inspect_and_references() {
         "members should show fetch method for Dog, got:\n{out}"
     );
 
-    // ── 9. members on non-class should give error ───────────────────
+    // ── 9. inspect decorated (dataclass) class via workspace symbols ─
+    let out = run_tyf(&["inspect", "Config"]);
+    assert!(
+        predicate::str::contains("models.py").eval(&out),
+        "expected definition in models.py for Config, got:\n{out}"
+    );
+    assert!(
+        !predicate::str::contains("(none)").eval(&out),
+        "hover should be present for @dataclass Config, got:\n{out}"
+    );
+
+    // ── 10. inspect decorated child dataclass via workspace symbols ──
+    let out = run_tyf(&["inspect", "AppConfig"]);
+    assert!(
+        predicate::str::contains("models.py").eval(&out),
+        "expected definition in models.py for AppConfig, got:\n{out}"
+    );
+    assert!(
+        !predicate::str::contains("(none)").eval(&out),
+        "hover should be present for @dataclass AppConfig (inherits Config), got:\n{out}"
+    );
+
+    // ── 11. members on dataclass child class ────────────────────────
+    let out = run_tyf(&["members", "AppConfig", "--all"]);
+    assert!(
+        predicate::str::contains("AppConfig").eval(&out),
+        "members should show AppConfig class, got:\n{out}"
+    );
+
+    // ── 12. members on non-class should give error ──────────────────
     let mut cmd = cargo_bin_cmd!("tyf");
     cmd.arg("--workspace").arg(test_project_root());
     cmd.arg("members").arg("create_dog").arg("--file").arg(&models_str);

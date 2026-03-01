@@ -86,6 +86,25 @@ cargo fmt --check && cargo clippy --all-targets --all-features -- -D warnings &&
 
 If formatting fails, fix it with `cargo fmt` and re-run the checks.
 
+## Development Workflow — TDD (Red-Green-Refactor)
+
+All new features and bug fixes **must** follow Test-Driven Development:
+
+1. **Red** — Write a failing test first that describes the expected behavior or reproduces the bug. Run it and confirm it fails.
+2. **Green** — Write the minimal implementation to make the test pass. Run the test and confirm it passes.
+3. **Refactor** — Clean up the implementation while keeping tests green.
+
+**For new features:**
+- Start by writing a test that exercises the new behavior before any production code exists.
+- The test should fail with a compilation error or assertion failure — this is expected and correct.
+- Only then write the production code to make it pass.
+
+**For bug fixes:**
+- First write a test that reproduces the bug (the test must fail, proving the bug exists).
+- Then fix the bug and confirm the test goes green.
+
+**Do not** write implementation code without a corresponding failing test already in place.
+
 ## Architecture
 
 ### Core Components

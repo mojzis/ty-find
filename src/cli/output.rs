@@ -31,31 +31,69 @@ fn read_source_line(file_path: &str, line: u32) -> Option<String> {
     content.lines().nth((line - 1) as usize).map(|s| s.trim().to_string())
 }
 
-/// Read decorator lines (starting with `@`) from a file at a 0-indexed line.
+/// Context around a definition: decorator lines and the keyword line.
+struct DefinitionContext {
+    /// Decorator lines (e.g. `@dataclass`, `@property`), if any.
+    decorators: Option<String>,
+    /// The `class`/`def` keyword line (e.g. `class Dog(Animal):`).
+    definition_line: String,
+}
+
+/// Read definition context from a file at a 0-indexed starting line.
 ///
-/// Scans forward from `start_line_0` collecting lines that start with `@`.
-/// Returns the collected decorator lines joined with newlines, or `None` if
-/// the first line is not a decorator.
-fn read_decorators(file_path: &str, start_line_0: u32) -> Option<String> {
+/// Handles both cases:
+/// - Start line is at a decorator (workspace symbols): scans forward past `@`
+///   lines, then also scans backwards from the keyword line to capture any
+///   decorators above it.
+/// - Start line is at the `class`/`def` keyword (`execute_definition`): scans
+///   backwards to find decorators above.
+fn read_definition_context(file_path: &str, start_line_0: u32) -> Option<DefinitionContext> {
     let content = std::fs::read_to_string(file_path).ok()?;
     let lines: Vec<&str> = content.lines().collect();
     let start = start_line_0 as usize;
 
-    let mut decorators = Vec::new();
-    for line in lines.iter().skip(start) {
-        let trimmed = line.trim();
+    // Find the keyword line by scanning forward past decorators
+    let mut def_idx = None;
+    for (i, line) in lines.iter().enumerate().skip(start) {
+        if !line.trim().starts_with('@') {
+            def_idx = Some(i);
+            break;
+        }
+    }
+    let def_idx = def_idx?;
+    let definition_line = lines[def_idx].trim().to_string();
+
+    // Scan backwards from the keyword line to collect all decorators
+    let mut decorator_lines = Vec::new();
+    let mut idx = def_idx;
+    while idx > 0 {
+        idx -= 1;
+        let trimmed = lines[idx].trim();
         if trimmed.starts_with('@') {
-            decorators.push(trimmed);
+            decorator_lines.push(trimmed);
         } else {
             break;
         }
     }
 
-    if decorators.is_empty() {
+    let decorators = if decorator_lines.is_empty() {
         None
     } else {
-        Some(decorators.join("\n"))
-    }
+        decorator_lines.reverse(); // restore top-to-bottom order
+        Some(decorator_lines.into_iter().collect::<Vec<_>>().join("\n"))
+    };
+
+    Some(DefinitionContext { decorators, definition_line })
+}
+
+#[cfg(test)]
+fn read_decorators(file_path: &str, start_line_0: u32) -> Option<String> {
+    read_definition_context(file_path, start_line_0).and_then(|ctx| ctx.decorators)
+}
+
+#[cfg(test)]
+fn read_definition_line(file_path: &str, start_line_0: u32) -> Option<String> {
+    read_definition_context(file_path, start_line_0).map(|ctx| ctx.definition_line)
 }
 
 /// Strip markdown code fences (`` ```lang `` / `` ``` ``) leaving only content.
@@ -440,6 +478,46 @@ impl OutputFormatter {
         }
     }
 
+    /// Write the type section content to `output`.
+    ///
+    /// For class definitions: shows decorators + source `class` line (preserves
+    /// inheritance info that ty's hover strips away).
+    /// For everything else: shows decorators + hover type (has inferred return types).
+    /// Falls back to `empty_label` when no information is available.
+    fn write_type_section(
+        &self,
+        output: &mut String,
+        location: Option<&Location>,
+        hover: Option<&Hover>,
+        empty_label: &str,
+    ) {
+        if let Some(location) = location {
+            let file_path = self.uri_to_path(&location.uri);
+            if let Some(ctx) = read_definition_context(&file_path, location.range.start.line) {
+                // Show decorators
+                if let Some(decs) = &ctx.decorators {
+                    output.push_str(decs);
+                    output.push('\n');
+                }
+                // For classes, prefer the source definition line (shows inheritance)
+                // over ty's bare `<class 'X'>` which doesn't.
+                if ctx.definition_line.starts_with("class ") {
+                    output.push_str(&ctx.definition_line);
+                    output.push('\n');
+                    return;
+                }
+            }
+        }
+
+        // Non-class or source not readable: use hover type
+        if let Some(hover) = hover {
+            output.push_str(&Self::extract_hover_type(&hover.contents));
+            output.push('\n');
+        } else {
+            output.push_str(empty_label);
+        }
+    }
+
     /// Format a single symbol inspect, using the header level appropriate for context.
     /// `h_level` controls markdown heading depth (1 = `#`, 2 = `##`).
     fn format_inspect_human(&self, entry: &InspectEntry<'_>, h_level: u8) -> String {
@@ -471,21 +549,13 @@ impl OutputFormatter {
         }
 
         // Type section — always shown, compact placeholder when empty
+        //
+        // For classes: show the source definition line (e.g. `class Dog(Animal):`)
+        // instead of ty's bare `<class 'Dog'>`, since the source line preserves
+        // inheritance information that the hover response strips away.
+        // For everything else: use the hover type which includes inferred types.
         let _ = writeln!(output, "\n{h} Type");
-        // Show decorators if the definition starts at a decorator line
-        if let Some(location) = entry.definitions.first() {
-            let file_path = self.uri_to_path(&location.uri);
-            if let Some(decs) = read_decorators(&file_path, location.range.start.line) {
-                output.push_str(&decs);
-                output.push('\n');
-            }
-        }
-        if let Some(hover) = entry.hover {
-            output.push_str(&Self::extract_hover_type(&hover.contents));
-            output.push('\n');
-        } else {
-            output.push_str("(none)\n");
-        }
+        self.write_type_section(&mut output, entry.definitions.first(), entry.hover, "(none)\n");
 
         // Doc section — only shown when a docstring is present
         if let Some(hover) = entry.hover {
@@ -540,22 +610,14 @@ impl OutputFormatter {
         }
         output.push('\n');
 
-        // Type section
+        // Type section — same class-vs-other logic as condensed mode
         let _ = writeln!(output, "{h2} Type Info");
-        // Show decorators if the definition starts at a decorator line
-        if let Some(location) = entry.definitions.first() {
-            let file_path = self.uri_to_path(&location.uri);
-            if let Some(decs) = read_decorators(&file_path, location.range.start.line) {
-                output.push_str(&decs);
-                output.push('\n');
-            }
-        }
-        if let Some(hover) = entry.hover {
-            output.push_str(&strip_code_fences(&Self::extract_hover_text(&hover.contents)));
-            output.push('\n');
-        } else {
-            output.push_str("No hover information available.\n");
-        }
+        self.write_type_section(
+            &mut output,
+            entry.definitions.first(),
+            entry.hover,
+            "No hover information available.\n",
+        );
         output.push('\n');
 
         // References section
@@ -1325,10 +1387,10 @@ mod tests {
         let entry = make_entry("Config", Some(&SymbolKind::Class), &defs, Some(&hover), &[]);
         let result = formatter.format_inspect(&entry);
 
-        // Type section should show decorator before the type
+        // Type section should show decorator + source class definition
         assert!(
-            result.contains("@dataclass\n<class 'Config'>"),
-            "should show decorator in type section, got:\n{result}"
+            result.contains("@dataclass\nclass Config:"),
+            "should show decorator and class definition in type section, got:\n{result}"
         );
         // No code fences
         assert!(!result.contains("```"), "should not contain code fences, got:\n{result}");
@@ -1358,10 +1420,140 @@ mod tests {
         let entry = make_entry("Animal", Some(&SymbolKind::Class), &defs, Some(&hover), &[]);
         let result = formatter.format_inspect(&entry);
 
-        // Should show type without decorator (none exists)
+        // Should show source class line (no decorator, no inheritance)
         assert!(
-            result.contains("# Type\n<class 'Animal'>"),
-            "should show type without decorator, got:\n{result}"
+            result.contains("# Type\nclass Animal:"),
+            "should show source class definition, got:\n{result}"
+        );
+    }
+
+    #[test]
+    fn test_read_definition_line_class() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.py");
+        std::fs::write(&file, "class Dog(Animal):\n    pass\n").unwrap();
+
+        let result = read_definition_line(file.to_str().unwrap(), 0);
+        assert_eq!(result, Some("class Dog(Animal):".to_string()));
+    }
+
+    #[test]
+    fn test_read_definition_line_with_decorators() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.py");
+        std::fs::write(&file, "@dataclass\nclass Config(Base):\n    host: str\n").unwrap();
+
+        // Starting at decorator line, should skip decorators and return class line
+        let result = read_definition_line(file.to_str().unwrap(), 0);
+        assert_eq!(result, Some("class Config(Base):".to_string()));
+    }
+
+    #[test]
+    fn test_read_definition_line_no_inheritance() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.py");
+        std::fs::write(&file, "class Animal:\n    pass\n").unwrap();
+
+        let result = read_definition_line(file.to_str().unwrap(), 0);
+        assert_eq!(result, Some("class Animal:".to_string()));
+    }
+
+    #[test]
+    fn test_condensed_inspect_class_shows_source_definition() {
+        use crate::lsp::protocol::{Hover, HoverContents, MarkupContent, Range};
+
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.py");
+        std::fs::write(&file, "class Dog(Animal):\n    pass\n").unwrap();
+
+        let file_uri = format!("file://{}", file.to_str().unwrap());
+        let formatter = OutputFormatter::new(OutputFormat::Human);
+        let defs = [make_location(&file_uri, 0, 6)];
+        let hover = Hover {
+            contents: HoverContents::Markup(MarkupContent {
+                kind: crate::lsp::protocol::MarkupKind::Markdown,
+                value: "```xml\n<class 'Dog'>\n```\n---\nA dog.".to_string(),
+            }),
+            range: Some(Range {
+                start: crate::lsp::protocol::Position { line: 0, character: 6 },
+                end: crate::lsp::protocol::Position { line: 0, character: 9 },
+            }),
+        };
+        let entry = make_entry("Dog", Some(&SymbolKind::Class), &defs, Some(&hover), &[]);
+        let result = formatter.format_inspect(&entry);
+
+        // Type section should show source class line with inheritance, not <class 'Dog'>
+        assert!(
+            result.contains("class Dog(Animal):"),
+            "should show class definition with base class, got:\n{result}"
+        );
+        assert!(
+            !result.contains("<class 'Dog'>"),
+            "should NOT show bare <class> tag, got:\n{result}"
+        );
+    }
+
+    #[test]
+    fn test_condensed_inspect_decorated_class_with_inheritance() {
+        use crate::lsp::protocol::{Hover, HoverContents, MarkupContent, Range};
+
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.py");
+        std::fs::write(&file, "@dataclass\nclass AppConfig(Config):\n    debug: bool\n").unwrap();
+
+        let file_uri = format!("file://{}", file.to_str().unwrap());
+        let formatter = OutputFormatter::new(OutputFormat::Human);
+        // Definition starts at the decorator line (line 0)
+        let defs = [make_location(&file_uri, 0, 0)];
+        let hover = Hover {
+            contents: HoverContents::Markup(MarkupContent {
+                kind: crate::lsp::protocol::MarkupKind::Markdown,
+                value: "```xml\n<class 'AppConfig'>\n```".to_string(),
+            }),
+            range: Some(Range {
+                start: crate::lsp::protocol::Position { line: 1, character: 6 },
+                end: crate::lsp::protocol::Position { line: 1, character: 15 },
+            }),
+        };
+        let entry = make_entry("AppConfig", Some(&SymbolKind::Class), &defs, Some(&hover), &[]);
+        let result = formatter.format_inspect(&entry);
+
+        // Should show decorator + source class line with inheritance
+        assert!(
+            result.contains("@dataclass\nclass AppConfig(Config):"),
+            "should show decorator and class definition, got:\n{result}"
+        );
+    }
+
+    #[test]
+    fn test_condensed_inspect_function_keeps_hover_type() {
+        use crate::lsp::protocol::{Hover, HoverContents, MarkupContent, Range};
+
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.py");
+        std::fs::write(&file, "def hello_world():\n    return 'hi'\n").unwrap();
+
+        let file_uri = format!("file://{}", file.to_str().unwrap());
+        let formatter = OutputFormatter::new(OutputFormat::Human);
+        let defs = [make_location(&file_uri, 0, 4)];
+        let hover = Hover {
+            contents: HoverContents::Markup(MarkupContent {
+                kind: crate::lsp::protocol::MarkupKind::Markdown,
+                value: "```python\ndef hello_world() -> str\n```".to_string(),
+            }),
+            range: Some(Range {
+                start: crate::lsp::protocol::Position { line: 0, character: 4 },
+                end: crate::lsp::protocol::Position { line: 0, character: 15 },
+            }),
+        };
+        let entry =
+            make_entry("hello_world", Some(&SymbolKind::Function), &defs, Some(&hover), &[]);
+        let result = formatter.format_inspect(&entry);
+
+        // Functions should still show the hover type (has inferred return type)
+        assert!(
+            result.contains("def hello_world() -> str"),
+            "function should show hover type with inferred return type, got:\n{result}"
         );
     }
 

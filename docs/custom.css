@@ -232,13 +232,7 @@ html #mdbook-menu-bar .icon-button:hover {
 }
 
 html .nav-chapters {
-  transition: color 0.2s ease;
-  background: none !important;
-}
-
-html .nav-chapters:hover {
-  color: var(--ty-accent) !important;
-  background: none !important;
+  display: none !important;
 }
 
 /* ==========================================================

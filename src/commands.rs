@@ -858,7 +858,7 @@ pub async fn handle_daemon_command(command: DaemonCommands) -> Result<()> {
         DaemonCommands::Status => match DaemonClient::connect().await {
             Ok(mut client) => {
                 let status = client.ping().await?;
-                println!("Daemon: running");
+                println!("Daemon: running (v{})", status.version);
                 println!("Uptime: {}s", status.uptime);
                 println!("Active workspaces: {}", status.active_workspaces);
                 println!("Cache size: {}", status.cache_size);

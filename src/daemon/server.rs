@@ -604,6 +604,7 @@ impl DaemonServer {
 
         let result = PingResult {
             status: "running".to_string(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
             uptime: self.start_time.elapsed().as_secs(),
             active_workspaces,
             cache_size: 0, // Cache not yet implemented

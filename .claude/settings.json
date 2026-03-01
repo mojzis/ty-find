@@ -3,7 +3,7 @@
     "SessionStart": [
       {
         "type": "command",
-        "command": "uv sync --dev && pip install prek && prek install"
+        "command": "uv sync --dev && cargo install prek && prek install"
       }
     ]
   }

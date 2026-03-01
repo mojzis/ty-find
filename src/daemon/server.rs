@@ -429,7 +429,8 @@ impl DaemonServer {
             let hover_col = child.selection_range.start.character;
             let hover = Self::hover_with_warmup(&client, &file_str, hover_line, hover_col).await?;
 
-            let signature = hover.as_ref().map(|h| Self::extract_member_signature(&h.contents));
+            let signature =
+                hover.as_ref().map(|h| Self::extract_member_signature(&h.contents, &child.name));
 
             members.push(MemberInfo {
                 name: child.name.clone(),
@@ -478,7 +479,13 @@ impl DaemonServer {
     ///   ```python\ndef method(self, x: int) -> str\n```\n---\nDocstring
     ///
     /// We want just the signature: `method(self, x: int) -> str`
-    fn extract_member_signature(contents: &crate::lsp::protocol::HoverContents) -> String {
+    ///
+    /// `member_name` is used to prefix bare type signatures (e.g. class
+    /// variables where ty returns just the type like `int`).
+    fn extract_member_signature(
+        contents: &crate::lsp::protocol::HoverContents,
+        member_name: &str,
+    ) -> String {
         use crate::lsp::protocol::HoverContents;
 
         let full = match contents {
@@ -529,7 +536,56 @@ impl DaemonServer {
             cleaned
         };
 
-        cleaned.to_string()
+        // Collapse multi-line signatures (ty wraps long parameter lists)
+        // e.g. "assist(\n    self,\n    task: str\n) -> str" → "assist(self, task: str) -> str"
+        let cleaned = Self::collapse_signature(cleaned);
+
+        // If the signature is a bare type (no name prefix, no parens), prepend
+        // the member name so it reads like `registry: dict[str, X]` instead of
+        // just `dict[str, X]`.
+        if !cleaned.contains('(') && !cleaned.contains(':') && cleaned != member_name {
+            format!("{member_name}: {cleaned}")
+        } else {
+            cleaned
+        }
+    }
+
+    /// Collapse a multi-line signature into a single line.
+    ///
+    /// ty formats long signatures like:
+    /// ```text
+    /// assist(
+    ///     self,
+    ///     task: str,
+    ///     duration_minutes: int = 30
+    /// ) -> str
+    /// ```
+    ///
+    /// This collapses them to: `assist(self, task: str, duration_minutes: int = 30) -> str`
+    fn collapse_signature(sig: &str) -> String {
+        if !sig.contains('\n') {
+            return sig.to_string();
+        }
+        // Replace newlines + surrounding whitespace with a single space,
+        // then clean up spaces around parentheses and commas.
+        let collapsed: String = sig.lines().map(str::trim).collect::<Vec<_>>().join(" ");
+        // Normalize "( " → "(", " )" → ")", ",  " → ", "
+        let collapsed = collapsed.replace("( ", "(").replace(" )", ")");
+        // Collapse multiple spaces
+        let mut result = String::with_capacity(collapsed.len());
+        let mut prev_space = false;
+        for ch in collapsed.chars() {
+            if ch == ' ' {
+                if !prev_space {
+                    result.push(ch);
+                }
+                prev_space = true;
+            } else {
+                prev_space = false;
+                result.push(ch);
+            }
+        }
+        result
     }
 
     /// Handle a diagnostics request.
@@ -789,7 +845,7 @@ mod tests {
             kind: MarkupKind::Markdown,
             value: "```python\ndef speak(self) -> str\n```".to_string(),
         });
-        let sig = DaemonServer::extract_member_signature(&contents);
+        let sig = DaemonServer::extract_member_signature(&contents, "speak");
         assert_eq!(sig, "speak(self) -> str");
     }
 
@@ -801,7 +857,7 @@ mod tests {
             kind: MarkupKind::Markdown,
             value: "```python\n(property) name: str\n```".to_string(),
         });
-        let sig = DaemonServer::extract_member_signature(&contents);
+        let sig = DaemonServer::extract_member_signature(&contents, "name");
         assert_eq!(sig, "name: str");
     }
 
@@ -814,7 +870,7 @@ mod tests {
             value: "```python\ndef describe(self) -> str\n```\n---\nDescribe the animal."
                 .to_string(),
         });
-        let sig = DaemonServer::extract_member_signature(&contents);
+        let sig = DaemonServer::extract_member_signature(&contents, "describe");
         assert_eq!(sig, "describe(self) -> str");
         assert!(!sig.contains("Describe"));
     }
@@ -827,7 +883,7 @@ mod tests {
             kind: MarkupKind::Markdown,
             value: "```python\nMAX_LEGS: int\n```".to_string(),
         });
-        let sig = DaemonServer::extract_member_signature(&contents);
+        let sig = DaemonServer::extract_member_signature(&contents, "MAX_LEGS");
         assert_eq!(sig, "MAX_LEGS: int");
     }
 
@@ -836,7 +892,43 @@ mod tests {
         use crate::lsp::protocol::HoverContents;
 
         let contents = HoverContents::Scalar("int".to_string());
-        let sig = DaemonServer::extract_member_signature(&contents);
-        assert_eq!(sig, "int");
+        let sig = DaemonServer::extract_member_signature(&contents, "count");
+        assert_eq!(sig, "count: int");
+    }
+
+    #[test]
+    fn test_extract_member_signature_multiline() {
+        use crate::lsp::protocol::{HoverContents, MarkupContent, MarkupKind};
+
+        let contents = HoverContents::Markup(MarkupContent {
+            kind: MarkupKind::Markdown,
+            value: "```python\ndef assist(\n    self,\n    task: str,\n    duration_minutes: int = 30\n) -> str\n```".to_string(),
+        });
+        let sig = DaemonServer::extract_member_signature(&contents, "assist");
+        assert_eq!(sig, "assist(self, task: str, duration_minutes: int = 30) -> str");
+    }
+
+    #[test]
+    fn test_extract_member_signature_bare_type() {
+        use crate::lsp::protocol::{HoverContents, MarkupContent, MarkupKind};
+
+        let contents = HoverContents::Markup(MarkupContent {
+            kind: MarkupKind::Markdown,
+            value: "```python\ndict[str, ServiceDog]\n```".to_string(),
+        });
+        let sig = DaemonServer::extract_member_signature(&contents, "registry");
+        assert_eq!(sig, "registry: dict[str, ServiceDog]");
+    }
+
+    #[test]
+    fn test_extract_member_signature_bare_property() {
+        use crate::lsp::protocol::{HoverContents, MarkupContent, MarkupKind};
+
+        let contents = HoverContents::Markup(MarkupContent {
+            kind: MarkupKind::Markdown,
+            value: "```python\nproperty\n```".to_string(),
+        });
+        let sig = DaemonServer::extract_member_signature(&contents, "is_certified");
+        assert_eq!(sig, "is_certified: property");
     }
 }

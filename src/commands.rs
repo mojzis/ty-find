@@ -1,11 +1,14 @@
 use anyhow::Result;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 #[cfg(unix)]
 use crate::cli::args::DaemonCommands;
-use crate::cli::output::{InspectEntry, OutputFormatter};
+use crate::cli::output::{
+    find_enclosing_symbol, EnrichedReference, EnrichedReferencesResult, InspectEntry,
+    OutputFormatter,
+};
 #[cfg(unix)]
 use crate::daemon::client::{ensure_daemon_running, spawn_daemon, DaemonClient};
 #[cfg(unix)]
@@ -13,13 +16,80 @@ use crate::daemon::protocol::BatchReferencesQuery;
 #[cfg(unix)]
 use crate::daemon::server::DaemonServer;
 use crate::lsp::client::TyLspClient;
-use crate::lsp::protocol::Location;
+use crate::lsp::protocol::{DocumentSymbol, Location};
 use crate::workspace::navigation::SymbolFinder;
 
 /// Deduplicate locations by (uri, start line).
 fn dedup_locations(locations: &mut Vec<Location>) {
     let mut seen = HashSet::new();
     locations.retain(|loc| seen.insert((loc.uri.clone(), loc.range.start.line)));
+}
+
+/// Count unique files in a slice of locations.
+fn count_unique_files(locations: &[Location]) -> usize {
+    let files: HashSet<&str> = locations.iter().map(|loc| loc.uri.as_str()).collect();
+    files.len()
+}
+
+/// Enrich a set of locations with enclosing symbol context.
+///
+/// For each unique file URI in `locations`, fetches document symbols via the daemon
+/// and walks the symbol tree to find the tightest enclosing symbol for each reference.
+/// Falls back to "module scope" when no enclosing symbol is found or when the
+/// documentSymbol call fails.
+#[cfg(unix)]
+async fn enrich_references(
+    locations: &[Location],
+    workspace_root: &Path,
+    client: &mut DaemonClient,
+) -> Vec<EnrichedReference> {
+    // Collect unique file URIs to minimize daemon calls
+    let unique_uris: Vec<String> =
+        {
+            let mut seen = HashSet::new();
+            locations
+                .iter()
+                .filter_map(|loc| {
+                    if seen.insert(loc.uri.as_str()) {
+                        Some(loc.uri.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        };
+
+    // Fetch document symbols for each unique file, cache results
+    let mut symbol_cache: HashMap<String, Vec<DocumentSymbol>> = HashMap::new();
+    for uri in &unique_uris {
+        let file_path = uri.strip_prefix("file://").unwrap_or(uri);
+        match client
+            .execute_document_symbols(workspace_root.to_path_buf(), file_path.to_string())
+            .await
+        {
+            Ok(result) => {
+                symbol_cache.insert(uri.clone(), result.symbols);
+            }
+            Err(e) => {
+                tracing::debug!("enrich_references: documentSymbol failed for {uri}: {e}");
+                // Fall through — missing entry means "module scope" fallback
+            }
+        }
+    }
+
+    // Enrich each location
+    locations
+        .iter()
+        .map(|loc| {
+            let context = if let Some(symbols) = symbol_cache.get(&loc.uri) {
+                find_enclosing_symbol(symbols, loc.range.start.line, loc.range.start.character)
+                    .unwrap_or_else(|| "module scope".to_string())
+            } else {
+                "module scope".to_string()
+            };
+            EnrichedReference { location: loc.clone(), context }
+        })
+        .collect()
 }
 
 /// Find the (line, column) where `name` appears, starting at a given 0-indexed line.
@@ -283,6 +353,7 @@ pub async fn handle_references_command(
     position: Option<(u32, u32)>,
     read_stdin: bool,
     include_declaration: bool,
+    references_limit: usize,
     formatter: &OutputFormatter,
     timeout: Duration,
 ) -> Result<()> {
@@ -301,8 +372,16 @@ pub async fn handle_references_command(
             )
             .await?;
 
-        let query_info = format!("{}:{line}:{col}", file.display());
-        println!("{}", formatter.format_references(&result.locations, &query_info));
+        let label = format!("{}:{line}:{col}", file.display());
+        let enriched = enrich_and_limit_references(
+            &label,
+            result.locations,
+            references_limit,
+            workspace_root,
+            &mut client,
+        )
+        .await?;
+        println!("{}", formatter.format_enriched_references_results(&[enriched]));
         return Ok(());
     }
 
@@ -321,9 +400,53 @@ pub async fn handle_references_command(
     let merged =
         execute_references_batch(resolved, workspace_root, include_declaration, timeout).await?;
 
-    println!("{}", formatter.format_references_results(&merged));
+    // Enrich and limit each result group — reuse a single daemon connection
+    let mut enriched_results = Vec::new();
+    let mut client = DaemonClient::connect_with_timeout(timeout).await?;
+    for (label, locations) in merged {
+        let enriched = enrich_and_limit_references(
+            &label,
+            locations,
+            references_limit,
+            workspace_root,
+            &mut client,
+        )
+        .await?;
+        enriched_results.push(enriched);
+    }
+
+    println!("{}", formatter.format_enriched_references_results(&enriched_results));
 
     Ok(())
+}
+
+/// Apply limit and enrich displayed references with enclosing symbol context.
+#[cfg(unix)]
+async fn enrich_and_limit_references(
+    label: &str,
+    locations: Vec<Location>,
+    references_limit: usize,
+    workspace_root: &Path,
+    client: &mut DaemonClient,
+) -> Result<EnrichedReferencesResult> {
+    let total_count = locations.len();
+    let display_count =
+        if references_limit == 0 { total_count } else { references_limit.min(total_count) };
+    let to_display = &locations[..display_count];
+    let remaining_count = total_count - display_count;
+
+    let displayed = if to_display.is_empty() {
+        Vec::new()
+    } else {
+        enrich_references(to_display, workspace_root, client).await
+    };
+
+    Ok(EnrichedReferencesResult {
+        label: label.to_string(),
+        total_count,
+        displayed,
+        remaining_count,
+    })
 }
 
 #[cfg(not(unix))]
@@ -335,6 +458,7 @@ pub async fn handle_references_command(
     _position: Option<(u32, u32)>,
     _read_stdin: bool,
     _include_declaration: bool,
+    _references_limit: usize,
     _formatter: &OutputFormatter,
     _timeout: Duration,
 ) -> Result<()> {
@@ -461,35 +585,72 @@ async fn find_symbol_via_workspace(
 }
 
 #[cfg(unix)]
+#[allow(clippy::too_many_arguments)]
 pub async fn handle_inspect_command(
     workspace_root: &Path,
     file: Option<&Path>,
     symbols: &[String],
     formatter: &OutputFormatter,
     timeout: Duration,
-    include_references: bool,
+    show_individual_refs: bool,
+    references_limit: usize,
 ) -> Result<()> {
     ensure_daemon_running().await?;
 
     let mut results: Vec<InspectResult> = Vec::new();
     for symbol in symbols {
-        let result =
-            inspect_single_symbol(workspace_root, file, symbol, timeout, include_references)
-                .await?;
+        // Always fetch references for the count summary
+        let result = inspect_single_symbol(workspace_root, file, symbol, timeout, true).await?;
         results.push(result);
     }
 
-    let entries: Vec<InspectEntry<'_>> = results
-        .iter()
-        .map(|r| InspectEntry {
+    // Build enriched entries — reuse a single daemon connection for all enrichment
+    let mut entries: Vec<InspectEntry<'_>> = Vec::new();
+    let needs_enrichment = show_individual_refs && results.iter().any(|r| !r.references.is_empty());
+    let mut enrich_client = if needs_enrichment {
+        Some(DaemonClient::connect_with_timeout(timeout).await?)
+    } else {
+        None
+    };
+    for r in &results {
+        let total_reference_count = r.references.len();
+        let total_reference_files = count_unique_files(&r.references);
+
+        let (displayed_references, remaining_reference_count) =
+            if show_individual_refs && !r.references.is_empty() {
+                // Determine which refs to display (capped by limit)
+                let display_count = if references_limit == 0 {
+                    r.references.len()
+                } else {
+                    references_limit.min(r.references.len())
+                };
+                let to_display = &r.references[..display_count];
+                let remaining = r.references.len() - display_count;
+
+                // Enrich displayed references with enclosing symbol context
+                let enriched = enrich_references(
+                    to_display,
+                    workspace_root,
+                    enrich_client.as_mut().expect("client created above"),
+                )
+                .await;
+                (enriched, remaining)
+            } else {
+                (Vec::new(), 0)
+            };
+
+        entries.push(InspectEntry {
             symbol: r.symbol.as_str(),
             kind: r.kind.as_ref(),
             definitions: r.definitions.as_slice(),
             hover: r.hover.as_ref(),
-            references: r.references.as_slice(),
-            references_requested: include_references,
-        })
-        .collect();
+            total_reference_count,
+            total_reference_files,
+            displayed_references,
+            remaining_reference_count,
+            show_individual_refs,
+        });
+    }
 
     println!("{}", formatter.format_inspect_results(&entries));
 
@@ -497,13 +658,15 @@ pub async fn handle_inspect_command(
 }
 
 #[cfg(not(unix))]
+#[allow(clippy::too_many_arguments)]
 pub async fn handle_inspect_command(
     _workspace_root: &Path,
     _file: Option<&Path>,
     _symbols: &[String],
     _formatter: &OutputFormatter,
     _timeout: Duration,
-    _include_references: bool,
+    _show_individual_refs: bool,
+    _references_limit: usize,
 ) -> Result<()> {
     anyhow::bail!(
         "The 'inspect' command requires the background daemon, which is only supported on Unix systems"

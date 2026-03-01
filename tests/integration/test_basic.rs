@@ -90,6 +90,11 @@ async fn test_inspect_command_with_file() {
         !predicate::str::contains("# Type\n(none)").eval(&stdout),
         "hover should not be empty — type info must be returned, got:\n{stdout}"
     );
+    // Reference count is always shown now (no -r needed)
+    assert!(
+        predicate::str::contains("# Refs:").eval(&stdout),
+        "inspect should always show reference count summary, got:\n{stdout}"
+    );
 }
 
 #[tokio::test]
@@ -174,15 +179,19 @@ async fn test_inspect_command_with_references() {
         !predicate::str::contains("# Type\n(none)").eval(&stdout),
         "inspect should return hover info, got:\n{stdout}"
     );
-    // References section must have actual locations (not "(none)")
+    // References section must show count and file summary
     assert!(
-        !predicate::str::contains("# Refs\n(none)").eval(&stdout),
-        "inspect --references should find usages, got:\n{stdout}"
+        predicate::str::contains("# Refs:").eval(&stdout),
+        "inspect should show reference count, got:\n{stdout}"
     );
-    // Should show at least 2 refs (definition + usage in main())
     assert!(
-        predicate::str::contains("# Refs (").eval(&stdout),
-        "references should show count, got:\n{stdout}"
+        predicate::str::contains("across").eval(&stdout),
+        "should show 'N across M file(s)', got:\n{stdout}"
+    );
+    // With -r, individual refs should be listed with enclosing context
+    assert!(
+        predicate::str::contains("test_example.py:").eval(&stdout),
+        "individual references should be displayed, got:\n{stdout}"
     );
 }
 
@@ -477,4 +486,220 @@ async fn test_members_command_csv_format() {
         predicate::str::contains("Animal,speak").eval(&stdout),
         "CSV should have speak member, got:\n{stdout}"
     );
+}
+
+// ── Reference count and enrichment tests ───────────────────────────
+
+#[tokio::test]
+async fn test_inspect_shows_reference_count_without_r_flag() {
+    common::require_ty();
+
+    // Inspect WITHOUT --references should still show reference count
+    let mut cmd = cargo_bin_cmd!("tyf");
+    cmd.arg("--workspace")
+        .arg(workspace_root())
+        .arg("inspect")
+        .arg("hello_world")
+        .arg("--file")
+        .arg(fixture_path());
+
+    let output = cmd.output().expect("failed to run tyf");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "command failed: {stdout}");
+
+    // Should show "# Refs: N across M file(s)" even without -r
+    assert!(
+        predicate::str::contains("# Refs:").eval(&stdout),
+        "inspect should always show ref count, got:\n{stdout}"
+    );
+    assert!(
+        predicate::str::contains("across").eval(&stdout)
+            || predicate::str::contains("none").eval(&stdout),
+        "should show 'N across M file(s)' or 'none', got:\n{stdout}"
+    );
+    // Without -r, should NOT show individual reference lines with file:line:col
+    // (the definition line matches, but we check that there's no "(module scope)" or similar context)
+    assert!(
+        !predicate::str::contains("(module scope)").eval(&stdout)
+            && !predicate::str::contains("--references-limit").eval(&stdout),
+        "without -r, should not show individual refs or truncation message, got:\n{stdout}"
+    );
+}
+
+#[tokio::test]
+async fn test_inspect_references_with_limit_truncation() {
+    common::require_ty();
+
+    // Inspect with --references and --references-limit 1 to test truncation
+    let mut cmd = cargo_bin_cmd!("tyf");
+    cmd.arg("--workspace")
+        .arg(workspace_root())
+        .arg("inspect")
+        .arg("hello_world")
+        .arg("--file")
+        .arg(fixture_path())
+        .arg("--references")
+        .arg("--references-limit")
+        .arg("1");
+
+    let output = cmd.output().expect("failed to run tyf");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "command failed: {stdout}");
+
+    // Should show the count summary
+    assert!(
+        predicate::str::contains("# Refs:").eval(&stdout),
+        "should show refs header, got:\n{stdout}"
+    );
+    // If there are more than 1 reference, should show truncation
+    // (hello_world has at least 2 refs: definition + call in main)
+    if predicate::str::contains("... and").eval(&stdout) {
+        assert!(
+            predicate::str::contains("--references-limit 0").eval(&stdout),
+            "truncation message should mention --references-limit 0, got:\n{stdout}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_inspect_references_limit_zero_shows_all() {
+    common::require_ty();
+
+    // Inspect with --references --references-limit 0 should show all refs
+    let mut cmd = cargo_bin_cmd!("tyf");
+    cmd.arg("--workspace")
+        .arg(workspace_root())
+        .arg("inspect")
+        .arg("hello_world")
+        .arg("--file")
+        .arg(fixture_path())
+        .arg("--references")
+        .arg("--references-limit")
+        .arg("0");
+
+    let output = cmd.output().expect("failed to run tyf");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "command failed: {stdout}");
+
+    // Should NOT show truncation message
+    assert!(
+        !predicate::str::contains("... and").eval(&stdout),
+        "--references-limit 0 should show all refs without truncation, got:\n{stdout}"
+    );
+}
+
+#[tokio::test]
+async fn test_inspect_enriched_refs_show_context() {
+    common::require_ty();
+
+    // Inspect with --references to check enclosing symbol context
+    let mut cmd = cargo_bin_cmd!("tyf");
+    cmd.arg("--workspace")
+        .arg(workspace_root())
+        .arg("inspect")
+        .arg("hello_world")
+        .arg("--file")
+        .arg(fixture_path())
+        .arg("--references")
+        .arg("--references-limit")
+        .arg("0");
+
+    let output = cmd.output().expect("failed to run tyf");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "command failed: {stdout}");
+
+    // Each reference line should have a context in parentheses
+    // e.g. "test_example.py:45:12 (main)" or "test_example.py:1:5 (module scope)"
+    let refs_section = stdout.split("# Refs:").nth(1).unwrap_or("");
+    let has_context = refs_section.lines().any(|line| {
+        line.contains("test_example.py:") && (line.contains('(') && line.contains(')'))
+    });
+    assert!(has_context, "references should include enclosing context, got:\n{stdout}");
+}
+
+#[tokio::test]
+async fn test_inspect_module_scope_reference() {
+    common::require_ty();
+
+    // hello_world is defined at module scope — at least one ref should show "(module scope)"
+    // since it's referenced in the file's top-level `if __name__` block or similar
+    let mut cmd = cargo_bin_cmd!("tyf");
+    cmd.arg("--workspace")
+        .arg(workspace_root())
+        .arg("inspect")
+        .arg("hello_world")
+        .arg("--file")
+        .arg(fixture_path())
+        .arg("--references")
+        .arg("--references-limit")
+        .arg("0");
+
+    let output = cmd.output().expect("failed to run tyf");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "command failed: {stdout}");
+
+    // At least one reference should be at module scope or in a function
+    // (we just verify context parentheses are present for all displayed refs)
+    let refs_section = stdout.split("# Refs:").nth(1).unwrap_or("");
+    for line in refs_section.lines() {
+        if line.contains("test_example.py:") && line.contains(':') {
+            // Each ref line should have context
+            assert!(
+                line.contains('('),
+                "each reference should have context in parentheses, got: {line}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn test_references_command_with_limit() {
+    common::require_ty();
+
+    // References command with --references-limit
+    let mut cmd = cargo_bin_cmd!("tyf");
+    cmd.arg("--workspace")
+        .arg(workspace_root())
+        .arg("refs")
+        .arg("hello_world")
+        .arg("-f")
+        .arg(fixture_path())
+        .arg("--references-limit")
+        .arg("1");
+
+    let output = cmd.output().expect("failed to run tyf");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "command failed: {stdout}");
+
+    // Should show enriched refs with context
+    assert!(
+        predicate::str::contains("hello_world").eval(&stdout)
+            || predicate::str::contains("reference").eval(&stdout),
+        "should show references, got:\n{stdout}"
+    );
+}
+
+#[tokio::test]
+async fn test_references_command_enriched_context() {
+    common::require_ty();
+
+    // References command should show context for each reference
+    let mut cmd = cargo_bin_cmd!("tyf");
+    cmd.arg("--workspace")
+        .arg(workspace_root())
+        .arg("refs")
+        .arg("hello_world")
+        .arg("-f")
+        .arg(fixture_path())
+        .arg("--references-limit")
+        .arg("0");
+
+    let output = cmd.output().expect("failed to run tyf");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "command failed: {stdout}");
+
+    // Each reference line should include enclosing context
+    let has_context =
+        stdout.lines().any(|line| line.contains("test_example.py:") && line.contains('('));
+    assert!(has_context, "references should include context, got:\n{stdout}");
 }

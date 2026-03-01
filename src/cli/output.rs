@@ -8,15 +8,31 @@ use crate::lsp::protocol::{
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
 
+/// A reference location enriched with enclosing symbol context.
+#[derive(Clone, Debug)]
+pub struct EnrichedReference {
+    pub location: Location,
+    /// Dot-separated path of the tightest enclosing symbol (e.g. "RequestHandler.process"),
+    /// or "module scope" if at top level.
+    pub context: String,
+}
+
 /// A single inspect result with optional symbol kind.
 pub struct InspectEntry<'a> {
     pub symbol: &'a str,
     pub kind: Option<&'a SymbolKind>,
     pub definitions: &'a [Location],
     pub hover: Option<&'a Hover>,
-    pub references: &'a [Location],
-    /// Whether references were actually requested (false = not searched, not "none found").
-    pub references_requested: bool,
+    /// Total number of references found (always populated, used for count summary).
+    pub total_reference_count: usize,
+    /// Number of unique files across all references.
+    pub total_reference_files: usize,
+    /// Displayed references (capped by --references-limit), enriched with context.
+    pub displayed_references: Vec<EnrichedReference>,
+    /// How many references were not displayed due to the limit.
+    pub remaining_reference_count: usize,
+    /// Whether individual references should be shown (true = -r was passed).
+    pub show_individual_refs: bool,
 }
 
 pub struct OutputFormatter {
@@ -94,6 +110,68 @@ fn read_decorators(file_path: &str, start_line_0: u32) -> Option<String> {
 #[cfg(test)]
 fn read_definition_line(file_path: &str, start_line_0: u32) -> Option<String> {
     read_definition_context(file_path, start_line_0).map(|ctx| ctx.definition_line)
+}
+
+/// Enriched references result for the references command.
+pub struct EnrichedReferencesResult {
+    /// Symbol name or query label.
+    pub label: String,
+    /// Total number of references found.
+    pub total_count: usize,
+    /// Displayed references (capped by limit), enriched with context.
+    pub displayed: Vec<EnrichedReference>,
+    /// How many references were not displayed due to the limit.
+    pub remaining_count: usize,
+}
+
+/// Check whether a position (line, character) is inside a range (inclusive).
+fn position_in_range(range: &crate::lsp::protocol::Range, line: u32, character: u32) -> bool {
+    if line < range.start.line || line > range.end.line {
+        return false;
+    }
+    if line == range.start.line && character < range.start.character {
+        return false;
+    }
+    if line == range.end.line && character > range.end.character {
+        return false;
+    }
+    true
+}
+
+/// Walk a `DocumentSymbol` tree to find the tightest enclosing symbol for a position.
+///
+/// Returns the dot-separated path (e.g. `"MyClass.my_method"`) of the deepest
+/// symbol whose `range` contains the given position, or `None` if the position
+/// is outside all symbols (module scope).
+pub fn find_enclosing_symbol(
+    symbols: &[DocumentSymbol],
+    line: u32,
+    character: u32,
+) -> Option<String> {
+    let mut path = Vec::new();
+    find_enclosing_recursive(symbols, line, character, &mut path);
+    if path.is_empty() {
+        None
+    } else {
+        Some(path.join("."))
+    }
+}
+
+fn find_enclosing_recursive(
+    symbols: &[DocumentSymbol],
+    line: u32,
+    character: u32,
+    path: &mut Vec<String>,
+) {
+    for sym in symbols {
+        if position_in_range(&sym.range, line, character) {
+            path.push(sym.name.clone());
+            if let Some(children) = &sym.children {
+                find_enclosing_recursive(children, line, character, path);
+            }
+            return;
+        }
+    }
 }
 
 /// Strip markdown code fences (`` ```lang `` / `` ``` ``) leaving only content.
@@ -247,79 +325,42 @@ impl OutputFormatter {
         }
     }
 
-    pub fn format_references(&self, locations: &[Location], query_info: &str) -> String {
-        match self.format {
-            OutputFormat::Human => {
-                if locations.is_empty() {
-                    return format!("No references found for: {query_info}");
-                }
-
-                let mut output =
-                    format!("Found {} reference(s) for: {query_info}\n\n", locations.len());
-
-                for (i, location) in locations.iter().enumerate() {
-                    let file_path = self.uri_to_path(&location.uri);
-                    let line = location.range.start.line + 1;
-                    let column = location.range.start.character + 1;
-
-                    let _ = writeln!(output, "{}. {file_path}:{line}:{column}", i + 1);
-
-                    if let Some(src) = read_source_line(&file_path, line) {
-                        let _ = writeln!(output, "   {src}");
-                    }
-                    output.push('\n');
-                }
-
-                output
-            }
-            OutputFormat::Json => Self::format_json(locations),
-            OutputFormat::Csv => self.format_csv(locations),
-            OutputFormat::Paths => self.format_paths(locations),
-        }
-    }
-
-    /// Format results for one or more symbol reference queries, grouped by symbol.
-    pub fn format_references_results(&self, results: &[(String, Vec<Location>)]) -> String {
+    /// Format enriched references results (with context and limit support).
+    pub fn format_enriched_references_results(
+        &self,
+        results: &[EnrichedReferencesResult],
+    ) -> String {
         if results.len() == 1 {
-            let (symbol, locations) = &results[0];
-            let query_info = format!("'{symbol}'");
-            return self.format_references(locations, &query_info);
+            return self.format_enriched_references_single(&results[0]);
         }
 
         match self.format {
             OutputFormat::Human => {
                 let mut output = String::new();
-                for (symbol, locations) in results {
-                    let _ = writeln!(output, "=== {symbol} ===");
-                    if locations.is_empty() {
-                        output.push_str("No references found.\n");
-                    } else {
-                        output.push_str(&self.format_references(locations, &format!("'{symbol}'")));
-                    }
+                for result in results {
+                    let _ = writeln!(output, "=== {} ===", result.label);
+                    output.push_str(&self.format_enriched_references_single(result));
                     output.push('\n');
                 }
                 output.trim_end().to_string()
             }
             OutputFormat::Json => {
-                let grouped: Vec<serde_json::Value> = results
-                    .iter()
-                    .map(|(symbol, locations)| {
-                        serde_json::json!({
-                            "symbol": symbol,
-                            "references": locations,
-                        })
-                    })
-                    .collect();
+                let grouped: Vec<serde_json::Value> =
+                    results.iter().map(Self::enriched_refs_to_json).collect();
                 serde_json::to_string_pretty(&grouped).unwrap_or_else(|_| "[]".to_string())
             }
             OutputFormat::Csv => {
-                let mut output = String::from("symbol,file,line,column\n");
-                for (symbol, locations) in results {
-                    for location in locations {
-                        let file_path = self.uri_to_path(&location.uri);
-                        let line = location.range.start.line + 1;
-                        let column = location.range.start.character + 1;
-                        let _ = writeln!(output, "{symbol},{file_path},{line},{column}");
+                let mut output = String::from("symbol,file,line,column,context\n");
+                for result in results {
+                    for enriched in &result.displayed {
+                        let file_path = self.uri_to_path(&enriched.location.uri);
+                        let line = enriched.location.range.start.line + 1;
+                        let column = enriched.location.range.start.character + 1;
+                        let _ = writeln!(
+                            output,
+                            "{},{file_path},{line},{column},{}",
+                            result.label, enriched.context
+                        );
                     }
                 }
                 output
@@ -327,15 +368,99 @@ impl OutputFormatter {
             OutputFormat::Paths => {
                 let mut paths: Vec<String> = results
                     .iter()
-                    .flat_map(|(_, locations)| {
-                        locations.iter().map(|loc| self.uri_to_path(&loc.uri))
-                    })
+                    .flat_map(|r| r.displayed.iter().map(|e| self.uri_to_path(&e.location.uri)))
                     .collect();
                 paths.sort();
                 paths.dedup();
                 paths.join("\n")
             }
         }
+    }
+
+    fn format_enriched_references_single(&self, result: &EnrichedReferencesResult) -> String {
+        match self.format {
+            OutputFormat::Human => {
+                if result.total_count == 0 {
+                    return format!("No references found for: '{}'", result.label);
+                }
+
+                let mut output = format!(
+                    "Found {} reference(s) for: '{}'\n\n",
+                    result.total_count, result.label
+                );
+
+                for (i, enriched) in result.displayed.iter().enumerate() {
+                    let file_path = self.uri_to_path(&enriched.location.uri);
+                    let line = enriched.location.range.start.line + 1;
+                    let column = enriched.location.range.start.character + 1;
+
+                    let _ = writeln!(
+                        output,
+                        "{}. {file_path}:{line}:{column} ({})",
+                        i + 1,
+                        enriched.context
+                    );
+
+                    if let Some(src) = read_source_line(&file_path, line) {
+                        let _ = writeln!(output, "   {src}");
+                    }
+                    output.push('\n');
+                }
+
+                if result.remaining_count > 0 {
+                    let _ = writeln!(
+                        output,
+                        "... and {} more — use --references-limit 0 to show all",
+                        result.remaining_count
+                    );
+                }
+
+                output
+            }
+            OutputFormat::Json => {
+                let val = Self::enriched_refs_to_json(result);
+                serde_json::to_string_pretty(&val).unwrap_or_else(|_| "{}".to_string())
+            }
+            OutputFormat::Csv => {
+                let mut output = String::from("file,line,column,context\n");
+                for enriched in &result.displayed {
+                    let file_path = self.uri_to_path(&enriched.location.uri);
+                    let line = enriched.location.range.start.line + 1;
+                    let column = enriched.location.range.start.character + 1;
+                    let _ = writeln!(output, "{file_path},{line},{column},{}", enriched.context);
+                }
+                output
+            }
+            OutputFormat::Paths => {
+                let mut paths: Vec<String> =
+                    result.displayed.iter().map(|r| self.uri_to_path(&r.location.uri)).collect();
+                paths.sort();
+                paths.dedup();
+                paths.join("\n")
+            }
+        }
+    }
+
+    fn enriched_refs_to_json(result: &EnrichedReferencesResult) -> serde_json::Value {
+        let refs_json: Vec<serde_json::Value> = result
+            .displayed
+            .iter()
+            .map(|r| {
+                let file_path = r.location.uri.strip_prefix("file://").unwrap_or(&r.location.uri);
+                serde_json::json!({
+                    "file": file_path,
+                    "line": r.location.range.start.line + 1,
+                    "column": r.location.range.start.character + 1,
+                    "context": r.context,
+                })
+            })
+            .collect();
+
+        serde_json::json!({
+            "symbol": result.label,
+            "reference_count": result.total_count,
+            "references": refs_json,
+        })
     }
 
     pub fn format_workspace_symbols(&self, symbols: &[SymbolInformation]) -> String {
@@ -566,21 +691,30 @@ impl OutputFormatter {
             }
         }
 
-        // Refs section — always shown, paths only
-        if entry.references.is_empty() {
-            let _ = writeln!(output, "\n{h} Refs");
-            if entry.references_requested {
-                output.push_str("(none)\n");
-            } else {
-                output.push_str("(use -r to find)\n");
-            }
+        // Refs section — always show count summary
+        let _ = write!(output, "\n{h} Refs");
+        if entry.total_reference_count == 0 {
+            output.push_str(": none\n");
         } else {
-            let _ = writeln!(output, "\n{h} Refs ({})", entry.references.len());
-            for location in entry.references {
-                let file_path = self.uri_to_path(&location.uri);
-                let line = location.range.start.line + 1;
-                let column = location.range.start.character + 1;
-                let _ = writeln!(output, "{file_path}:{line}:{column}");
+            let _ = writeln!(
+                output,
+                ": {} across {} file(s)",
+                entry.total_reference_count, entry.total_reference_files
+            );
+            if entry.show_individual_refs {
+                for enriched in &entry.displayed_references {
+                    let file_path = self.uri_to_path(&enriched.location.uri);
+                    let line = enriched.location.range.start.line + 1;
+                    let column = enriched.location.range.start.character + 1;
+                    let _ = writeln!(output, "{file_path}:{line}:{column} ({})", enriched.context);
+                }
+                if entry.remaining_reference_count > 0 {
+                    let _ = writeln!(
+                        output,
+                        "... and {} more — use --references-limit 0 to show all",
+                        entry.remaining_reference_count
+                    );
+                }
             }
         }
 
@@ -620,24 +754,38 @@ impl OutputFormatter {
         );
         output.push('\n');
 
-        // References section
+        // References section — always show count summary
         let _ = writeln!(output, "{h2} References");
-        if entry.references.is_empty() {
-            if entry.references_requested {
-                output.push_str("No references found.\n");
-            } else {
-                output.push_str("Use --references (-r) to search for usages.\n");
-            }
+        if entry.total_reference_count == 0 {
+            output.push_str("No references found.\n");
         } else {
-            let _ = writeln!(output, "{} reference(s):", entry.references.len());
-            for (i, location) in entry.references.iter().enumerate() {
-                let file_path = self.uri_to_path(&location.uri);
-                let line = location.range.start.line + 1;
-                let column = location.range.start.character + 1;
-                let _ = writeln!(output, "{}. {file_path}:{line}:{column}", i + 1);
+            let _ = writeln!(
+                output,
+                "{} reference(s) across {} file(s):",
+                entry.total_reference_count, entry.total_reference_files
+            );
+            if entry.show_individual_refs {
+                for (i, enriched) in entry.displayed_references.iter().enumerate() {
+                    let file_path = self.uri_to_path(&enriched.location.uri);
+                    let line = enriched.location.range.start.line + 1;
+                    let column = enriched.location.range.start.character + 1;
+                    let _ = writeln!(
+                        output,
+                        "{}. {file_path}:{line}:{column} ({})",
+                        i + 1,
+                        enriched.context
+                    );
 
-                if let Some(src) = read_source_line(&file_path, line) {
-                    let _ = writeln!(output, "   {src}");
+                    if let Some(src) = read_source_line(&file_path, line) {
+                        let _ = writeln!(output, "   {src}");
+                    }
+                }
+                if entry.remaining_reference_count > 0 {
+                    let _ = writeln!(
+                        output,
+                        "... and {} more — use --references-limit 0 to show all",
+                        entry.remaining_reference_count
+                    );
                 }
             }
         }
@@ -648,44 +796,76 @@ impl OutputFormatter {
     pub fn format_inspect(&self, entry: &InspectEntry<'_>) -> String {
         match self.format {
             OutputFormat::Human => self.format_inspect_human(entry, 1),
-            OutputFormat::Json => {
-                let json_val = serde_json::json!({
-                    "symbol": entry.symbol,
-                    "kind": entry.kind.map(Self::kind_label),
-                    "definitions": entry.definitions,
-                    "hover": entry.hover,
-                    "references": entry.references,
-                });
-                serde_json::to_string_pretty(&json_val).unwrap_or_else(|_| "{}".to_string())
-            }
-            OutputFormat::Csv => {
-                let mut output = String::from("section,file,line,column\n");
-                for location in entry.definitions {
-                    let file_path = self.uri_to_path(&location.uri);
-                    let line = location.range.start.line + 1;
-                    let column = location.range.start.character + 1;
-                    let _ = writeln!(output, "definition,{file_path},{line},{column}");
-                }
-                for location in entry.references {
-                    let file_path = self.uri_to_path(&location.uri);
-                    let line = location.range.start.line + 1;
-                    let column = location.range.start.character + 1;
-                    let _ = writeln!(output, "reference,{file_path},{line},{column}");
-                }
-                output
-            }
-            OutputFormat::Paths => {
-                let mut paths: Vec<String> = entry
-                    .definitions
-                    .iter()
-                    .chain(entry.references.iter())
-                    .map(|loc| self.uri_to_path(&loc.uri))
-                    .collect();
-                paths.sort();
-                paths.dedup();
-                paths.join("\n")
-            }
+            OutputFormat::Json => Self::format_inspect_json_single(entry),
+            OutputFormat::Csv => self.format_inspect_csv_single(entry, false),
+            OutputFormat::Paths => self.format_inspect_paths_single(entry),
         }
+    }
+
+    fn format_inspect_json_single(entry: &InspectEntry<'_>) -> String {
+        let refs_json: Vec<serde_json::Value> = entry
+            .displayed_references
+            .iter()
+            .map(|r| {
+                let file_path = r.location.uri.strip_prefix("file://").unwrap_or(&r.location.uri);
+                serde_json::json!({
+                    "file": file_path,
+                    "line": r.location.range.start.line + 1,
+                    "column": r.location.range.start.character + 1,
+                    "context": r.context,
+                })
+            })
+            .collect();
+
+        let json_val = serde_json::json!({
+            "symbol": entry.symbol,
+            "kind": entry.kind.map(Self::kind_label),
+            "definitions": entry.definitions,
+            "hover": entry.hover,
+            "reference_count": entry.total_reference_count,
+            "reference_files": entry.total_reference_files,
+            "references": refs_json,
+        });
+        serde_json::to_string_pretty(&json_val).unwrap_or_else(|_| "{}".to_string())
+    }
+
+    fn format_inspect_csv_single(&self, entry: &InspectEntry<'_>, include_symbol: bool) -> String {
+        let header = if include_symbol {
+            "symbol,section,file,line,column,context\n"
+        } else {
+            "section,file,line,column,context\n"
+        };
+        let mut output = String::from(header);
+        let prefix = if include_symbol { format!("{},", entry.symbol) } else { String::new() };
+        for location in entry.definitions {
+            let file_path = self.uri_to_path(&location.uri);
+            let line = location.range.start.line + 1;
+            let column = location.range.start.character + 1;
+            let _ = writeln!(output, "{prefix}definition,{file_path},{line},{column},");
+        }
+        for enriched in &entry.displayed_references {
+            let file_path = self.uri_to_path(&enriched.location.uri);
+            let line = enriched.location.range.start.line + 1;
+            let column = enriched.location.range.start.character + 1;
+            let _ = writeln!(
+                output,
+                "{prefix}reference,{file_path},{line},{column},{}",
+                enriched.context
+            );
+        }
+        output
+    }
+
+    fn format_inspect_paths_single(&self, entry: &InspectEntry<'_>) -> String {
+        let mut paths: Vec<String> = entry
+            .definitions
+            .iter()
+            .map(|loc| self.uri_to_path(&loc.uri))
+            .chain(entry.displayed_references.iter().map(|r| self.uri_to_path(&r.location.uri)))
+            .collect();
+        paths.sort();
+        paths.dedup();
+        paths.join("\n")
     }
 
     /// Format results for one or more symbol inspect queries, grouped by symbol.
@@ -709,39 +889,20 @@ impl OutputFormatter {
                 let grouped: Vec<serde_json::Value> = results
                     .iter()
                     .map(|entry| {
-                        serde_json::json!({
-                            "symbol": entry.symbol,
-                            "kind": entry.kind.map(Self::kind_label),
-                            "definitions": entry.definitions,
-                            "hover": entry.hover,
-                            "references": entry.references,
-                        })
+                        serde_json::from_str(&Self::format_inspect_json_single(entry))
+                            .unwrap_or_default()
                     })
                     .collect();
                 serde_json::to_string_pretty(&grouped).unwrap_or_else(|_| "[]".to_string())
             }
             OutputFormat::Csv => {
-                let mut output = String::from("symbol,section,file,line,column\n");
+                let mut output = String::from("symbol,section,file,line,column,context\n");
                 for entry in results {
-                    for location in entry.definitions {
-                        let file_path = self.uri_to_path(&location.uri);
-                        let line = location.range.start.line + 1;
-                        let column = location.range.start.character + 1;
-                        let _ = writeln!(
-                            output,
-                            "{},definition,{file_path},{line},{column}",
-                            entry.symbol
-                        );
-                    }
-                    for location in entry.references {
-                        let file_path = self.uri_to_path(&location.uri);
-                        let line = location.range.start.line + 1;
-                        let column = location.range.start.character + 1;
-                        let _ = writeln!(
-                            output,
-                            "{},reference,{file_path},{line},{column}",
-                            entry.symbol
-                        );
+                    // Skip the header from each entry — we already wrote it
+                    let entry_csv = self.format_inspect_csv_single(entry, true);
+                    for line in entry_csv.lines().skip(1) {
+                        output.push_str(line);
+                        output.push('\n');
                     }
                 }
                 output
@@ -750,11 +911,12 @@ impl OutputFormatter {
                 let mut paths: Vec<String> = results
                     .iter()
                     .flat_map(|entry| {
-                        entry
-                            .definitions
-                            .iter()
-                            .chain(entry.references.iter())
-                            .map(|loc| self.uri_to_path(&loc.uri))
+                        entry.definitions.iter().map(|loc| self.uri_to_path(&loc.uri)).chain(
+                            entry
+                                .displayed_references
+                                .iter()
+                                .map(|r| self.uri_to_path(&r.location.uri)),
+                        )
                     })
                     .collect();
                 paths.sort();
@@ -1044,10 +1206,16 @@ mod tests {
     }
 
     #[test]
-    fn test_format_references_empty() {
+    fn test_format_enriched_references_empty() {
         let formatter = OutputFormatter::new(OutputFormat::Human);
-        let result = formatter.format_references(&[], "test:1:1");
-        assert_eq!(result, "No references found for: test:1:1");
+        let result = EnrichedReferencesResult {
+            label: "test:1:1".to_string(),
+            total_count: 0,
+            displayed: Vec::new(),
+            remaining_count: 0,
+        };
+        let output = formatter.format_enriched_references_results(&[result]);
+        assert_eq!(output, "No references found for: 'test:1:1'");
     }
 
     #[test]
@@ -1088,15 +1256,24 @@ mod tests {
         kind: Option<&'a SymbolKind>,
         definitions: &'a [Location],
         hover: Option<&'a Hover>,
-        references: &'a [Location],
     ) -> InspectEntry<'a> {
-        InspectEntry { symbol, kind, definitions, hover, references, references_requested: true }
+        InspectEntry {
+            symbol,
+            kind,
+            definitions,
+            hover,
+            total_reference_count: 0,
+            total_reference_files: 0,
+            displayed_references: Vec::new(),
+            remaining_reference_count: 0,
+            show_individual_refs: false,
+        }
     }
 
     #[test]
     fn test_format_inspect_condensed_empty() {
         let formatter = OutputFormatter::new(OutputFormat::Human);
-        let entry = make_entry("missing", None, &[], None, &[]);
+        let entry = make_entry("missing", None, &[], None);
         let result = formatter.format_inspect(&entry);
 
         // Condensed: no symbol header for single symbol, short section names
@@ -1108,7 +1285,7 @@ mod tests {
     }
 
     #[test]
-    fn test_format_inspect_refs_not_requested_condensed() {
+    fn test_format_inspect_refs_zero_count_condensed() {
         let formatter = OutputFormatter::new(OutputFormat::Human);
         let defs = [make_location("file:///test.py", 0, 0)];
         let entry = InspectEntry {
@@ -1116,19 +1293,23 @@ mod tests {
             kind: Some(&SymbolKind::Class),
             definitions: &defs,
             hover: None,
-            references: &[],
-            references_requested: false,
+            total_reference_count: 0,
+            total_reference_files: 0,
+            displayed_references: Vec::new(),
+            remaining_reference_count: 0,
+            show_individual_refs: false,
         };
         let result = formatter.format_inspect(&entry);
 
-        assert!(result.contains("(use -r to find)"));
-        // The Refs section should NOT say "(none)" — that's for when refs were searched but empty
-        let refs_section = result.split("# Refs").nth(1).unwrap();
-        assert!(!refs_section.contains("(none)"));
+        // Zero refs should show "Refs: none"
+        assert!(
+            result.contains("# Refs: none"),
+            "should show 'Refs: none' for zero references, got:\n{result}"
+        );
     }
 
     #[test]
-    fn test_format_inspect_refs_not_requested_full() {
+    fn test_format_inspect_refs_count_without_individual_full() {
         let formatter = OutputFormatter::with_detail(OutputFormat::Human, OutputDetail::Full);
         let defs = [make_location("file:///test.py", 0, 0)];
         let entry = InspectEntry {
@@ -1136,20 +1317,26 @@ mod tests {
             kind: Some(&SymbolKind::Class),
             definitions: &defs,
             hover: None,
-            references: &[],
-            references_requested: false,
+            total_reference_count: 5,
+            total_reference_files: 2,
+            displayed_references: Vec::new(),
+            remaining_reference_count: 0,
+            show_individual_refs: false,
         };
         let result = formatter.format_inspect(&entry);
 
-        assert!(result.contains("Use --references (-r) to search for usages."));
-        assert!(!result.contains("No references found."));
+        // Should show count summary but no individual refs
+        assert!(
+            result.contains("5 reference(s) across 2 file(s)"),
+            "should show reference count summary, got:\n{result}"
+        );
     }
 
     #[test]
     fn test_format_inspect_condensed_with_kind() {
         let formatter = OutputFormatter::new(OutputFormat::Human);
         let defs = [make_location("file:///test.py", 0, 0)];
-        let entry = make_entry("foo", Some(&SymbolKind::Function), &defs, None, &[]);
+        let entry = make_entry("foo", Some(&SymbolKind::Function), &defs, None);
         let result = formatter.format_inspect(&entry);
 
         assert!(result.contains("# Def (func)"));
@@ -1159,7 +1346,7 @@ mod tests {
     #[test]
     fn test_format_inspect_full_empty() {
         let formatter = OutputFormatter::with_detail(OutputFormat::Human, OutputDetail::Full);
-        let entry = make_entry("missing", None, &[], None, &[]);
+        let entry = make_entry("missing", None, &[], None);
         let result = formatter.format_inspect(&entry);
 
         assert!(result.contains("# Inspect: missing"));
@@ -1173,7 +1360,7 @@ mod tests {
     fn test_format_inspect_condensed_with_defs() {
         let formatter = OutputFormatter::new(OutputFormat::Human);
         let defs = [make_location("file:///test.py", 0, 0)];
-        let entry = make_entry("foo", None, &defs, None, &[]);
+        let entry = make_entry("foo", None, &defs, None);
         let result = formatter.format_inspect(&entry);
 
         // Should show path:line:col on one line (no numbering)
@@ -1187,7 +1374,7 @@ mod tests {
     fn test_format_inspect_json() {
         let formatter = OutputFormatter::new(OutputFormat::Json);
         let defs = [make_location("file:///test.py", 0, 0)];
-        let entry = make_entry("foo", Some(&SymbolKind::Function), &defs, None, &[]);
+        let entry = make_entry("foo", Some(&SymbolKind::Function), &defs, None);
         let result = formatter.format_inspect(&entry);
 
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
@@ -1282,7 +1469,7 @@ mod tests {
                 end: crate::lsp::protocol::Position { line: 3, character: 12 },
             }),
         };
-        let entry = make_entry("Animal", Some(&SymbolKind::Class), &defs, Some(&hover), &[]);
+        let entry = make_entry("Animal", Some(&SymbolKind::Class), &defs, Some(&hover));
         let result = formatter.format_inspect(&entry);
 
         // Type section should have the class type without code fences or docstring
@@ -1384,7 +1571,7 @@ mod tests {
                 end: crate::lsp::protocol::Position { line: 1, character: 12 },
             }),
         };
-        let entry = make_entry("Config", Some(&SymbolKind::Class), &defs, Some(&hover), &[]);
+        let entry = make_entry("Config", Some(&SymbolKind::Class), &defs, Some(&hover));
         let result = formatter.format_inspect(&entry);
 
         // Type section should show decorator + source class definition
@@ -1417,7 +1604,7 @@ mod tests {
                 end: crate::lsp::protocol::Position { line: 0, character: 12 },
             }),
         };
-        let entry = make_entry("Animal", Some(&SymbolKind::Class), &defs, Some(&hover), &[]);
+        let entry = make_entry("Animal", Some(&SymbolKind::Class), &defs, Some(&hover));
         let result = formatter.format_inspect(&entry);
 
         // Should show source class line (no decorator, no inheritance)
@@ -1479,7 +1666,7 @@ mod tests {
                 end: crate::lsp::protocol::Position { line: 0, character: 9 },
             }),
         };
-        let entry = make_entry("Dog", Some(&SymbolKind::Class), &defs, Some(&hover), &[]);
+        let entry = make_entry("Dog", Some(&SymbolKind::Class), &defs, Some(&hover));
         let result = formatter.format_inspect(&entry);
 
         // Type section should show source class line with inheritance, not <class 'Dog'>
@@ -1515,7 +1702,7 @@ mod tests {
                 end: crate::lsp::protocol::Position { line: 1, character: 15 },
             }),
         };
-        let entry = make_entry("AppConfig", Some(&SymbolKind::Class), &defs, Some(&hover), &[]);
+        let entry = make_entry("AppConfig", Some(&SymbolKind::Class), &defs, Some(&hover));
         let result = formatter.format_inspect(&entry);
 
         // Should show decorator + source class line with inheritance
@@ -1546,8 +1733,7 @@ mod tests {
                 end: crate::lsp::protocol::Position { line: 0, character: 15 },
             }),
         };
-        let entry =
-            make_entry("hello_world", Some(&SymbolKind::Function), &defs, Some(&hover), &[]);
+        let entry = make_entry("hello_world", Some(&SymbolKind::Function), &defs, Some(&hover));
         let result = formatter.format_inspect(&entry);
 
         // Functions should still show the hover type (has inferred return type)
@@ -1687,5 +1873,251 @@ mod tests {
             assert!(output.contains("Dog"), "should show second class");
             assert!(output.contains("fetch(self, item: str) -> str"));
         }
+    }
+
+    // ── Enclosing symbol tree walk tests ───────────────────────────────
+
+    fn make_doc_symbol(
+        name: &str,
+        kind: SymbolKind,
+        start_line: u32,
+        end_line: u32,
+        children: Option<Vec<DocumentSymbol>>,
+    ) -> DocumentSymbol {
+        DocumentSymbol {
+            name: name.to_string(),
+            detail: None,
+            kind,
+            tags: None,
+            deprecated: None,
+            range: Range {
+                start: Position { line: start_line, character: 0 },
+                end: Position { line: end_line, character: 0 },
+            },
+            selection_range: Range {
+                start: Position { line: start_line, character: 0 },
+                #[allow(clippy::cast_possible_truncation)]
+                end: Position { line: start_line, character: name.len() as u32 },
+            },
+            children,
+        }
+    }
+
+    #[test]
+    fn test_find_enclosing_symbol_top_level_function() {
+        let symbols = vec![make_doc_symbol("my_func", SymbolKind::Function, 5, 15, None)];
+
+        assert_eq!(find_enclosing_symbol(&symbols, 10, 4), Some("my_func".to_string()));
+    }
+
+    #[test]
+    fn test_find_enclosing_symbol_nested_method() {
+        let method = make_doc_symbol("process", SymbolKind::Method, 10, 20, None);
+        let class = make_doc_symbol("RequestHandler", SymbolKind::Class, 5, 30, Some(vec![method]));
+        let symbols = vec![class];
+
+        assert_eq!(
+            find_enclosing_symbol(&symbols, 15, 8),
+            Some("RequestHandler.process".to_string())
+        );
+    }
+
+    #[test]
+    fn test_find_enclosing_symbol_module_scope() {
+        let symbols = vec![make_doc_symbol("my_func", SymbolKind::Function, 5, 15, None)];
+
+        // Position outside any symbol → module scope (None)
+        assert_eq!(find_enclosing_symbol(&symbols, 2, 0), None);
+    }
+
+    #[test]
+    fn test_find_enclosing_symbol_empty_tree() {
+        assert_eq!(find_enclosing_symbol(&[], 10, 5), None);
+    }
+
+    #[test]
+    fn test_find_enclosing_symbol_class_level_not_in_method() {
+        let method = make_doc_symbol("process", SymbolKind::Method, 10, 20, None);
+        let class = make_doc_symbol("RequestHandler", SymbolKind::Class, 5, 30, Some(vec![method]));
+        let symbols = vec![class];
+
+        // Position in class but outside the method
+        assert_eq!(find_enclosing_symbol(&symbols, 7, 0), Some("RequestHandler".to_string()));
+    }
+
+    #[test]
+    fn test_find_enclosing_symbol_deeply_nested() {
+        let inner_method = make_doc_symbol("inner_method", SymbolKind::Method, 15, 18, None);
+        let inner_class =
+            make_doc_symbol("InnerClass", SymbolKind::Class, 12, 20, Some(vec![inner_method]));
+        let outer_class =
+            make_doc_symbol("OuterClass", SymbolKind::Class, 5, 30, Some(vec![inner_class]));
+        let symbols = vec![outer_class];
+
+        assert_eq!(
+            find_enclosing_symbol(&symbols, 16, 4),
+            Some("OuterClass.InnerClass.inner_method".to_string())
+        );
+    }
+
+    // ── Enriched inspect output tests ──────────────────────────────────
+
+    #[test]
+    fn test_format_inspect_with_ref_count_condensed() {
+        let formatter = OutputFormatter::new(OutputFormat::Human);
+        let defs = [make_location("file:///test.py", 0, 0)];
+        let entry = InspectEntry {
+            symbol: "my_func",
+            kind: Some(&SymbolKind::Function),
+            definitions: &defs,
+            hover: None,
+            total_reference_count: 47,
+            total_reference_files: 12,
+            displayed_references: Vec::new(),
+            remaining_reference_count: 0,
+            show_individual_refs: false,
+        };
+        let result = formatter.format_inspect(&entry);
+
+        assert!(
+            result.contains("# Refs: 47 across 12 file(s)"),
+            "should show reference count summary, got:\n{result}"
+        );
+    }
+
+    #[test]
+    fn test_format_inspect_with_enriched_refs_condensed() {
+        let formatter = OutputFormatter::new(OutputFormat::Human);
+        let defs = [make_location("file:///test.py", 0, 0)];
+        let enriched = vec![
+            EnrichedReference {
+                location: make_location("file:///src/main.py", 44, 11),
+                context: "RequestHandler.process".to_string(),
+            },
+            EnrichedReference {
+                location: make_location("file:///src/main.py", 2, 0),
+                context: "module scope".to_string(),
+            },
+        ];
+        let entry = InspectEntry {
+            symbol: "my_func",
+            kind: Some(&SymbolKind::Function),
+            definitions: &defs,
+            hover: None,
+            total_reference_count: 5,
+            total_reference_files: 2,
+            displayed_references: enriched,
+            remaining_reference_count: 3,
+            show_individual_refs: true,
+        };
+        let result = formatter.format_inspect(&entry);
+
+        assert!(result.contains("# Refs: 5 across 2 file(s)"), "should show count, got:\n{result}");
+        assert!(result.contains("(RequestHandler.process)"), "should show context, got:\n{result}");
+        assert!(
+            result.contains("(module scope)"),
+            "should show module scope context, got:\n{result}"
+        );
+        assert!(result.contains("... and 3 more"), "should show remaining count, got:\n{result}");
+    }
+
+    #[test]
+    fn test_format_inspect_json_includes_context() {
+        let formatter = OutputFormatter::new(OutputFormat::Json);
+        let defs = [make_location("file:///test.py", 0, 0)];
+        let enriched = vec![EnrichedReference {
+            location: make_location("file:///src/main.py", 44, 11),
+            context: "RequestHandler.process".to_string(),
+        }];
+        let entry = InspectEntry {
+            symbol: "my_func",
+            kind: Some(&SymbolKind::Function),
+            definitions: &defs,
+            hover: None,
+            total_reference_count: 1,
+            total_reference_files: 1,
+            displayed_references: enriched,
+            remaining_reference_count: 0,
+            show_individual_refs: true,
+        };
+        let result = formatter.format_inspect(&entry);
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+
+        assert_eq!(parsed["reference_count"], 1);
+        assert_eq!(parsed["reference_files"], 1);
+        assert_eq!(parsed["references"][0]["context"], "RequestHandler.process");
+    }
+
+    #[test]
+    fn test_format_enriched_references_with_limit() {
+        let formatter = OutputFormatter::new(OutputFormat::Human);
+        let result = EnrichedReferencesResult {
+            label: "my_func".to_string(),
+            total_count: 50,
+            displayed: vec![EnrichedReference {
+                location: make_location("file:///src/main.py", 10, 5),
+                context: "Handler.process".to_string(),
+            }],
+            remaining_count: 49,
+        };
+        let output = formatter.format_enriched_references_results(&[result]);
+
+        assert!(
+            output.contains("Found 50 reference(s)"),
+            "should show total count, got:\n{output}"
+        );
+        assert!(output.contains("(Handler.process)"), "should show context, got:\n{output}");
+        assert!(output.contains("... and 49 more"), "should show remaining, got:\n{output}");
+    }
+
+    #[test]
+    fn test_format_enriched_references_json() {
+        let formatter = OutputFormatter::new(OutputFormat::Json);
+        let result = EnrichedReferencesResult {
+            label: "my_func".to_string(),
+            total_count: 2,
+            displayed: vec![EnrichedReference {
+                location: make_location("file:///src/main.py", 10, 5),
+                context: "Handler.process".to_string(),
+            }],
+            remaining_count: 1,
+        };
+        let output = formatter.format_enriched_references_results(&[result]);
+        let parsed: serde_json::Value = serde_json::from_str(&output).unwrap();
+
+        assert_eq!(parsed["reference_count"], 2);
+        assert_eq!(parsed["references"][0]["context"], "Handler.process");
+    }
+
+    #[test]
+    fn test_format_enriched_references_limit_zero_shows_all() {
+        let formatter = OutputFormatter::new(OutputFormat::Human);
+        // When limit is 0, remaining_count should be 0 (all displayed)
+        let result = EnrichedReferencesResult {
+            label: "my_func".to_string(),
+            total_count: 3,
+            displayed: vec![
+                EnrichedReference {
+                    location: make_location("file:///a.py", 1, 0),
+                    context: "module scope".to_string(),
+                },
+                EnrichedReference {
+                    location: make_location("file:///b.py", 2, 0),
+                    context: "foo".to_string(),
+                },
+                EnrichedReference {
+                    location: make_location("file:///c.py", 3, 0),
+                    context: "bar".to_string(),
+                },
+            ],
+            remaining_count: 0,
+        };
+        let output = formatter.format_enriched_references_results(&[result]);
+
+        assert!(
+            !output.contains("... and"),
+            "should not show truncation message when all displayed, got:\n{output}"
+        );
+        assert!(output.contains("Found 3 reference(s)"), "should show total count, got:\n{output}");
     }
 }

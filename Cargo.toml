@@ -37,6 +37,10 @@ path = "tests/integration/test_daemon.rs"
 name = "test_project_smoke"
 path = "tests/integration/test_project_smoke.rs"
 
+[[test]]
+name = "test_complex_project"
+path = "tests/integration/test_complex_project.rs"
+
 [[bin]]
 name = "tyf"
 path = "src/main.rs"

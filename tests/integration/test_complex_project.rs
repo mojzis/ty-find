@@ -706,9 +706,11 @@ async fn test_complex_project_comprehensive() {
     assert_contains(&out, "\"class_name\"", "json members");
     assert_contains(&out, "\"members\"", "json members");
 
-    // JSON refs
+    // JSON refs (enriched format uses "file" instead of "uri")
     let out = run_tyf(&["--format", "json", "refs", "Animal", "--file", &file_path("models.py")]);
-    assert_contains(&out, "\"uri\"", "json refs");
+    assert_contains(&out, "\"file\"", "json refs");
+    assert_contains(&out, "\"reference_count\"", "json refs");
+    assert_contains(&out, "\"context\"", "json refs");
 
     // CSV find
     let out = run_tyf(&["--format", "csv", "find", "Animal"]);

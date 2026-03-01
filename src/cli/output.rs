@@ -31,6 +31,45 @@ fn read_source_line(file_path: &str, line: u32) -> Option<String> {
     content.lines().nth((line - 1) as usize).map(|s| s.trim().to_string())
 }
 
+/// Read decorator lines (starting with `@`) from a file at a 0-indexed line.
+///
+/// Scans forward from `start_line_0` collecting lines that start with `@`.
+/// Returns the collected decorator lines joined with newlines, or `None` if
+/// the first line is not a decorator.
+fn read_decorators(file_path: &str, start_line_0: u32) -> Option<String> {
+    let content = std::fs::read_to_string(file_path).ok()?;
+    let lines: Vec<&str> = content.lines().collect();
+    let start = start_line_0 as usize;
+
+    let mut decorators = Vec::new();
+    for line in lines.iter().skip(start) {
+        let trimmed = line.trim();
+        if trimmed.starts_with('@') {
+            decorators.push(trimmed);
+        } else {
+            break;
+        }
+    }
+
+    if decorators.is_empty() {
+        None
+    } else {
+        Some(decorators.join("\n"))
+    }
+}
+
+/// Strip markdown code fences (`` ```lang `` / `` ``` ``) leaving only content.
+fn strip_code_fences(text: &str) -> String {
+    let mut lines: Vec<&str> = Vec::new();
+    for line in text.lines() {
+        if line.trim_start().starts_with("```") {
+            continue;
+        }
+        lines.push(line);
+    }
+    lines.join("\n")
+}
+
 impl OutputFormatter {
     #[cfg(test)]
     pub fn new(format: OutputFormat) -> Self {
@@ -347,14 +386,12 @@ impl OutputFormatter {
         }
     }
 
-    /// Extract just the type signature from hover, stripping docstrings.
+    /// Extract just the type signature from hover, stripping docstrings and code fences.
     ///
     /// ty's hover markdown is structured as:
     ///   ```lang\n<type info>\n```\n---\nDocstring...
     ///
-    /// For condensed output we only want the type info code block.
-    /// Also normalises the `xml` language tag (used by ty for class types)
-    /// to `text` for cleaner display.
+    /// Returns the bare type text without markdown fences or docstring.
     fn extract_hover_type(contents: &HoverContents) -> String {
         let full = Self::extract_hover_text(contents);
 
@@ -364,9 +401,8 @@ impl OutputFormatter {
             None => &full,
         };
 
-        // Normalise language tag: ty uses ```xml for class types like
-        // `<class 'Foo'>`, which confuses rendering. Replace with ```text.
-        type_part.replace("```xml", "```text")
+        // Strip code fences (```python, ```xml, etc.)
+        strip_code_fences(type_part)
     }
 
     /// Extract just the docstring portion from hover, if present.
@@ -436,6 +472,14 @@ impl OutputFormatter {
 
         // Type section — always shown, compact placeholder when empty
         let _ = writeln!(output, "\n{h} Type");
+        // Show decorators if the definition starts at a decorator line
+        if let Some(location) = entry.definitions.first() {
+            let file_path = self.uri_to_path(&location.uri);
+            if let Some(decs) = read_decorators(&file_path, location.range.start.line) {
+                output.push_str(&decs);
+                output.push('\n');
+            }
+        }
         if let Some(hover) = entry.hover {
             output.push_str(&Self::extract_hover_type(&hover.contents));
             output.push('\n');
@@ -498,8 +542,16 @@ impl OutputFormatter {
 
         // Type section
         let _ = writeln!(output, "{h2} Type Info");
+        // Show decorators if the definition starts at a decorator line
+        if let Some(location) = entry.definitions.first() {
+            let file_path = self.uri_to_path(&location.uri);
+            if let Some(decs) = read_decorators(&file_path, location.range.start.line) {
+                output.push_str(&decs);
+                output.push('\n');
+            }
+        }
         if let Some(hover) = entry.hover {
-            output.push_str(&Self::extract_hover_text(&hover.contents));
+            output.push_str(&strip_code_fences(&Self::extract_hover_text(&hover.contents)));
             output.push('\n');
         } else {
             output.push_str("No hover information available.\n");
@@ -1112,9 +1164,9 @@ mod tests {
         // Should strip docstring after ---
         assert!(!result.contains("Base class"));
         assert!(!result.contains("---"));
-        // Should normalise xml → text
-        assert!(result.contains("```text"));
-        assert!(result.contains("<class 'Animal'>"));
+        // Should strip code fences
+        assert!(!result.contains("```"), "should not contain code fences, got: {result}");
+        assert_eq!(result, "<class 'Animal'>");
     }
 
     #[test]
@@ -1171,12 +1223,146 @@ mod tests {
         let entry = make_entry("Animal", Some(&SymbolKind::Class), &defs, Some(&hover), &[]);
         let result = formatter.format_inspect(&entry);
 
-        // Type section should have the class type but not the docstring
-        assert!(result.contains("# Type\n```text\n<class 'Animal'>"));
+        // Type section should have the class type without code fences or docstring
+        assert!(
+            result.contains("# Type\n<class 'Animal'>"),
+            "type section should contain bare type, got:\n{result}"
+        );
+        assert!(!result.contains("```"), "should not contain code fences, got:\n{result}");
         // Doc section should have the docstring separately
         assert!(result.contains("# Doc\nBase class for animals."));
         // No raw --- separator in output
         assert!(!result.contains("\n---\n"));
+    }
+
+    #[test]
+    fn test_extract_hover_type_strips_code_fences() {
+        use crate::lsp::protocol::{HoverContents, MarkupContent};
+
+        let contents = HoverContents::Markup(MarkupContent {
+            kind: crate::lsp::protocol::MarkupKind::Markdown,
+            value: "```python\ndef hello_world() -> str\n```".to_string(),
+        });
+
+        let result = OutputFormatter::extract_hover_type(&contents);
+        // Should NOT contain backtick fences
+        assert!(!result.contains("```"), "type should not contain code fences, got: {result}");
+        assert_eq!(result, "def hello_world() -> str");
+    }
+
+    #[test]
+    fn test_extract_hover_type_strips_xml_fences() {
+        use crate::lsp::protocol::{HoverContents, MarkupContent};
+
+        let contents = HoverContents::Markup(MarkupContent {
+            kind: crate::lsp::protocol::MarkupKind::Markdown,
+            value: "```xml\n<class 'Animal'>\n```\n---\nBase class for animals.".to_string(),
+        });
+
+        let result = OutputFormatter::extract_hover_type(&contents);
+        assert!(!result.contains("```"), "type should not contain code fences, got: {result}");
+        assert_eq!(result, "<class 'Animal'>");
+    }
+
+    #[test]
+    fn test_read_decorators_single() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.py");
+        std::fs::write(&file, "@dataclass\nclass Config:\n    host: str\n").unwrap();
+
+        let result = read_decorators(file.to_str().unwrap(), 0);
+        assert_eq!(result, Some("@dataclass".to_string()));
+    }
+
+    #[test]
+    fn test_read_decorators_multiple() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.py");
+        std::fs::write(&file, "@some_decorator\n@another_decorator\ndef my_func():\n    pass\n")
+            .unwrap();
+
+        let result = read_decorators(file.to_str().unwrap(), 0);
+        assert_eq!(result, Some("@some_decorator\n@another_decorator".to_string()));
+    }
+
+    #[test]
+    fn test_read_decorators_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.py");
+        std::fs::write(&file, "class Config:\n    host: str\n").unwrap();
+
+        let result = read_decorators(file.to_str().unwrap(), 0);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_read_decorators_nonexistent_file() {
+        assert_eq!(read_decorators("/nonexistent/file.py", 0), None);
+    }
+
+    #[test]
+    fn test_condensed_inspect_shows_decorators() {
+        use crate::lsp::protocol::{Hover, HoverContents, MarkupContent, Range};
+
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.py");
+        std::fs::write(&file, "@dataclass\nclass Config:\n    host: str\n").unwrap();
+
+        let file_uri = format!("file://{}", file.to_str().unwrap());
+        let formatter = OutputFormatter::new(OutputFormat::Human);
+        // Definition starts at the decorator line (line 0)
+        let defs = [make_location(&file_uri, 0, 0)];
+        let hover = Hover {
+            contents: HoverContents::Markup(MarkupContent {
+                kind: crate::lsp::protocol::MarkupKind::Markdown,
+                value: "```xml\n<class 'Config'>\n```".to_string(),
+            }),
+            range: Some(Range {
+                start: crate::lsp::protocol::Position { line: 1, character: 6 },
+                end: crate::lsp::protocol::Position { line: 1, character: 12 },
+            }),
+        };
+        let entry = make_entry("Config", Some(&SymbolKind::Class), &defs, Some(&hover), &[]);
+        let result = formatter.format_inspect(&entry);
+
+        // Type section should show decorator before the type
+        assert!(
+            result.contains("@dataclass\n<class 'Config'>"),
+            "should show decorator in type section, got:\n{result}"
+        );
+        // No code fences
+        assert!(!result.contains("```"), "should not contain code fences, got:\n{result}");
+    }
+
+    #[test]
+    fn test_condensed_inspect_no_decorator_no_crash() {
+        use crate::lsp::protocol::{Hover, HoverContents, MarkupContent, Range};
+
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.py");
+        std::fs::write(&file, "class Animal:\n    pass\n").unwrap();
+
+        let file_uri = format!("file://{}", file.to_str().unwrap());
+        let formatter = OutputFormatter::new(OutputFormat::Human);
+        let defs = [make_location(&file_uri, 0, 0)];
+        let hover = Hover {
+            contents: HoverContents::Markup(MarkupContent {
+                kind: crate::lsp::protocol::MarkupKind::Markdown,
+                value: "```xml\n<class 'Animal'>\n```".to_string(),
+            }),
+            range: Some(Range {
+                start: crate::lsp::protocol::Position { line: 0, character: 6 },
+                end: crate::lsp::protocol::Position { line: 0, character: 12 },
+            }),
+        };
+        let entry = make_entry("Animal", Some(&SymbolKind::Class), &defs, Some(&hover), &[]);
+        let result = formatter.format_inspect(&entry);
+
+        // Should show type without decorator (none exists)
+        assert!(
+            result.contains("# Type\n<class 'Animal'>"),
+            "should show type without decorator, got:\n{result}"
+        );
     }
 
     #[cfg(unix)]

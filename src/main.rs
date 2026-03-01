@@ -69,7 +69,15 @@ async fn run(cli: Cli) -> Result<()> {
             )
             .await?;
         }
-        Commands::References { queries, file, line, column, stdin, include_declaration } => {
+        Commands::References {
+            queries,
+            file,
+            line,
+            column,
+            stdin,
+            include_declaration,
+            references_limit,
+        } => {
             let position = line.zip(column);
             commands::handle_references_command(
                 &workspace_root,
@@ -78,6 +86,7 @@ async fn run(cli: Cli) -> Result<()> {
                 position,
                 stdin,
                 include_declaration,
+                references_limit,
                 &formatter,
                 timeout,
             )
@@ -98,7 +107,7 @@ async fn run(cli: Cli) -> Result<()> {
             commands::handle_document_symbols_command(&workspace_root, &file, &formatter, timeout)
                 .await?;
         }
-        Commands::Inspect { file, symbols, references } => {
+        Commands::Inspect { file, symbols, references, references_limit } => {
             commands::handle_inspect_command(
                 &workspace_root,
                 file.as_deref(),
@@ -106,6 +115,7 @@ async fn run(cli: Cli) -> Result<()> {
                 &formatter,
                 timeout,
                 references,
+                references_limit,
             )
             .await?;
         }

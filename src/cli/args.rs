@@ -80,9 +80,13 @@ pub enum Commands {
         #[arg(short, long)]
         file: Option<PathBuf>,
 
-        /// Also find all references (can be slow on large codebases)
+        /// Show individual reference locations (capped by --references-limit)
         #[arg(short, long, default_value_t = false)]
         references: bool,
+
+        /// Maximum number of individual references to display (0 = unlimited)
+        #[arg(long, default_value_t = 20)]
+        references_limit: usize,
     },
 
     /// Find where a symbol is defined by name (--fuzzy for partial matching)
@@ -144,6 +148,10 @@ pub enum Commands {
         /// Include the declaration in the results
         #[arg(long, default_value_t = true)]
         include_declaration: bool,
+
+        /// Maximum number of individual references to display (0 = unlimited)
+        #[arg(long, default_value_t = 20)]
+        references_limit: usize,
     },
 
     /// Public interface of a class: methods, properties, and class variables

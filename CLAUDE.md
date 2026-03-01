@@ -163,9 +163,10 @@ Then re-run the full check suite (`cargo fmt --check && cargo clippy --all-targe
 
 Before marking any task as complete, run the review process:
 
-1. **Automated checks** (runs automatically via TaskCompleted hook):
+1. **Automated checks** (run automatically via prek pre-commit hook on `git commit`):
    - `cargo fmt --all -- --check`
    - `cargo clippy --all-targets --all-features -- -D warnings`
+   - `cargo test --all-features --bins`
 
 2. **Deep review** (REQUIRED for all significant changes):
    - You MUST run the `rust-review` skill (`/rust-review`) before marking work as complete or pushing code

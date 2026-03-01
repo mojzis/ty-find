@@ -3,13 +3,7 @@
     "SessionStart": [
       {
         "type": "command",
-        "command": "uv sync --dev"
-      }
-    ],
-    "TaskCompleted": [
-      {
-        "type": "command",
-        "command": "cargo fmt --check && cargo clippy --all-features -- -D warnings"
+        "command": "uv sync --dev && cargo install prek && prek install"
       }
     ]
   }

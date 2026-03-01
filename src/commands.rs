@@ -22,12 +22,15 @@ fn dedup_locations(locations: &mut Vec<Location>) {
     locations.retain(|loc| seen.insert((loc.uri.clone(), loc.range.start.line)));
 }
 
-/// Find the column where `name` appears on a given 0-indexed line of a file.
+/// Find the (line, column) where `name` appears, starting at a given 0-indexed line.
 ///
 /// Workspace-symbol responses return the range of the full declaration
-/// (e.g. the `class` keyword), but hover/references need the cursor on the
-/// *name* itself. This helper reads the source line and locates the name.
-async fn find_name_column(file_path: &str, line_0: u32, name: &str) -> Option<u32> {
+/// (e.g. the `class` keyword or a decorator), but hover/references need the
+/// cursor on the *name* itself. This helper reads the source and locates the
+/// name — first on the reported line, then on a few subsequent lines to handle
+/// decorators (`@dataclass`, `@property`, etc.) that shift the symbol start
+/// before the actual `class`/`def` keyword.
+async fn find_name_column(file_path: &str, line_0: u32, name: &str) -> Option<(u32, u32)> {
     let content = match tokio::fs::read_to_string(file_path).await {
         Ok(c) => c,
         Err(e) => {
@@ -35,22 +38,31 @@ async fn find_name_column(file_path: &str, line_0: u32, name: &str) -> Option<u3
             return None;
         }
     };
-    let Some(src_line) = content.lines().nth(line_0 as usize) else {
+    let lines: Vec<&str> = content.lines().collect();
+    let start = line_0 as usize;
+    if start >= lines.len() {
         tracing::debug!(
             "find_name_column: line {line_0} out of range in {file_path} ({} lines)",
-            content.lines().count()
+            lines.len()
         );
         return None;
-    };
-    if let Some(col) = src_line.find(name) {
-        tracing::debug!(
-            "find_name_column: found '{name}' at col {col} on line {line_0} of {file_path}"
-        );
-        u32::try_from(col).ok()
-    } else {
-        tracing::debug!("find_name_column: '{name}' not found on line {line_0}: {:?}", src_line);
-        None
     }
+
+    // Search the reported line first, then up to 10 subsequent lines
+    // to skip past decorator stacks like @dataclass, @property, etc.
+    for (idx, src_line) in lines.iter().enumerate().skip(start).take(11) {
+        if let Some(col) = src_line.find(name) {
+            let line = u32::try_from(idx).ok()?;
+            let col = u32::try_from(col).ok()?;
+            tracing::debug!(
+                "find_name_column: found '{name}' at line {line} col {col} in {file_path}"
+            );
+            return Some((line, col));
+        }
+    }
+
+    tracing::debug!("find_name_column: '{name}' not found near line {line_0} in {file_path}");
+    None
 }
 
 /// Try to parse a string as `file:line:col`. Returns `None` if it doesn't match.
@@ -136,12 +148,12 @@ async fn resolve_symbols_to_queries(
                         .strip_prefix("file://")
                         .unwrap_or(&sym_info.location.uri)
                         .to_string();
-                    let line = sym_info.location.range.start.line;
-                    // Workspace-symbol range.start points at the declaration
-                    // keyword; hover/references need the symbol *name* column.
-                    let column = find_name_column(&file_path, line, &sym_info.name)
+                    let ws_line = sym_info.location.range.start.line;
+                    // Workspace-symbol range.start may point at a decorator
+                    // or keyword; hover/references need the symbol *name*.
+                    let (line, column) = find_name_column(&file_path, ws_line, &sym_info.name)
                         .await
-                        .unwrap_or(sym_info.location.range.start.character);
+                        .unwrap_or((ws_line, sym_info.location.range.start.character));
                     resolved.push(ResolvedQuery {
                         label: symbol.clone(),
                         file: file_path,
@@ -575,14 +587,14 @@ async fn inspect_single_symbol(
             let first = &matched[0];
             let file_path =
                 first.location.uri.strip_prefix("file://").unwrap_or(&first.location.uri);
-            let def_line = first.location.range.start.line;
+            let ws_line = first.location.range.start.line;
             let ws_col = first.location.range.start.character;
-            // Workspace-symbol range.start points at the declaration keyword
-            // (e.g. "class"), but hover/references need the symbol *name* column.
-            let name_col = find_name_column(file_path, def_line, &first.name).await;
-            let def_col = name_col.unwrap_or(ws_col);
+            // Workspace-symbol range.start may point at a decorator or keyword;
+            // hover/references need the symbol *name* position.
+            let name_pos = find_name_column(file_path, ws_line, &first.name).await;
+            let (def_line, def_col) = name_pos.unwrap_or((ws_line, ws_col));
             tracing::debug!(
-                "inspect: workspace-symbol col={ws_col}, name_col={name_col:?}, using col={def_col} for '{}'",
+                "inspect: workspace-symbol line={ws_line} col={ws_col}, resolved line={def_line} col={def_col} for '{}'",
                 first.name
             );
             let all_definitions: Vec<Location> =
@@ -897,20 +909,20 @@ mod tests {
 
     #[tokio::test]
     async fn test_find_name_column_class() {
-        // "class Animal:" — "Animal" starts at column 6
+        // "class Animal:" — "Animal" starts at line 0 column 6
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("test.py");
         std::fs::write(&file, "class Animal:\n    pass\n").unwrap();
-        assert_eq!(find_name_column(file.to_str().unwrap(), 0, "Animal").await, Some(6));
+        assert_eq!(find_name_column(file.to_str().unwrap(), 0, "Animal").await, Some((0, 6)));
     }
 
     #[tokio::test]
     async fn test_find_name_column_function() {
-        // "def create_dog(name):" — "create_dog" starts at column 4
+        // "def create_dog(name):" — "create_dog" starts at line 0 column 4
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("test.py");
         std::fs::write(&file, "def create_dog(name):\n    pass\n").unwrap();
-        assert_eq!(find_name_column(file.to_str().unwrap(), 0, "create_dog").await, Some(4));
+        assert_eq!(find_name_column(file.to_str().unwrap(), 0, "create_dog").await, Some((0, 4)));
     }
 
     #[tokio::test]
@@ -924,5 +936,24 @@ mod tests {
     #[tokio::test]
     async fn test_find_name_column_nonexistent_file() {
         assert_eq!(find_name_column("/nonexistent/file.py", 0, "Animal").await, None);
+    }
+
+    #[tokio::test]
+    async fn test_find_name_column_decorated_class() {
+        // Workspace symbol points at line 0 (@dataclass), but name is on line 1
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.py");
+        std::fs::write(&file, "@dataclass\nclass Config:\n    host: str\n").unwrap();
+        assert_eq!(find_name_column(file.to_str().unwrap(), 0, "Config").await, Some((1, 6)));
+    }
+
+    #[tokio::test]
+    async fn test_find_name_column_multi_decorator() {
+        // Multiple decorators stacked
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.py");
+        std::fs::write(&file, "@some_decorator\n@another_decorator\ndef my_func():\n    pass\n")
+            .unwrap();
+        assert_eq!(find_name_column(file.to_str().unwrap(), 0, "my_func").await, Some((2, 4)));
     }
 }

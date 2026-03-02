@@ -62,21 +62,21 @@ impl Styler {
         Self { color: UseColor::No }
     }
 
-    /// Section headings: `Definition:`, `Type:`, `Methods:`, etc.
-    /// Bold cyan.
+    /// Section headings: `## Def`, `## Type`, `## Refs`, etc.
+    /// Bold green — distinct from cyan file paths.
     pub fn heading(self, text: &str) -> String {
         if self.color.enabled() {
-            format!("{}", text.bold().cyan())
+            format!("{}", text.bold().green())
         } else {
             text.to_string()
         }
     }
 
-    /// Top-level symbol names: `MyClass`, `calculate_sum`.
-    /// Bold white.
+    /// Top-level symbol names: `# MyClass`, `# calculate_sum`.
+    /// Bold magenta underlined — prominent on both light and dark backgrounds.
     pub fn symbol(self, text: &str) -> String {
         if self.color.enabled() {
-            format!("{}", text.bold().white())
+            format!("{}", text.bold().magenta().underline())
         } else {
             text.to_string()
         }

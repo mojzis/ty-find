@@ -22,7 +22,7 @@ supports-color = "3"
 libc = "0.2"
 
 [dev-dependencies]
-tempfile = "3.25"
+tempfile = "3.26"
 assert_cmd = "2.1"
 predicates = "3.1"
 libc = "0.2"

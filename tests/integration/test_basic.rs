@@ -10,7 +10,7 @@ use std::process;
 /// Path to the shared test fixture at the repo root.
 fn fixture_path() -> PathBuf {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    manifest_dir.join("test_example.py")
+    manifest_dir.join("example.py")
 }
 
 /// Workspace root (repo root) used as the `--workspace` argument.
@@ -22,7 +22,7 @@ fn workspace_root() -> PathBuf {
 async fn test_find_command() {
     common::require_ty();
 
-    // Find the `add` method in test_example.py
+    // Find the `add` method in example.py
     let mut cmd = cargo_bin_cmd!("tyf");
     cmd.arg("--workspace")
         .arg(workspace_root())
@@ -78,7 +78,7 @@ async fn test_inspect_command_with_file() {
 
     // Definition section must show the file location
     assert!(
-        predicate::str::contains("test_example.py:1:").eval(&stdout),
+        predicate::str::contains("example.py:1:").eval(&stdout),
         "inspect should find definition, got:\n{stdout}"
     );
     // Hover/Type section must contain actual type info (not "(none)")
@@ -111,7 +111,7 @@ async fn test_inspect_command_workspace_symbols() {
 
     // Definition section must show the file location
     assert!(
-        predicate::str::contains("test_example.py:1:").eval(&stdout),
+        predicate::str::contains("example.py:1:").eval(&stdout),
         "inspect should find definition, got:\n{stdout}"
     );
     // Hover/Type section must contain actual type info (not "(none)")
@@ -171,7 +171,7 @@ async fn test_inspect_command_with_references() {
 
     // Definition
     assert!(
-        predicate::str::contains("test_example.py:1:").eval(&stdout),
+        predicate::str::contains("example.py:1:").eval(&stdout),
         "should find hello_world definition, got:\n{stdout}"
     );
     // Hover must have actual type info
@@ -190,7 +190,7 @@ async fn test_inspect_command_with_references() {
     );
     // With -r, individual refs should be listed with enclosing context
     assert!(
-        predicate::str::contains("test_example.py:").eval(&stdout),
+        predicate::str::contains("example.py:").eval(&stdout),
         "individual references should be displayed, got:\n{stdout}"
     );
 }
@@ -214,7 +214,7 @@ async fn test_references_by_position() {
     let output = cmd.output().expect("failed to run tyf");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(output.status.success(), "command failed: {stdout}");
-    assert!(predicate::str::contains("test_example.py").eval(&stdout));
+    assert!(predicate::str::contains("example.py").eval(&stdout));
 }
 
 #[tokio::test]
@@ -303,7 +303,7 @@ async fn test_references_file_line_col_format() {
     let output = cmd.output().expect("failed to run tyf");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(output.status.success(), "command failed: {stdout}");
-    assert!(predicate::str::contains("test_example.py").eval(&stdout));
+    assert!(predicate::str::contains("example.py").eval(&stdout));
 }
 
 // ── Members command tests ──────────────────────────────────────────────
@@ -311,7 +311,7 @@ async fn test_references_file_line_col_format() {
 /// Path to the members test fixture.
 fn members_fixture_path() -> PathBuf {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    manifest_dir.join("test_members.py")
+    manifest_dir.join("members_example.py")
 }
 
 #[tokio::test]
@@ -609,11 +609,11 @@ async fn test_inspect_enriched_refs_show_context() {
     assert!(output.status.success(), "command failed: {stdout}");
 
     // Each reference line should have a context in parentheses
-    // e.g. "test_example.py:45:12 (main)" or "test_example.py:1:5 (module scope)"
+    // e.g. "example.py:45:12 (main)" or "example.py:1:5 (module scope)"
     let refs_section = stdout.split("# Refs:").nth(1).unwrap_or("");
-    let has_context = refs_section.lines().any(|line| {
-        line.contains("test_example.py:") && (line.contains('(') && line.contains(')'))
-    });
+    let has_context = refs_section
+        .lines()
+        .any(|line| line.contains("example.py:") && (line.contains('(') && line.contains(')')));
     assert!(has_context, "references should include enclosing context, got:\n{stdout}");
 }
 
@@ -642,7 +642,7 @@ async fn test_inspect_module_scope_reference() {
     // (we just verify context parentheses are present for all displayed refs)
     let refs_section = stdout.split("# Refs:").nth(1).unwrap_or("");
     for line in refs_section.lines() {
-        if line.contains("test_example.py:") && line.contains(':') {
+        if line.contains("example.py:") && line.contains(':') {
             // Each ref line should have context
             assert!(
                 line.contains('('),
@@ -699,7 +699,6 @@ async fn test_references_command_enriched_context() {
     assert!(output.status.success(), "command failed: {stdout}");
 
     // Each reference line should include enclosing context
-    let has_context =
-        stdout.lines().any(|line| line.contains("test_example.py:") && line.contains('('));
+    let has_context = stdout.lines().any(|line| line.contains("example.py:") && line.contains('('));
     assert!(has_context, "references should include context, got:\n{stdout}");
 }

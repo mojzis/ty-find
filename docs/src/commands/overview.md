@@ -17,9 +17,16 @@ tyf [OPTIONS] <COMMAND>
 : Enable verbose output
 
 **`--format`**
+: Output format: human (default), json, csv, or paths
+
+**`--detail`**
+: Output detail level: condensed (token-efficient, default) or full (verbose)
 
 **`--timeout`**
 : Timeout in seconds for daemon operations (default: 30)
+
+**`--color`**
+: When to use colored output: auto (default), always, or never. Respects the `NO_COLOR` environment variable.
 
 ## Commands
 

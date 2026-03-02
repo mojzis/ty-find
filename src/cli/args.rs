@@ -2,6 +2,18 @@ use clap::builder::styling::{AnsiColor, Styles};
 use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
+/// When to use colored output.
+#[derive(Clone, Default, ValueEnum)]
+pub enum ColorMode {
+    /// Colour if stdout is a TTY (default)
+    #[default]
+    Auto,
+    /// Always emit ANSI colours
+    Always,
+    /// Never emit ANSI colours
+    Never,
+}
+
 const STYLES: Styles = Styles::styled()
     .header(AnsiColor::Green.on_default().bold())
     .literal(AnsiColor::Cyan.on_default().bold())
@@ -55,6 +67,10 @@ pub struct Cli {
     /// Timeout in seconds for daemon operations (default: 30)
     #[arg(long, value_name = "SECS")]
     pub timeout: Option<u64>,
+
+    /// When to use colored output [default: auto]
+    #[arg(long, value_enum, default_value_t = ColorMode::Auto)]
+    pub color: ColorMode,
 }
 
 #[derive(Subcommand)]
@@ -259,6 +275,7 @@ mod tests {
             "--format",
             "--detail",
             "--timeout",
+            "--color",
             "--help",
             "--version",
         ];

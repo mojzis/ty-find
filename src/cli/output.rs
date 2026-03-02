@@ -1,4 +1,5 @@
 use crate::cli::args::{OutputDetail, OutputFormat};
+use crate::cli::style::Styler;
 #[cfg(unix)]
 use crate::daemon::protocol::{MemberInfo, MembersResult};
 use crate::lsp::protocol::{
@@ -39,6 +40,7 @@ pub struct OutputFormatter {
     format: OutputFormat,
     detail: OutputDetail,
     cwd: PathBuf,
+    s: Styler,
 }
 
 /// Read a single line of source code from a file (1-based line number).
@@ -189,11 +191,30 @@ fn strip_code_fences(text: &str) -> String {
 impl OutputFormatter {
     #[cfg(test)]
     pub fn new(format: OutputFormat) -> Self {
-        Self::with_detail(format, OutputDetail::default())
+        Self::with_detail_and_styler(format, OutputDetail::default(), Styler::no_color())
     }
 
-    pub fn with_detail(format: OutputFormat, detail: OutputDetail) -> Self {
-        Self { format, detail, cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")) }
+    pub fn with_detail(format: OutputFormat, detail: OutputDetail, styler: Styler) -> Self {
+        Self::with_detail_and_styler(format, detail, styler)
+    }
+
+    fn with_detail_and_styler(format: OutputFormat, detail: OutputDetail, styler: Styler) -> Self {
+        // Non-human formats never get color, regardless of the flag.
+        let s = match format {
+            OutputFormat::Human => styler,
+            _ => Styler::no_color(),
+        };
+        Self {
+            format,
+            detail,
+            cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
+            s,
+        }
+    }
+
+    /// Access the styler (used for error formatting from main).
+    pub fn styler(&self) -> Styler {
+        self.s
     }
 
     pub fn format_definitions(&self, locations: &[Location], query_info: &str) -> String {
@@ -217,7 +238,8 @@ impl OutputFormatter {
             let line = location.range.start.line + 1;
             let column = location.range.start.character + 1;
 
-            let _ = writeln!(output, "{}. {file_path}:{line}:{column}", i + 1);
+            let _ =
+                writeln!(output, "{}. {}", i + 1, self.s.file_location(&file_path, line, column));
 
             if let Some(src) = read_source_line(&file_path, line) {
                 let _ = writeln!(output, "   {src}");
@@ -277,7 +299,7 @@ impl OutputFormatter {
             OutputFormat::Human => {
                 let mut output = String::new();
                 for (symbol, locations) in results {
-                    let _ = writeln!(output, "=== {symbol} ===");
+                    let _ = writeln!(output, "=== {} ===", self.s.symbol(symbol));
                     if locations.is_empty() {
                         output.push_str("No definitions found.\n");
                     } else {
@@ -338,7 +360,7 @@ impl OutputFormatter {
             OutputFormat::Human => {
                 let mut output = String::new();
                 for result in results {
-                    let _ = writeln!(output, "=== {} ===", result.label);
+                    let _ = writeln!(output, "=== {} ===", self.s.symbol(&result.label));
                     output.push_str(&self.format_enriched_references_single(result));
                     output.push('\n');
                 }
@@ -396,9 +418,10 @@ impl OutputFormatter {
 
                     let _ = writeln!(
                         output,
-                        "{}. {file_path}:{line}:{column} ({})",
+                        "{}. {} ({})",
                         i + 1,
-                        enriched.context
+                        self.s.file_location(&file_path, line, column),
+                        self.s.dim(&enriched.context),
                     );
 
                     if let Some(src) = read_source_line(&file_path, line) {
@@ -473,12 +496,14 @@ impl OutputFormatter {
                     let line = symbol.location.range.start.line + 1;
                     let column = symbol.location.range.start.character + 1;
 
+                    let kind_str = format!("({:?})", symbol.kind);
                     let _ = write!(
                         output,
-                        "{}. {} ({:?})\n   {file_path}:{line}:{column}\n\n",
+                        "{}. {} {}\n   {}\n\n",
                         i + 1,
-                        symbol.name,
-                        symbol.kind,
+                        self.s.symbol(&symbol.name),
+                        self.s.dim(&kind_str),
+                        self.s.file_location(&file_path, line, column),
                     );
                 }
 
@@ -658,9 +683,11 @@ impl OutputFormatter {
 
         // Def section — paths only, no source snippets (symbol name is already known)
         if let Some(kind) = entry.kind {
-            let _ = writeln!(output, "{h} Def ({})", Self::kind_label(kind));
+            let heading = format!("{h} Def ({})", Self::kind_label(kind));
+            let _ = writeln!(output, "{}", self.s.heading(&heading));
         } else {
-            let _ = writeln!(output, "{h} Def");
+            let heading = format!("{h} Def");
+            let _ = writeln!(output, "{}", self.s.heading(&heading));
         }
         if entry.definitions.is_empty() {
             output.push_str("(none)\n");
@@ -669,7 +696,7 @@ impl OutputFormatter {
                 let file_path = self.uri_to_path(&location.uri);
                 let line = location.range.start.line + 1;
                 let column = location.range.start.character + 1;
-                let _ = writeln!(output, "{file_path}:{line}:{column}");
+                let _ = writeln!(output, "{}", self.s.file_location(&file_path, line, column));
             }
         }
 
@@ -679,34 +706,41 @@ impl OutputFormatter {
         // instead of ty's bare `<class 'Dog'>`, since the source line preserves
         // inheritance information that the hover response strips away.
         // For everything else: use the hover type which includes inferred types.
-        let _ = writeln!(output, "\n{h} Type");
+        let type_heading = format!("\n{h} Type");
+        let _ = writeln!(output, "{}", self.s.heading(&type_heading));
         self.write_type_section(&mut output, entry.definitions.first(), entry.hover, "(none)\n");
 
         // Doc section — only shown when a docstring is present
         if let Some(hover) = entry.hover {
             if let Some(doc) = Self::extract_hover_doc(&hover.contents) {
-                let _ = writeln!(output, "\n{h} Doc");
+                let doc_heading = format!("\n{h} Doc");
+                let _ = writeln!(output, "{}", self.s.heading(&doc_heading));
                 output.push_str(&doc);
                 output.push('\n');
             }
         }
 
         // Refs section — always show count summary
-        let _ = write!(output, "\n{h} Refs");
         if entry.total_reference_count == 0 {
-            output.push_str(": none\n");
+            let refs_heading = format!("\n{h} Refs: none");
+            let _ = writeln!(output, "{}", self.s.heading(&refs_heading));
         } else {
-            let _ = writeln!(
-                output,
-                ": {} across {} file(s)",
+            let refs_heading = format!(
+                "\n{h} Refs: {} across {} file(s)",
                 entry.total_reference_count, entry.total_reference_files
             );
+            let _ = writeln!(output, "{}", self.s.heading(&refs_heading));
             if entry.show_individual_refs {
                 for enriched in &entry.displayed_references {
                     let file_path = self.uri_to_path(&enriched.location.uri);
                     let line = enriched.location.range.start.line + 1;
                     let column = enriched.location.range.start.character + 1;
-                    let _ = writeln!(output, "{file_path}:{line}:{column} ({})", enriched.context);
+                    let _ = writeln!(
+                        output,
+                        "{} ({})",
+                        self.s.file_location(&file_path, line, column),
+                        self.s.dim(&enriched.context),
+                    );
                 }
                 if entry.remaining_reference_count > 0 {
                     let _ = writeln!(
@@ -724,10 +758,13 @@ impl OutputFormatter {
     fn format_inspect_full(&self, entry: &InspectEntry<'_>, h_level: u8) -> String {
         let h = "#".repeat(h_level as usize);
         let h2 = "#".repeat(h_level as usize + 1);
-        let mut output = format!("{h} Inspect: {}\n\n", entry.symbol);
+
+        let inspect_heading = format!("{h} Inspect: {}", entry.symbol);
+        let mut output = format!("{}\n\n", self.s.heading(&inspect_heading));
 
         // Definition section
-        let _ = writeln!(output, "{h2} Definition");
+        let def_heading = format!("{h2} Definition");
+        let _ = writeln!(output, "{}", self.s.heading(&def_heading));
         if entry.definitions.is_empty() {
             output.push_str("No definitions found.\n");
         } else {
@@ -735,7 +772,12 @@ impl OutputFormatter {
                 let file_path = self.uri_to_path(&location.uri);
                 let line = location.range.start.line + 1;
                 let column = location.range.start.character + 1;
-                let _ = writeln!(output, "{}. {file_path}:{line}:{column}", i + 1);
+                let _ = writeln!(
+                    output,
+                    "{}. {}",
+                    i + 1,
+                    self.s.file_location(&file_path, line, column)
+                );
 
                 if let Some(src) = read_source_line(&file_path, line) {
                     let _ = writeln!(output, "   {src}");
@@ -745,7 +787,8 @@ impl OutputFormatter {
         output.push('\n');
 
         // Type section — same class-vs-other logic as condensed mode
-        let _ = writeln!(output, "{h2} Type Info");
+        let type_heading = format!("{h2} Type Info");
+        let _ = writeln!(output, "{}", self.s.heading(&type_heading));
         self.write_type_section(
             &mut output,
             entry.definitions.first(),
@@ -755,7 +798,8 @@ impl OutputFormatter {
         output.push('\n');
 
         // References section — always show count summary
-        let _ = writeln!(output, "{h2} References");
+        let refs_heading = format!("{h2} References");
+        let _ = writeln!(output, "{}", self.s.heading(&refs_heading));
         if entry.total_reference_count == 0 {
             output.push_str("No references found.\n");
         } else {
@@ -771,9 +815,10 @@ impl OutputFormatter {
                     let column = enriched.location.range.start.character + 1;
                     let _ = writeln!(
                         output,
-                        "{}. {file_path}:{line}:{column} ({})",
+                        "{}. {} ({})",
                         i + 1,
-                        enriched.context
+                        self.s.file_location(&file_path, line, column),
+                        self.s.dim(&enriched.context),
                     );
 
                     if let Some(src) = read_source_line(&file_path, line) {
@@ -879,7 +924,8 @@ impl OutputFormatter {
                 let mut output = String::new();
                 for entry in results {
                     // Multi-symbol: symbol name gets top-level heading, sections get sub-headings
-                    let _ = writeln!(output, "# {}", entry.symbol);
+                    let symbol_heading = format!("# {}", entry.symbol);
+                    let _ = writeln!(output, "{}", self.s.symbol(&symbol_heading));
                     output.push_str(&self.format_inspect_human(entry, 2));
                     output.push('\n');
                 }
@@ -955,12 +1001,17 @@ fn categorize_members(
 
 /// Format members as human-readable text for a single class.
 #[cfg(unix)]
-fn format_members_human(result: &MembersResult, file_path: &str) -> String {
+fn format_members_human(result: &MembersResult, file_path: &str, s: Styler) -> String {
     let mut output = String::new();
 
     let class_line = result.class_line + 1;
     let class_col = result.class_column + 1;
-    let _ = writeln!(output, "{} ({file_path}:{class_line}:{class_col})", result.class_name);
+    let _ = writeln!(
+        output,
+        "{} ({})",
+        s.symbol(&result.class_name),
+        s.file_location(file_path, class_line, class_col),
+    );
 
     if result.members.is_empty() {
         let _ = writeln!(output, "  (no public members)");
@@ -970,32 +1021,35 @@ fn format_members_human(result: &MembersResult, file_path: &str) -> String {
     let (methods, properties, class_vars) = categorize_members(&result.members);
 
     if !methods.is_empty() {
-        let _ = writeln!(output, "  Methods:");
+        let _ = writeln!(output, "  {}:", s.heading("Methods"));
         for m in &methods {
             let sig = m.signature.as_deref().unwrap_or(&m.name);
             let line = m.line + 1;
             let col = m.column + 1;
-            let _ = writeln!(output, "    {sig:<60} :{line}:{col}");
+            let loc = format!(":{line}:{col}");
+            let _ = writeln!(output, "    {sig:<60} {}", s.line_col(&loc));
         }
     }
 
     if !properties.is_empty() {
-        let _ = writeln!(output, "  Properties:");
+        let _ = writeln!(output, "  {}:", s.heading("Properties"));
         for m in &properties {
             let sig = m.signature.as_deref().unwrap_or(&m.name);
             let line = m.line + 1;
             let col = m.column + 1;
-            let _ = writeln!(output, "    {sig:<60} :{line}:{col}");
+            let loc = format!(":{line}:{col}");
+            let _ = writeln!(output, "    {sig:<60} {}", s.line_col(&loc));
         }
     }
 
     if !class_vars.is_empty() {
-        let _ = writeln!(output, "  Class variables:");
+        let _ = writeln!(output, "  {}:", s.heading("Class variables"));
         for m in &class_vars {
             let sig = m.signature.as_deref().unwrap_or(&m.name);
             let line = m.line + 1;
             let col = m.column + 1;
-            let _ = writeln!(output, "    {sig:<60} :{line}:{col}");
+            let loc = format!(":{line}:{col}");
+            let _ = writeln!(output, "    {sig:<60} {}", s.line_col(&loc));
         }
     }
 
@@ -1009,7 +1063,7 @@ impl OutputFormatter {
         let file_path = self.uri_to_path(&result.file_uri);
 
         match self.format {
-            OutputFormat::Human => format_members_human(result, &file_path),
+            OutputFormat::Human => format_members_human(result, &file_path, self.s),
             OutputFormat::Json => {
                 serde_json::to_string_pretty(result).unwrap_or_else(|_| "{}".to_string())
             }
@@ -1310,7 +1364,11 @@ mod tests {
 
     #[test]
     fn test_format_inspect_refs_count_without_individual_full() {
-        let formatter = OutputFormatter::with_detail(OutputFormat::Human, OutputDetail::Full);
+        let formatter = OutputFormatter::with_detail(
+            OutputFormat::Human,
+            OutputDetail::Full,
+            Styler::no_color(),
+        );
         let defs = [make_location("file:///test.py", 0, 0)];
         let entry = InspectEntry {
             symbol: "Animal",
@@ -1345,7 +1403,11 @@ mod tests {
 
     #[test]
     fn test_format_inspect_full_empty() {
-        let formatter = OutputFormatter::with_detail(OutputFormat::Human, OutputDetail::Full);
+        let formatter = OutputFormatter::with_detail(
+            OutputFormat::Human,
+            OutputDetail::Full,
+            Styler::no_color(),
+        );
         let entry = make_entry("missing", None, &[], None);
         let result = formatter.format_inspect(&entry);
 
@@ -1744,11 +1806,11 @@ mod tests {
     }
 
     #[cfg(unix)]
-    mod members_tests {
+    pub(super) mod members_tests {
         use super::*;
         use crate::daemon::protocol::{MemberInfo, MembersResult};
 
-        fn make_members_result() -> MembersResult {
+        pub(super) fn make_members_result() -> MembersResult {
             MembersResult {
                 class_name: "Animal".to_string(),
                 file_uri: "file:///src/models.py".to_string(),
@@ -2119,5 +2181,164 @@ mod tests {
             "should not show truncation message when all displayed, got:\n{output}"
         );
         assert!(output.contains("Found 3 reference(s)"), "should show total count, got:\n{output}");
+    }
+
+    // ── Color output tests ──────────────────────────────────────────────
+
+    /// Returns true if the string contains any ANSI escape sequences.
+    fn has_ansi(s: &str) -> bool {
+        s.contains('\x1b')
+    }
+
+    /// Create a formatter with color always enabled (for testing).
+    fn formatter_with_color() -> OutputFormatter {
+        use crate::cli::style::UseColor;
+        OutputFormatter::with_detail_and_styler(
+            OutputFormat::Human,
+            OutputDetail::Condensed,
+            Styler::new(UseColor::Yes),
+        )
+    }
+
+    #[test]
+    fn test_color_never_produces_no_ansi_in_inspect() {
+        // Default test formatter uses no_color
+        let formatter = OutputFormatter::new(OutputFormat::Human);
+        let defs = [make_location("file:///test.py", 0, 0)];
+        let entry = InspectEntry {
+            symbol: "my_func",
+            kind: Some(&SymbolKind::Function),
+            definitions: &defs,
+            hover: None,
+            total_reference_count: 3,
+            total_reference_files: 1,
+            displayed_references: Vec::new(),
+            remaining_reference_count: 0,
+            show_individual_refs: false,
+        };
+        let result = formatter.format_inspect(&entry);
+
+        assert!(
+            !has_ansi(&result),
+            "color=never should produce zero ANSI escape sequences, got:\n{result:?}"
+        );
+    }
+
+    #[test]
+    fn test_color_always_produces_ansi_in_inspect_headings() {
+        let formatter = formatter_with_color();
+        let defs = [make_location("file:///test.py", 0, 0)];
+        let entry = InspectEntry {
+            symbol: "my_func",
+            kind: Some(&SymbolKind::Function),
+            definitions: &defs,
+            hover: None,
+            total_reference_count: 3,
+            total_reference_files: 1,
+            displayed_references: Vec::new(),
+            remaining_reference_count: 0,
+            show_individual_refs: false,
+        };
+        let result = formatter.format_inspect(&entry);
+
+        assert!(
+            has_ansi(&result),
+            "color=always should produce ANSI escape sequences in headings, got:\n{result:?}"
+        );
+        // Verify that section headings contain ANSI (bold cyan = ESC[1m...ESC[36m)
+        assert!(result.contains("\x1b["), "should contain ANSI escape codes");
+    }
+
+    #[test]
+    fn test_color_never_produces_no_ansi_in_find() {
+        let formatter = OutputFormatter::new(OutputFormat::Human);
+        let results = vec![
+            ("foo".to_string(), vec![make_location("file:///test.py", 0, 0)]),
+            ("bar".to_string(), vec![]),
+        ];
+        let result = formatter.format_find_results(&results);
+
+        assert!(
+            !has_ansi(&result),
+            "color=never should produce zero ANSI in find output, got:\n{result:?}"
+        );
+    }
+
+    #[test]
+    fn test_color_always_produces_ansi_in_find() {
+        let formatter = formatter_with_color();
+        let results = vec![
+            ("foo".to_string(), vec![make_location("file:///test.py", 0, 0)]),
+            ("bar".to_string(), vec![]),
+        ];
+        let result = formatter.format_find_results(&results);
+
+        assert!(
+            has_ansi(&result),
+            "color=always should produce ANSI in find output, got:\n{result:?}"
+        );
+    }
+
+    #[test]
+    fn test_json_format_never_gets_color() {
+        // Even with a color-enabled styler, JSON format should strip color
+        use crate::cli::style::UseColor;
+        let formatter = OutputFormatter::with_detail_and_styler(
+            OutputFormat::Json,
+            OutputDetail::Condensed,
+            Styler::new(UseColor::Yes),
+        );
+        let defs = [make_location("file:///test.py", 0, 0)];
+        let entry = make_entry("foo", Some(&SymbolKind::Function), &defs, None);
+        let result = formatter.format_inspect(&entry);
+
+        assert!(
+            !has_ansi(&result),
+            "JSON output must never contain ANSI codes even with color=always, got:\n{result:?}"
+        );
+    }
+
+    #[test]
+    fn test_csv_format_never_gets_color() {
+        use crate::cli::style::UseColor;
+        let formatter = OutputFormatter::with_detail_and_styler(
+            OutputFormat::Csv,
+            OutputDetail::Condensed,
+            Styler::new(UseColor::Yes),
+        );
+        let defs = [make_location("file:///test.py", 0, 0)];
+        let entry = make_entry("foo", Some(&SymbolKind::Function), &defs, None);
+        let result = formatter.format_inspect(&entry);
+
+        assert!(
+            !has_ansi(&result),
+            "CSV output must never contain ANSI codes even with color=always, got:\n{result:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_color_never_produces_no_ansi_in_members() {
+        let formatter = OutputFormatter::new(OutputFormat::Human);
+        let result = members_tests::make_members_result();
+        let output = formatter.format_members_result(&result);
+
+        assert!(
+            !has_ansi(&output),
+            "color=never should produce zero ANSI in members output, got:\n{output:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_color_always_produces_ansi_in_members() {
+        let formatter = formatter_with_color();
+        let result = members_tests::make_members_result();
+        let output = formatter.format_members_result(&result);
+
+        assert!(
+            has_ansi(&output),
+            "color=always should produce ANSI in members output, got:\n{output:?}"
+        );
     }
 }

@@ -12,6 +12,7 @@ mod workspace;
 
 use cli::args::{Cli, Commands};
 use cli::output::OutputFormatter;
+use cli::style::{Styler, UseColor};
 #[cfg(unix)]
 use daemon::client::DEFAULT_TIMEOUT;
 #[cfg(not(unix))]
@@ -26,8 +27,11 @@ async fn main() {
         tracing_subscriber::fmt().with_env_filter("ty_find=debug").init();
     }
 
-    if let Err(e) = run(cli).await {
-        eprintln!("Error: {}", format_error_chain(&e));
+    let use_color = UseColor::resolve(&cli.color);
+    let styler = Styler::new(use_color);
+
+    if let Err(e) = run(cli, styler).await {
+        eprintln!("{}", styler.error(&format!("Error: {}", format_error_chain(&e))));
         #[allow(clippy::exit)]
         std::process::exit(1);
     }
@@ -43,7 +47,7 @@ fn format_error_chain(error: &anyhow::Error) -> String {
     msg
 }
 
-async fn run(cli: Cli) -> Result<()> {
+async fn run(cli: Cli, styler: Styler) -> Result<()> {
     let workspace_root = if let Some(ws) = cli.workspace {
         ws.canonicalize().context("Failed to canonicalize workspace path")?
     } else {
@@ -54,7 +58,7 @@ async fn run(cli: Cli) -> Result<()> {
             .context("Failed to canonicalize workspace path")?
     };
 
-    let formatter = OutputFormatter::with_detail(cli.format, cli.detail);
+    let formatter = OutputFormatter::with_detail(cli.format, cli.detail, styler);
     let timeout = cli.timeout.map_or(DEFAULT_TIMEOUT, Duration::from_secs);
 
     match cli.command {

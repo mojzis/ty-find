@@ -15,6 +15,8 @@ anyhow = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 serde_repr = "0.1.20"
+owo-colors = "4"
+supports-color = "3"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

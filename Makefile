@@ -1,4 +1,4 @@
-.PHONY: review fmt-check lint test audit deny coverage mutants review-quick docs docs-serve docs-clean
+.PHONY: review fmt-check lint test audit deny coverage mutants review-quick docs docs-serve docs-clean lint-mermaid
 
 # Full review — run before pushing or merging
 review: fmt-check lint test audit deny
@@ -57,6 +57,16 @@ mutants:
 		cargo mutants --in-diff HEAD~1..HEAD; \
 	else \
 		echo "⚠️  cargo-mutants not installed. Run: cargo install cargo-mutants"; \
+	fi
+
+lint-mermaid:
+	@echo "🧜 Linting mermaid diagrams..."
+	@if [ -d docs/node_modules ]; then \
+		node docs/lint-mermaid.mjs; \
+	else \
+		echo "Installing docs dependencies..." && \
+		(cd docs && npm install --silent) && \
+		node docs/lint-mermaid.mjs; \
 	fi
 
 docs:

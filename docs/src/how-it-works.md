@@ -86,17 +86,17 @@ gantt
 
     section tyf find foo
     spawn ty lsp     :a1, 0, 800
-    LSP initialize   :a2, after a1, 200
-    index project    :a3, after a2, 2000
-    LSP query        :a4, after a3, 50
-    format output    :a5, after a4, 10
+    LSP initialize   :a2, 800, 1000
+    index project    :a3, 1000, 3000
+    LSP query        :a4, 3000, 3050
+    format output    :a5, 3050, 3060
 
     section tyf find bar
-    spawn ty lsp     :b1, after a5, 800
-    LSP initialize   :b2, after b1, 200
-    index project    :b3, after b2, 2000
-    LSP query        :b4, after b3, 50
-    format output    :b5, after b4, 10
+    spawn ty lsp     :b1, 3060, 3860
+    LSP initialize   :b2, 3860, 4060
+    index project    :b3, 4060, 6060
+    LSP query        :b4, 6060, 6110
+    format output    :b5, 6110, 6120
 ```
 
 ```mermaid
@@ -106,16 +106,16 @@ gantt
     axisFormat %s
 
     section tyf find foo
-    connect to daemon :a1, 0, 2
-    send request      :a2, after a1, 1
-    LSP query         :a3, after a2, 40
-    format output     :a4, after a3, 1
+    connect to daemon :a1, 0, 20
+    send request      :a2, 20, 30
+    LSP query         :a3, 30, 430
+    format output     :a4, 430, 440
 
     section tyf find bar
-    connect to daemon :b1, after a4, 2
-    send request      :b2, after b1, 1
-    LSP query         :b3, after b2, 40
-    format output     :b4, after b3, 1
+    connect to daemon :b1, 440, 460
+    send request      :b2, 460, 470
+    LSP query         :b3, 470, 900
+    format output     :b4, 900, 910
 ```
 
 ### Auto-start and version checking
@@ -147,18 +147,18 @@ The daemon tracks activity at two levels:
 ```mermaid
 timeline
     title Daemon lifecycle example
-    00:00 : tyf find foo
+    0 sec : tyf find foo
           : Daemon starts
           : Workspace A client created
-    00:02 : tyf refs bar
+    2 sec : tyf refs bar
           : Workspace A client reused
-    00:30 : tyf find baz
-          : Workspace A client reused
-          : Idle timer reset
-    05:30 : No activity for 5 min
-          : Workspace A client removed
-          : No clients remain
-          : Daemon shuts down
+    30 sec : tyf find baz
+           : Workspace A client reused
+           : Idle timer reset
+    5 min 30 sec : No activity for 5 min
+                 : Workspace A client removed
+                 : No clients remain
+                 : Daemon shuts down
 ```
 
 ## LSP client pool

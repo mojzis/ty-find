@@ -5,6 +5,9 @@
 # mdBook build output
 docs/book/
 
+# Node.js (docs tooling)
+node_modules/
+
 # Python
 __pycache__/
 *.py[cod]

@@ -19,6 +19,47 @@ use crate::lsp::client::TyLspClient;
 use crate::lsp::protocol::{DocumentSymbol, Location};
 use crate::workspace::navigation::SymbolFinder;
 
+/// Check whether a file URI corresponds to a Python test file.
+///
+/// Matches common Python test conventions:
+/// - Filename: `test_*.py` or `*_test.py`
+/// - Filename: `conftest.py`
+/// - Any file under a `tests/` directory segment
+fn is_test_file(uri: &str) -> bool {
+    let path = uri.strip_prefix("file://").unwrap_or(uri);
+    let p = std::path::Path::new(path);
+    let is_py = p.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("py"));
+    let file_stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    let file_name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+
+    if file_name == "conftest.py" {
+        return true;
+    }
+    if is_py && file_stem.starts_with("test_") {
+        return true;
+    }
+    if is_py && file_stem.ends_with("_test") {
+        return true;
+    }
+
+    // Check for tests/ directory in the path
+    path.split('/').any(|segment| segment == "tests")
+}
+
+/// Partition locations into `(non_test, test)` based on file URI heuristics.
+fn partition_test_locations(locations: Vec<Location>) -> (Vec<Location>, Vec<Location>) {
+    let mut non_test = Vec::new();
+    let mut test = Vec::new();
+    for loc in locations {
+        if is_test_file(&loc.uri) {
+            test.push(loc);
+        } else {
+            non_test.push(loc);
+        }
+    }
+    (non_test, test)
+}
+
 /// Deduplicate locations by (uri, start line).
 fn dedup_locations(locations: &mut Vec<Location>) {
     let mut seen = HashSet::new();
@@ -356,6 +397,7 @@ pub async fn handle_references_command(
     references_limit: usize,
     formatter: &OutputFormatter,
     timeout: Duration,
+    show_tests: bool,
 ) -> Result<()> {
     ensure_daemon_running().await?;
 
@@ -379,6 +421,7 @@ pub async fn handle_references_command(
             references_limit,
             workspace_root,
             &mut client,
+            show_tests,
         )
         .await?;
         println!("{}", formatter.format_enriched_references_results(&[enriched]));
@@ -410,6 +453,7 @@ pub async fn handle_references_command(
             references_limit,
             workspace_root,
             &mut client,
+            show_tests,
         )
         .await?;
         enriched_results.push(enriched);
@@ -421,6 +465,10 @@ pub async fn handle_references_command(
 }
 
 /// Apply limit and enrich displayed references with enclosing symbol context.
+///
+/// Always partitions into test vs non-test. When `show_tests` is true, test
+/// references are enriched and returned in a separate section. When false,
+/// only the count is preserved (for the "N hidden" hint).
 #[cfg(unix)]
 async fn enrich_and_limit_references(
     label: &str,
@@ -428,11 +476,17 @@ async fn enrich_and_limit_references(
     references_limit: usize,
     workspace_root: &Path,
     client: &mut DaemonClient,
+    show_tests: bool,
 ) -> Result<EnrichedReferencesResult> {
-    let total_count = locations.len();
+    use crate::cli::output::TestReferencesSection;
+
+    let (non_test_locs, test_locs) = partition_test_locations(locations);
+
+    // Process non-test references
+    let total_count = non_test_locs.len();
     let display_count =
         if references_limit == 0 { total_count } else { references_limit.min(total_count) };
-    let to_display = &locations[..display_count];
+    let to_display = &non_test_locs[..display_count];
     let remaining_count = total_count - display_count;
 
     let displayed = if to_display.is_empty() {
@@ -441,11 +495,36 @@ async fn enrich_and_limit_references(
         enrich_references(to_display, workspace_root, client).await
     };
 
+    // Process test references
+    let test_references = if test_locs.is_empty() {
+        None
+    } else if show_tests {
+        let test_total = test_locs.len();
+        let test_display_count =
+            if references_limit == 0 { test_total } else { references_limit.min(test_total) };
+        let test_to_display = &test_locs[..test_display_count];
+        let test_remaining = test_total - test_display_count;
+        let test_displayed = enrich_references(test_to_display, workspace_root, client).await;
+        Some(TestReferencesSection {
+            total_count: test_total,
+            displayed: test_displayed,
+            remaining_count: test_remaining,
+        })
+    } else {
+        // Not showing tests, but record count for hint
+        Some(TestReferencesSection {
+            total_count: test_locs.len(),
+            displayed: Vec::new(),
+            remaining_count: 0,
+        })
+    };
+
     Ok(EnrichedReferencesResult {
         label: label.to_string(),
         total_count,
         displayed,
         remaining_count,
+        test_references,
     })
 }
 
@@ -461,6 +540,7 @@ pub async fn handle_references_command(
     _references_limit: usize,
     _formatter: &OutputFormatter,
     _timeout: Duration,
+    _show_tests: bool,
 ) -> Result<()> {
     anyhow::bail!(
         "The 'refs' command requires the background daemon, which is only supported on Unix systems"
@@ -594,6 +674,7 @@ pub async fn handle_inspect_command(
     timeout: Duration,
     show_individual_refs: bool,
     references_limit: usize,
+    show_tests: bool,
 ) -> Result<()> {
     ensure_daemon_running().await?;
 
@@ -613,21 +694,22 @@ pub async fn handle_inspect_command(
         None
     };
     for r in &results {
-        let total_reference_count = r.references.len();
-        let total_reference_files = count_unique_files(&r.references);
+        // Partition into non-test and test references
+        let (non_test_refs, test_refs) = partition_test_locations(r.references.clone());
+
+        let total_reference_count = non_test_refs.len();
+        let total_reference_files = count_unique_files(&non_test_refs);
 
         let (displayed_references, remaining_reference_count) =
-            if show_individual_refs && !r.references.is_empty() {
-                // Determine which refs to display (capped by limit)
+            if show_individual_refs && !non_test_refs.is_empty() {
                 let display_count = if references_limit == 0 {
-                    r.references.len()
+                    non_test_refs.len()
                 } else {
-                    references_limit.min(r.references.len())
+                    references_limit.min(non_test_refs.len())
                 };
-                let to_display = &r.references[..display_count];
-                let remaining = r.references.len() - display_count;
+                let to_display = &non_test_refs[..display_count];
+                let remaining = non_test_refs.len() - display_count;
 
-                // Enrich displayed references with enclosing symbol context
                 let enriched = enrich_references(
                     to_display,
                     workspace_root,
@@ -639,6 +721,44 @@ pub async fn handle_inspect_command(
                 (Vec::new(), 0)
             };
 
+        // Build test references section
+        let test_references = if test_refs.is_empty() {
+            None
+        } else if show_tests {
+            let test_total = test_refs.len();
+            let (test_displayed, test_remaining) = if show_individual_refs && !test_refs.is_empty()
+            {
+                let test_display_count = if references_limit == 0 {
+                    test_total
+                } else {
+                    references_limit.min(test_total)
+                };
+                let test_to_display = &test_refs[..test_display_count];
+                let remaining = test_total - test_display_count;
+                let enriched = enrich_references(
+                    test_to_display,
+                    workspace_root,
+                    enrich_client.as_mut().expect("client created above"),
+                )
+                .await;
+                (enriched, remaining)
+            } else {
+                (Vec::new(), 0)
+            };
+            Some(crate::cli::output::TestReferencesSection {
+                total_count: test_total,
+                displayed: test_displayed,
+                remaining_count: test_remaining,
+            })
+        } else {
+            // Not showing tests, but record count for hint
+            Some(crate::cli::output::TestReferencesSection {
+                total_count: test_refs.len(),
+                displayed: Vec::new(),
+                remaining_count: 0,
+            })
+        };
+
         entries.push(InspectEntry {
             symbol: r.symbol.as_str(),
             kind: r.kind.as_ref(),
@@ -649,6 +769,7 @@ pub async fn handle_inspect_command(
             displayed_references,
             remaining_reference_count,
             show_individual_refs,
+            test_references,
         });
     }
 
@@ -667,6 +788,7 @@ pub async fn handle_inspect_command(
     _timeout: Duration,
     _show_individual_refs: bool,
     _references_limit: usize,
+    _show_tests: bool,
 ) -> Result<()> {
     anyhow::bail!(
         "The 'inspect' command requires the background daemon, which is only supported on Unix systems"
@@ -1038,6 +1160,97 @@ pub async fn handle_daemon_command(command: DaemonCommands) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_is_test_file_test_prefix() {
+        assert!(is_test_file("file:///project/test_utils.py"));
+        assert!(is_test_file("file:///project/test_models.py"));
+        assert!(is_test_file("/some/path/test_foo.py"));
+    }
+
+    #[test]
+    fn test_is_test_file_test_suffix() {
+        assert!(is_test_file("file:///project/models_test.py"));
+        assert!(is_test_file("file:///project/utils_test.py"));
+        assert!(is_test_file("/some/path/foo_test.py"));
+    }
+
+    #[test]
+    fn test_is_test_file_conftest() {
+        assert!(is_test_file("file:///project/conftest.py"));
+        assert!(is_test_file("file:///project/tests/conftest.py"));
+        assert!(is_test_file("/project/conftest.py"));
+    }
+
+    #[test]
+    fn test_is_test_file_tests_directory() {
+        assert!(is_test_file("file:///project/tests/test_foo.py"));
+        assert!(is_test_file("file:///project/tests/utils.py"));
+        assert!(is_test_file("file:///project/tests/sub/helper.py"));
+        assert!(is_test_file("/project/tests/fixtures.py"));
+    }
+
+    #[test]
+    fn test_is_test_file_non_test() {
+        assert!(!is_test_file("file:///project/models.py"));
+        assert!(!is_test_file("file:///project/src/utils.py"));
+        assert!(!is_test_file("file:///project/main.py"));
+        assert!(!is_test_file("/project/src/handler.py"));
+    }
+
+    #[test]
+    fn test_is_test_file_edge_cases() {
+        // "contest" is not "conftest"
+        assert!(!is_test_file("file:///project/contest.py"));
+        // "testing" directory != "tests" directory
+        assert!(!is_test_file("file:///project/testing/utils.py"));
+        // "test" alone is not a match for test_ prefix
+        assert!(!is_test_file("file:///project/test.py"));
+    }
+
+    #[test]
+    fn test_partition_test_locations() {
+        use crate::lsp::protocol::{Position, Range};
+
+        let locations = vec![
+            Location {
+                uri: "file:///project/src/utils.py".to_string(),
+                range: Range {
+                    start: Position { line: 1, character: 0 },
+                    end: Position { line: 1, character: 10 },
+                },
+            },
+            Location {
+                uri: "file:///project/tests/test_utils.py".to_string(),
+                range: Range {
+                    start: Position { line: 5, character: 0 },
+                    end: Position { line: 5, character: 10 },
+                },
+            },
+            Location {
+                uri: "file:///project/conftest.py".to_string(),
+                range: Range {
+                    start: Position { line: 10, character: 0 },
+                    end: Position { line: 10, character: 10 },
+                },
+            },
+            Location {
+                uri: "file:///project/src/main.py".to_string(),
+                range: Range {
+                    start: Position { line: 3, character: 0 },
+                    end: Position { line: 3, character: 10 },
+                },
+            },
+        ];
+
+        let (non_test, test) = partition_test_locations(locations);
+        assert_eq!(non_test.len(), 2);
+        assert_eq!(test.len(), 2);
+        assert!(non_test[0].uri.contains("utils.py"));
+        assert!(non_test[1].uri.contains("main.py"));
+        assert!(test[0].uri.contains("test_utils.py"));
+        assert!(test[1].uri.contains("conftest.py"));
+    }
 
     #[test]
     fn test_parse_file_position_valid() {

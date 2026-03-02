@@ -33,6 +33,8 @@ pub struct InspectEntry<'a> {
     pub remaining_reference_count: usize,
     /// Whether individual references should be shown (true = -r was passed).
     pub show_individual_refs: bool,
+    /// Test references separated from the main refs (None = no test refs exist).
+    pub test_references: Option<TestReferencesSection>,
 }
 
 pub struct OutputFormatter {
@@ -112,16 +114,28 @@ fn read_definition_line(file_path: &str, start_line_0: u32) -> Option<String> {
     read_definition_context(file_path, start_line_0).map(|ctx| ctx.definition_line)
 }
 
+/// Test references that were separated from the main results.
+pub struct TestReferencesSection {
+    /// Total test references found.
+    pub total_count: usize,
+    /// Displayed test references (enriched with context).
+    pub displayed: Vec<EnrichedReference>,
+    /// How many test references were not displayed due to the limit.
+    pub remaining_count: usize,
+}
+
 /// Enriched references result for the references command.
 pub struct EnrichedReferencesResult {
     /// Symbol name or query label.
     pub label: String,
-    /// Total number of references found.
+    /// Total number of non-test references found.
     pub total_count: usize,
-    /// Displayed references (capped by limit), enriched with context.
+    /// Displayed non-test references (capped by limit), enriched with context.
     pub displayed: Vec<EnrichedReference>,
-    /// How many references were not displayed due to the limit.
+    /// How many non-test references were not displayed due to the limit.
     pub remaining_count: usize,
+    /// Test references shown separately (None = no test refs exist).
+    pub test_references: Option<TestReferencesSection>,
 }
 
 /// Check whether a position (line, character) is inside a range (inclusive).
@@ -350,7 +364,7 @@ impl OutputFormatter {
                 serde_json::to_string_pretty(&grouped).unwrap_or_else(|_| "[]".to_string())
             }
             OutputFormat::Csv => {
-                let mut output = String::from("symbol,file,line,column,context\n");
+                let mut output = String::from("symbol,file,line,column,context,test\n");
                 for result in results {
                     for enriched in &result.displayed {
                         let file_path = self.uri_to_path(&enriched.location.uri);
@@ -358,9 +372,21 @@ impl OutputFormatter {
                         let column = enriched.location.range.start.character + 1;
                         let _ = writeln!(
                             output,
-                            "{},{file_path},{line},{column},{}",
+                            "{},{file_path},{line},{column},{},false",
                             result.label, enriched.context
                         );
+                    }
+                    if let Some(test_refs) = &result.test_references {
+                        for enriched in &test_refs.displayed {
+                            let file_path = self.uri_to_path(&enriched.location.uri);
+                            let line = enriched.location.range.start.line + 1;
+                            let column = enriched.location.range.start.character + 1;
+                            let _ = writeln!(
+                                output,
+                                "{},{file_path},{line},{column},{},true",
+                                result.label, enriched.context
+                            );
+                        }
                     }
                 }
                 output
@@ -368,7 +394,13 @@ impl OutputFormatter {
             OutputFormat::Paths => {
                 let mut paths: Vec<String> = results
                     .iter()
-                    .flat_map(|r| r.displayed.iter().map(|e| self.uri_to_path(&e.location.uri)))
+                    .flat_map(|r| {
+                        let main = r.displayed.iter().map(|e| self.uri_to_path(&e.location.uri));
+                        let test = r.test_references.iter().flat_map(|t| {
+                            t.displayed.iter().map(|e| self.uri_to_path(&e.location.uri))
+                        });
+                        main.chain(test)
+                    })
                     .collect();
                 paths.sort();
                 paths.dedup();
@@ -377,63 +409,114 @@ impl OutputFormatter {
         }
     }
 
+    fn format_enriched_references_human(&self, result: &EnrichedReferencesResult) -> String {
+        if result.total_count == 0
+            && result.test_references.as_ref().is_none_or(|t| t.total_count == 0)
+        {
+            return format!("No references found for: '{}'", result.label);
+        }
+
+        let mut output =
+            format!("Found {} reference(s) for: '{}'\n\n", result.total_count, result.label);
+
+        self.write_enriched_ref_list(&mut output, &result.displayed);
+
+        if result.remaining_count > 0 {
+            let _ = writeln!(
+                output,
+                "... and {} more — use --references-limit 0 to show all",
+                result.remaining_count
+            );
+        }
+
+        self.write_test_references_section(&mut output, result.test_references.as_ref());
+
+        output
+    }
+
+    /// Append numbered enriched reference lines (with source) to `output`.
+    fn write_enriched_ref_list(&self, output: &mut String, refs: &[EnrichedReference]) {
+        for (i, enriched) in refs.iter().enumerate() {
+            let file_path = self.uri_to_path(&enriched.location.uri);
+            let line = enriched.location.range.start.line + 1;
+            let column = enriched.location.range.start.character + 1;
+
+            let _ =
+                writeln!(output, "{}. {file_path}:{line}:{column} ({})", i + 1, enriched.context);
+
+            if let Some(src) = read_source_line(&file_path, line) {
+                let _ = writeln!(output, "   {src}");
+            }
+            output.push('\n');
+        }
+    }
+
+    /// Append the test references section (or hidden hint) to `output`.
+    fn write_test_references_section(
+        &self,
+        output: &mut String,
+        test_references: Option<&TestReferencesSection>,
+    ) {
+        if let Some(test_refs) = test_references {
+            if !test_refs.displayed.is_empty() {
+                let _ = writeln!(output, "\nTest references ({}):\n", test_refs.total_count);
+                self.write_enriched_ref_list(output, &test_refs.displayed);
+                if test_refs.remaining_count > 0 {
+                    let _ =
+                        writeln!(output, "... and {} more test ref(s)", test_refs.remaining_count);
+                }
+            } else if test_refs.total_count > 0 {
+                let _ = writeln!(
+                    output,
+                    "({} test reference(s) hidden — use --tests to show)",
+                    test_refs.total_count
+                );
+            }
+        }
+    }
+
     fn format_enriched_references_single(&self, result: &EnrichedReferencesResult) -> String {
         match self.format {
-            OutputFormat::Human => {
-                if result.total_count == 0 {
-                    return format!("No references found for: '{}'", result.label);
-                }
-
-                let mut output = format!(
-                    "Found {} reference(s) for: '{}'\n\n",
-                    result.total_count, result.label
-                );
-
-                for (i, enriched) in result.displayed.iter().enumerate() {
-                    let file_path = self.uri_to_path(&enriched.location.uri);
-                    let line = enriched.location.range.start.line + 1;
-                    let column = enriched.location.range.start.character + 1;
-
-                    let _ = writeln!(
-                        output,
-                        "{}. {file_path}:{line}:{column} ({})",
-                        i + 1,
-                        enriched.context
-                    );
-
-                    if let Some(src) = read_source_line(&file_path, line) {
-                        let _ = writeln!(output, "   {src}");
-                    }
-                    output.push('\n');
-                }
-
-                if result.remaining_count > 0 {
-                    let _ = writeln!(
-                        output,
-                        "... and {} more — use --references-limit 0 to show all",
-                        result.remaining_count
-                    );
-                }
-
-                output
-            }
+            OutputFormat::Human => self.format_enriched_references_human(result),
             OutputFormat::Json => {
                 let val = Self::enriched_refs_to_json(result);
                 serde_json::to_string_pretty(&val).unwrap_or_else(|_| "{}".to_string())
             }
             OutputFormat::Csv => {
-                let mut output = String::from("file,line,column,context\n");
+                let has_test_refs =
+                    result.test_references.as_ref().is_some_and(|t| !t.displayed.is_empty());
+                let mut output = String::from("file,line,column,context,test\n");
                 for enriched in &result.displayed {
                     let file_path = self.uri_to_path(&enriched.location.uri);
                     let line = enriched.location.range.start.line + 1;
                     let column = enriched.location.range.start.character + 1;
-                    let _ = writeln!(output, "{file_path},{line},{column},{}", enriched.context);
+                    let _ =
+                        writeln!(output, "{file_path},{line},{column},{},false", enriched.context);
+                }
+                if has_test_refs {
+                    if let Some(test_refs) = &result.test_references {
+                        for enriched in &test_refs.displayed {
+                            let file_path = self.uri_to_path(&enriched.location.uri);
+                            let line = enriched.location.range.start.line + 1;
+                            let column = enriched.location.range.start.character + 1;
+                            let _ = writeln!(
+                                output,
+                                "{file_path},{line},{column},{},true",
+                                enriched.context
+                            );
+                        }
+                    }
                 }
                 output
             }
             OutputFormat::Paths => {
                 let mut paths: Vec<String> =
                     result.displayed.iter().map(|r| self.uri_to_path(&r.location.uri)).collect();
+                if let Some(test_refs) = &result.test_references {
+                    paths.extend(
+                        test_refs.displayed.iter().map(|r| self.uri_to_path(&r.location.uri)),
+                    );
+                }
                 paths.sort();
                 paths.dedup();
                 paths.join("\n")
@@ -442,24 +525,32 @@ impl OutputFormatter {
     }
 
     fn enriched_refs_to_json(result: &EnrichedReferencesResult) -> serde_json::Value {
-        let refs_json: Vec<serde_json::Value> = result
-            .displayed
-            .iter()
-            .map(|r| {
-                let file_path = r.location.uri.strip_prefix("file://").unwrap_or(&r.location.uri);
-                serde_json::json!({
-                    "file": file_path,
-                    "line": r.location.range.start.line + 1,
-                    "column": r.location.range.start.character + 1,
-                    "context": r.context,
-                })
-            })
-            .collect();
+        let refs_json: Vec<serde_json::Value> =
+            result.displayed.iter().map(Self::enriched_ref_to_json).collect();
+
+        let test_refs_json: Vec<serde_json::Value> =
+            result.test_references.as_ref().map_or_else(Vec::new, |t| {
+                t.displayed.iter().map(Self::enriched_ref_to_json).collect()
+            });
+
+        let test_count = result.test_references.as_ref().map_or(0, |t| t.total_count);
 
         serde_json::json!({
             "symbol": result.label,
             "reference_count": result.total_count,
             "references": refs_json,
+            "test_reference_count": test_count,
+            "test_references": test_refs_json,
+        })
+    }
+
+    fn enriched_ref_to_json(r: &EnrichedReference) -> serde_json::Value {
+        let file_path = r.location.uri.strip_prefix("file://").unwrap_or(&r.location.uri);
+        serde_json::json!({
+            "file": file_path,
+            "line": r.location.range.start.line + 1,
+            "column": r.location.range.start.character + 1,
+            "context": r.context,
         })
     }
 
@@ -718,6 +809,36 @@ impl OutputFormatter {
             }
         }
 
+        // Test refs section
+        if let Some(test_refs) = &entry.test_references {
+            if !test_refs.displayed.is_empty() {
+                let test_files: std::collections::HashSet<&str> =
+                    test_refs.displayed.iter().map(|r| r.location.uri.as_str()).collect();
+                let _ = writeln!(
+                    output,
+                    "\n{h} Test Refs: {} across {} file(s)",
+                    test_refs.total_count,
+                    test_files.len()
+                );
+                for enriched in &test_refs.displayed {
+                    let file_path = self.uri_to_path(&enriched.location.uri);
+                    let line = enriched.location.range.start.line + 1;
+                    let column = enriched.location.range.start.character + 1;
+                    let _ = writeln!(output, "{file_path}:{line}:{column} ({})", enriched.context);
+                }
+                if test_refs.remaining_count > 0 {
+                    let _ =
+                        writeln!(output, "... and {} more test ref(s)", test_refs.remaining_count);
+                }
+            } else if test_refs.total_count > 0 {
+                let _ = writeln!(
+                    output,
+                    "\n({} test reference(s) hidden — use --tests to show)",
+                    test_refs.total_count
+                );
+            }
+        }
+
         output
     }
 
@@ -790,6 +911,39 @@ impl OutputFormatter {
             }
         }
 
+        // Test references section
+        if let Some(test_refs) = &entry.test_references {
+            if !test_refs.displayed.is_empty() {
+                output.push('\n');
+                let _ = writeln!(output, "{h2} Test References");
+                let _ = writeln!(output, "{} test reference(s):", test_refs.total_count);
+                for (i, enriched) in test_refs.displayed.iter().enumerate() {
+                    let file_path = self.uri_to_path(&enriched.location.uri);
+                    let line = enriched.location.range.start.line + 1;
+                    let column = enriched.location.range.start.character + 1;
+                    let _ = writeln!(
+                        output,
+                        "{}. {file_path}:{line}:{column} ({})",
+                        i + 1,
+                        enriched.context
+                    );
+                    if let Some(src) = read_source_line(&file_path, line) {
+                        let _ = writeln!(output, "   {src}");
+                    }
+                }
+                if test_refs.remaining_count > 0 {
+                    let _ =
+                        writeln!(output, "... and {} more test ref(s)", test_refs.remaining_count);
+                }
+            } else if test_refs.total_count > 0 {
+                let _ = writeln!(
+                    output,
+                    "\n({} test reference(s) hidden — use --tests to show)",
+                    test_refs.total_count
+                );
+            }
+        }
+
         output
     }
 
@@ -803,19 +957,15 @@ impl OutputFormatter {
     }
 
     fn format_inspect_json_single(entry: &InspectEntry<'_>) -> String {
-        let refs_json: Vec<serde_json::Value> = entry
-            .displayed_references
-            .iter()
-            .map(|r| {
-                let file_path = r.location.uri.strip_prefix("file://").unwrap_or(&r.location.uri);
-                serde_json::json!({
-                    "file": file_path,
-                    "line": r.location.range.start.line + 1,
-                    "column": r.location.range.start.character + 1,
-                    "context": r.context,
-                })
-            })
-            .collect();
+        let refs_json: Vec<serde_json::Value> =
+            entry.displayed_references.iter().map(Self::enriched_ref_to_json).collect();
+
+        let test_refs_json: Vec<serde_json::Value> =
+            entry.test_references.as_ref().map_or_else(Vec::new, |t| {
+                t.displayed.iter().map(Self::enriched_ref_to_json).collect()
+            });
+
+        let test_count = entry.test_references.as_ref().map_or(0, |t| t.total_count);
 
         let json_val = serde_json::json!({
             "symbol": entry.symbol,
@@ -825,6 +975,8 @@ impl OutputFormatter {
             "reference_count": entry.total_reference_count,
             "reference_files": entry.total_reference_files,
             "references": refs_json,
+            "test_reference_count": test_count,
+            "test_references": test_refs_json,
         });
         serde_json::to_string_pretty(&json_val).unwrap_or_else(|_| "{}".to_string())
     }
@@ -853,6 +1005,18 @@ impl OutputFormatter {
                 enriched.context
             );
         }
+        if let Some(test_refs) = &entry.test_references {
+            for enriched in &test_refs.displayed {
+                let file_path = self.uri_to_path(&enriched.location.uri);
+                let line = enriched.location.range.start.line + 1;
+                let column = enriched.location.range.start.character + 1;
+                let _ = writeln!(
+                    output,
+                    "{prefix}test_reference,{file_path},{line},{column},{}",
+                    enriched.context
+                );
+            }
+        }
         output
     }
 
@@ -862,6 +1026,12 @@ impl OutputFormatter {
             .iter()
             .map(|loc| self.uri_to_path(&loc.uri))
             .chain(entry.displayed_references.iter().map(|r| self.uri_to_path(&r.location.uri)))
+            .chain(
+                entry
+                    .test_references
+                    .iter()
+                    .flat_map(|t| t.displayed.iter().map(|r| self.uri_to_path(&r.location.uri))),
+            )
             .collect();
         paths.sort();
         paths.dedup();
@@ -911,12 +1081,19 @@ impl OutputFormatter {
                 let mut paths: Vec<String> = results
                     .iter()
                     .flat_map(|entry| {
-                        entry.definitions.iter().map(|loc| self.uri_to_path(&loc.uri)).chain(
-                            entry
-                                .displayed_references
-                                .iter()
-                                .map(|r| self.uri_to_path(&r.location.uri)),
-                        )
+                        entry
+                            .definitions
+                            .iter()
+                            .map(|loc| self.uri_to_path(&loc.uri))
+                            .chain(
+                                entry
+                                    .displayed_references
+                                    .iter()
+                                    .map(|r| self.uri_to_path(&r.location.uri)),
+                            )
+                            .chain(entry.test_references.iter().flat_map(|t| {
+                                t.displayed.iter().map(|r| self.uri_to_path(&r.location.uri))
+                            }))
                     })
                     .collect();
                 paths.sort();
@@ -1213,6 +1390,7 @@ mod tests {
             total_count: 0,
             displayed: Vec::new(),
             remaining_count: 0,
+            test_references: None,
         };
         let output = formatter.format_enriched_references_results(&[result]);
         assert_eq!(output, "No references found for: 'test:1:1'");
@@ -1267,6 +1445,7 @@ mod tests {
             displayed_references: Vec::new(),
             remaining_reference_count: 0,
             show_individual_refs: false,
+            test_references: None,
         }
     }
 
@@ -1298,6 +1477,7 @@ mod tests {
             displayed_references: Vec::new(),
             remaining_reference_count: 0,
             show_individual_refs: false,
+            test_references: None,
         };
         let result = formatter.format_inspect(&entry);
 
@@ -1322,6 +1502,7 @@ mod tests {
             displayed_references: Vec::new(),
             remaining_reference_count: 0,
             show_individual_refs: false,
+            test_references: None,
         };
         let result = formatter.format_inspect(&entry);
 
@@ -1976,6 +2157,7 @@ mod tests {
             displayed_references: Vec::new(),
             remaining_reference_count: 0,
             show_individual_refs: false,
+            test_references: None,
         };
         let result = formatter.format_inspect(&entry);
 
@@ -2009,6 +2191,7 @@ mod tests {
             displayed_references: enriched,
             remaining_reference_count: 3,
             show_individual_refs: true,
+            test_references: None,
         };
         let result = formatter.format_inspect(&entry);
 
@@ -2039,6 +2222,7 @@ mod tests {
             displayed_references: enriched,
             remaining_reference_count: 0,
             show_individual_refs: true,
+            test_references: None,
         };
         let result = formatter.format_inspect(&entry);
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
@@ -2059,6 +2243,7 @@ mod tests {
                 context: "Handler.process".to_string(),
             }],
             remaining_count: 49,
+            test_references: None,
         };
         let output = formatter.format_enriched_references_results(&[result]);
 
@@ -2081,6 +2266,7 @@ mod tests {
                 context: "Handler.process".to_string(),
             }],
             remaining_count: 1,
+            test_references: None,
         };
         let output = formatter.format_enriched_references_results(&[result]);
         let parsed: serde_json::Value = serde_json::from_str(&output).unwrap();
@@ -2111,6 +2297,7 @@ mod tests {
                 },
             ],
             remaining_count: 0,
+            test_references: None,
         };
         let output = formatter.format_enriched_references_results(&[result]);
 
@@ -2119,5 +2306,209 @@ mod tests {
             "should not show truncation message when all displayed, got:\n{output}"
         );
         assert!(output.contains("Found 3 reference(s)"), "should show total count, got:\n{output}");
+    }
+
+    // ── Test references formatting tests ─────────────────────────────
+
+    #[test]
+    fn test_format_enriched_refs_hides_tests_by_default() {
+        let formatter = OutputFormatter::new(OutputFormat::Human);
+        let result = EnrichedReferencesResult {
+            label: "my_func".to_string(),
+            total_count: 2,
+            displayed: vec![EnrichedReference {
+                location: make_location("file:///project/src/main.py", 5, 0),
+                context: "module scope".to_string(),
+            }],
+            remaining_count: 1,
+            test_references: Some(TestReferencesSection {
+                total_count: 3,
+                displayed: Vec::new(),
+                remaining_count: 0,
+            }),
+        };
+        let output = formatter.format_enriched_references_results(&[result]);
+        assert!(
+            output.contains("3 test reference(s) hidden"),
+            "should show hidden hint, got:\n{output}"
+        );
+        assert!(
+            !output.contains("Test references ("),
+            "should NOT show test references section, got:\n{output}"
+        );
+    }
+
+    #[test]
+    fn test_format_enriched_refs_shows_tests_when_enabled() {
+        let formatter = OutputFormatter::new(OutputFormat::Human);
+        let result = EnrichedReferencesResult {
+            label: "my_func".to_string(),
+            total_count: 1,
+            displayed: vec![EnrichedReference {
+                location: make_location("file:///project/src/main.py", 5, 0),
+                context: "module scope".to_string(),
+            }],
+            remaining_count: 0,
+            test_references: Some(TestReferencesSection {
+                total_count: 1,
+                displayed: vec![EnrichedReference {
+                    location: make_location("file:///project/tests/test_main.py", 3, 0),
+                    context: "test_my_func".to_string(),
+                }],
+                remaining_count: 0,
+            }),
+        };
+        let output = formatter.format_enriched_references_results(&[result]);
+        assert!(
+            output.contains("Test references (1):"),
+            "should show test references section, got:\n{output}"
+        );
+        assert!(output.contains("test_main.py"), "should show test file, got:\n{output}");
+    }
+
+    #[test]
+    fn test_format_enriched_refs_json_has_test_fields() {
+        let formatter = OutputFormatter::new(OutputFormat::Json);
+        let result = EnrichedReferencesResult {
+            label: "my_func".to_string(),
+            total_count: 1,
+            displayed: vec![EnrichedReference {
+                location: make_location("file:///project/src/main.py", 5, 0),
+                context: "module scope".to_string(),
+            }],
+            remaining_count: 0,
+            test_references: None,
+        };
+        let output = formatter.format_enriched_references_results(&[result]);
+        let parsed: serde_json::Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(parsed["test_reference_count"], 0);
+        assert!(parsed["test_references"].is_array());
+    }
+
+    #[test]
+    fn test_format_enriched_refs_json_with_test_refs() {
+        let formatter = OutputFormatter::new(OutputFormat::Json);
+        let result = EnrichedReferencesResult {
+            label: "my_func".to_string(),
+            total_count: 1,
+            displayed: vec![EnrichedReference {
+                location: make_location("file:///project/src/main.py", 5, 0),
+                context: "module scope".to_string(),
+            }],
+            remaining_count: 0,
+            test_references: Some(TestReferencesSection {
+                total_count: 2,
+                displayed: vec![EnrichedReference {
+                    location: make_location("file:///project/tests/test_main.py", 3, 0),
+                    context: "test_my_func".to_string(),
+                }],
+                remaining_count: 1,
+            }),
+        };
+        let output = formatter.format_enriched_references_results(&[result]);
+        let parsed: serde_json::Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(parsed["test_reference_count"], 2);
+        assert_eq!(parsed["test_references"][0]["context"], "test_my_func");
+    }
+
+    #[test]
+    fn test_format_enriched_refs_csv_has_test_column() {
+        let formatter = OutputFormatter::new(OutputFormat::Csv);
+        let result = EnrichedReferencesResult {
+            label: "my_func".to_string(),
+            total_count: 1,
+            displayed: vec![EnrichedReference {
+                location: make_location("file:///project/src/main.py", 5, 0),
+                context: "module scope".to_string(),
+            }],
+            remaining_count: 0,
+            test_references: Some(TestReferencesSection {
+                total_count: 1,
+                displayed: vec![EnrichedReference {
+                    location: make_location("file:///project/tests/test_main.py", 3, 0),
+                    context: "test_func".to_string(),
+                }],
+                remaining_count: 0,
+            }),
+        };
+        let output = formatter.format_enriched_references_results(&[result]);
+        assert!(output.contains(",test\n"), "should have test column header, got:\n{output}");
+        assert!(output.contains(",false\n"), "should have false for non-test, got:\n{output}");
+        assert!(output.contains(",true\n"), "should have true for test, got:\n{output}");
+    }
+
+    #[test]
+    fn test_format_enriched_refs_no_test_refs_no_hint() {
+        let formatter = OutputFormatter::new(OutputFormat::Human);
+        let result = EnrichedReferencesResult {
+            label: "my_func".to_string(),
+            total_count: 1,
+            displayed: vec![EnrichedReference {
+                location: make_location("file:///project/src/main.py", 5, 0),
+                context: "module scope".to_string(),
+            }],
+            remaining_count: 0,
+            test_references: None,
+        };
+        let output = formatter.format_enriched_references_results(&[result]);
+        assert!(
+            !output.contains("test reference"),
+            "should not mention test refs when none exist, got:\n{output}"
+        );
+    }
+
+    #[test]
+    fn test_format_inspect_condensed_with_test_refs_hint() {
+        let formatter = OutputFormatter::new(OutputFormat::Human);
+        let defs = [make_location("file:///test.py", 0, 0)];
+        let entry = InspectEntry {
+            symbol: "my_func",
+            kind: Some(&SymbolKind::Function),
+            definitions: &defs,
+            hover: None,
+            total_reference_count: 2,
+            total_reference_files: 1,
+            displayed_references: Vec::new(),
+            remaining_reference_count: 0,
+            show_individual_refs: false,
+            test_references: Some(TestReferencesSection {
+                total_count: 5,
+                displayed: Vec::new(),
+                remaining_count: 0,
+            }),
+        };
+        let result = formatter.format_inspect(&entry);
+        assert!(
+            result.contains("5 test reference(s) hidden"),
+            "should show hidden hint, got:\n{result}"
+        );
+    }
+
+    #[test]
+    fn test_format_inspect_condensed_with_test_refs_shown() {
+        let formatter = OutputFormatter::new(OutputFormat::Human);
+        let defs = [make_location("file:///test.py", 0, 0)];
+        let entry = InspectEntry {
+            symbol: "my_func",
+            kind: Some(&SymbolKind::Function),
+            definitions: &defs,
+            hover: None,
+            total_reference_count: 2,
+            total_reference_files: 1,
+            displayed_references: Vec::new(),
+            remaining_reference_count: 0,
+            show_individual_refs: true,
+            test_references: Some(TestReferencesSection {
+                total_count: 1,
+                displayed: vec![EnrichedReference {
+                    location: make_location("file:///project/tests/test_main.py", 3, 0),
+                    context: "test_my_func".to_string(),
+                }],
+                remaining_count: 0,
+            }),
+        };
+        let result = formatter.format_inspect(&entry);
+        assert!(result.contains("# Test Refs:"), "should show test refs section, got:\n{result}");
+        assert!(result.contains("test_main.py"), "should show test file, got:\n{result}");
     }
 }

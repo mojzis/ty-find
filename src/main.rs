@@ -81,6 +81,7 @@ async fn run(cli: Cli, styler: Styler) -> Result<()> {
             stdin,
             include_declaration,
             references_limit,
+            tests,
         } => {
             let position = line.zip(column);
             commands::handle_references_command(
@@ -93,6 +94,7 @@ async fn run(cli: Cli, styler: Styler) -> Result<()> {
                 references_limit,
                 &formatter,
                 timeout,
+                tests,
             )
             .await?;
         }
@@ -111,7 +113,7 @@ async fn run(cli: Cli, styler: Styler) -> Result<()> {
             commands::handle_document_symbols_command(&workspace_root, &file, &formatter, timeout)
                 .await?;
         }
-        Commands::Inspect { file, symbols, references, references_limit } => {
+        Commands::Inspect { file, symbols, references, references_limit, tests } => {
             commands::handle_inspect_command(
                 &workspace_root,
                 file.as_deref(),
@@ -120,6 +122,7 @@ async fn run(cli: Cli, styler: Styler) -> Result<()> {
                 timeout,
                 references,
                 references_limit,
+                tests,
             )
             .await?;
         }

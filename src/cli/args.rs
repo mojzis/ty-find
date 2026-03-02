@@ -103,6 +103,10 @@ pub enum Commands {
         /// Maximum number of individual references to display (0 = unlimited)
         #[arg(long, default_value_t = 20)]
         references_limit: usize,
+
+        /// Show test references in a separate section (excluded by default)
+        #[arg(long, default_value_t = false)]
+        tests: bool,
     },
 
     /// Find where a symbol is defined by name (--fuzzy for partial matching)
@@ -168,6 +172,10 @@ pub enum Commands {
         /// Maximum number of individual references to display (0 = unlimited)
         #[arg(long, default_value_t = 20)]
         references_limit: usize,
+
+        /// Show test references in a separate section (excluded by default)
+        #[arg(long, default_value_t = false)]
+        tests: bool,
     },
 
     /// Public interface of a class: methods, properties, and class variables
@@ -304,6 +312,34 @@ mod tests {
             help.contains("full"),
             "Help should mention the 'full' variant.\nHelp text:\n{help}"
         );
+    }
+
+    #[test]
+    fn refs_accepts_tests_flag() {
+        let cli = Cli::try_parse_from(["tyf", "refs", "my_func", "--tests"]).unwrap();
+        match cli.command {
+            Commands::References { tests, .. } => assert!(tests),
+            _ => panic!("expected References"),
+        }
+    }
+
+    #[test]
+    fn refs_tests_flag_defaults_to_false() {
+        let cli = Cli::try_parse_from(["tyf", "refs", "my_func"]).unwrap();
+        match cli.command {
+            Commands::References { tests, .. } => assert!(!tests),
+            _ => panic!("expected References"),
+        }
+    }
+
+    #[test]
+    fn inspect_accepts_tests_flag() {
+        let cli =
+            Cli::try_parse_from(["tyf", "inspect", "MyClass", "--references", "--tests"]).unwrap();
+        match cli.command {
+            Commands::Inspect { tests, .. } => assert!(tests),
+            _ => panic!("expected Inspect"),
+        }
     }
 
     /// Verify that all subcommands appear in help (except hidden ones like generate-docs).

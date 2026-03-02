@@ -1,0 +1,10 @@
+{
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "lint:mermaid": "node lint-mermaid.mjs"
+  },
+  "devDependencies": {
+    "@mermaid-js/parser": "^0.4.0"
+  }
+}

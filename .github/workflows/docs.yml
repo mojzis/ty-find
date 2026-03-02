@@ -24,6 +24,15 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Lint mermaid diagrams
+        run: |
+          cd docs && npm ci --silent
+          cd .. && node docs/lint-mermaid.mjs
+
       - name: Install mdBook and preprocessors
         run: |
           mkdir -p bin

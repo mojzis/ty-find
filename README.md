@@ -6,6 +6,7 @@ A command-line tool for Python code navigation using ty's LSP server. Uses a dae
 
 Add this to your project's `CLAUDE.md` to enable type-aware code navigation:
 
+<!-- BEGIN SHARED:claude-snippet -->
 ```markdown
 ### Python Symbol Navigation (ty-find)
 
@@ -13,20 +14,23 @@ IMPORTANT: Use `tyf` instead of Grep for Python symbol lookups.
 Grep matches in comments, strings, and docs — tyf is type-aware and precise.
 Run `tyf --help` to see all commands. Run `tyf <cmd> --help` for details.
 
-All commands accept multiple symbols in one call — always batch to save tool invocations:
-
-- Symbol overview (definition + type + refs): `tyf inspect Sym1 Sym2 Sym3`
-- Find definition: `tyf find Sym1 Sym2 Sym3`
-- All usages before refactoring: `tyf refs Sym1 Sym2` or `tyf refs -f file.py -l LINE -c COL`
+- Symbol overview (definition + type + refs): `tyf inspect my_function`
+- Find definition: `tyf find MyClass`
+- Class public interface: `tyf members TheirClass`
+- All usages before refactoring: `tyf refs my_function` or `tyf refs -f file.py -l LINE -c COL`
 - File outline: `tyf list file.py`
+
+All commands accept multiple symbols in one call — batch to save tool invocations.
 
 Grep is still appropriate for string literals, config values, TODOs, and non-symbol text.
 ```
+<!-- END SHARED:claude-snippet -->
 
 ### Why ty-find over grep?
 
-- **Find symbol usages** - grep matches in docs, comments, and strings; tyf returns only actual code references
-- **Rename refactoring** - grep may miss or over-match; tyf is type-aware and precise
+- **Type-aware precision** — grep matches in comments, docstrings, and strings; tyf returns only actual code references through ty's type inference engine
+- **Rich symbol detail** — definition location, type signatures, full class interfaces (methods, properties, class variables), and cross-project references, all in one call
+- **Token-efficient** — condensed output by default, giving AI agents maximum information in minimum context window space
 
 ## Installation
 

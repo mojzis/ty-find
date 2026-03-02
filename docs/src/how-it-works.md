@@ -1,3 +1,10 @@
+<!-- Mermaid pitfalls (so you don't have to debug them again):
+     - Timeline: colons in labels (e.g. "00:00") break parsing because ":"
+       is the delimiter.  Use "0 sec", "2 sec" etc. instead.
+     - Gantt + dateFormat X: "after taskId, 200" treats 200 as an absolute
+       timestamp, not a duration.  Use explicit start/end: "taskId, 800, 1000".
+     - Run `make lint-mermaid` to catch syntax errors before committing.  -->
+
 # How It Works
 
 ty-find is built as a three-layer system: a thin **CLI client**, a persistent **background daemon**, and the **ty LSP server** that does the actual Python analysis. This page explains how they fit together and why.

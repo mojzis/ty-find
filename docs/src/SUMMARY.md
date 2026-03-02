@@ -5,6 +5,7 @@
 # Getting Started
 
 - [Setup with Claude Code](setup.md)
+- [How It Works](how-it-works.md)
 
 # Commands
 

@@ -1,7 +1,7 @@
 ---
 name: rust-review
 context: fork
-description: Deep Rust code quality review. Auto-invoke when finishing a task, before marking work complete, when the user asks to review code, or when preparing a PR. Covers error handling, async correctness, duplicated logic, test quality, performance patterns, and idiomatic Rust beyond what clippy catches.
+description: Deep Rust code quality review. Auto-invoke when finishing a task, before marking work complete, when the user asks to review code, or when preparing a PR. Covers error handling, async correctness, duplicated logic, test quality, performance patterns, idiomatic Rust, docs-code alignment, and API design beyond what clippy catches.
 ---
 
 # Deep Code Review for ty-find
@@ -65,7 +65,18 @@ First, run `cargo fmt --all -- --check` and `cargo clippy --all-targets --all-fe
 - Flag `&String`, `&Vec<T>`, `&Box<T>` in function signatures — use `&str`, `&[T]`, `&T` instead.
 - Check doc comments on all public types and functions.
 
-## 7. API and Module Design
+## 7. Documentation ↔ Code Alignment
+
+- **Check that `docs/src/how-it-works.md` still matches the actual architecture.** In particular:
+  - Do the diagrams (daemon layers, request lifecycle, client pool flow) reflect the current code paths in `src/daemon/` and `src/lsp/`?
+  - Are the RPC method names listed in the "Available RPC methods" table still accurate? Cross-check against the actual enum/dispatch in the daemon server code.
+  - Do the described concurrency patterns (single-pipe, batch processing, sequential LSP requests) still hold?
+  - Are timeouts, retry counts, and backoff intervals mentioned in prose consistent with the constants in the code?
+- **Check that `docs/src/commands/*.md` describe the current CLI interface.** Compare the documented flags and subcommands against the `clap` definitions in `src/cli/`.
+- **Check that `docs/src/performance.md` benchmarks and claims are not contradicted by recent changes.**
+- Flag any mismatch as 🔴 Must Fix — stale docs are worse than no docs.
+
+## 8. API and Module Design
 
 - Is `main.rs` thin? It should just parse args and call into library code.
 - Are module boundaries clean? Each module should have a clear responsibility.

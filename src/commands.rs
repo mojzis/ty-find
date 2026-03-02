@@ -579,7 +579,9 @@ pub async fn handle_find_command(
                     println!("No symbols found matching '{symbol}'");
                 } else {
                     if symbols.len() > 1 {
-                        println!("=== {symbol} ({} match(es)) ===\n", result.symbols.len());
+                        let heading =
+                            format!("=== {symbol} ({} match(es)) ===", result.symbols.len());
+                        println!("{}\n", formatter.styler().symbol(&heading));
                     }
                     println!("{}", formatter.format_workspace_symbols(&result.symbols));
                 }

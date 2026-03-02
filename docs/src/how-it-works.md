@@ -4,31 +4,30 @@ ty-find is built as a three-layer system: a thin **CLI client**, a persistent **
 
 ## Architecture overview
 
-```
- ┌─────────────────────────────────────────────────────────────────┐
- │  Terminal                                                       │
- │                                                                 │
- │  $ tyf inspect MyClass                                          │
- │  $ tyf find calculate_sum --fuzzy                               │
- │  $ tyf refs handle_request                                      │
- │                                                                 │
- └──────────────────────────┬──────────────────────────────────────┘
-                            │
-                    JSON-RPC 2.0 over
-                    Unix domain socket
-                            │
- ┌──────────────────────────▼──────────────────────────────────────┐
- │  Daemon  (background process)                                   │
- │                                                                 │
- │  ┌───────────────────────────────────────────────────────────┐  │
- │  │  LSP Client Pool                                          │  │
- │  │                                                           │  │
- │  │   workspace A  ──▶  TyLspClient  ──▶  ty lsp (process)   │  │
- │  │   workspace B  ──▶  TyLspClient  ──▶  ty lsp (process)   │  │
- │  │   ...                                                     │  │
- │  └───────────────────────────────────────────────────────────┘  │
- │                                                                 │
- └─────────────────────────────────────────────────────────────────┘
+```mermaid
+graph TB
+    subgraph Terminal
+        CLI["<b>tyf</b> CLI<br/><small>parse args · format output</small>"]
+    end
+
+    subgraph Daemon ["Daemon (background process)"]
+        Router["Request Router"]
+        subgraph Pool ["LSP Client Pool"]
+            CA["TyLspClient A"]
+            CB["TyLspClient B"]
+        end
+    end
+
+    subgraph LSP ["ty LSP servers"]
+        LA["ty lsp<br/><small>workspace A</small>"]
+        LB["ty lsp<br/><small>workspace B</small>"]
+    end
+
+    CLI -- "JSON-RPC 2.0<br/>Unix socket" --> Router
+    Router --> CA
+    Router --> CB
+    CA -- "LSP protocol<br/>stdin/stdout" --> LA
+    CB -- "LSP protocol<br/>stdin/stdout" --> LB
 ```
 
 Each layer has a single responsibility:
@@ -43,36 +42,24 @@ Each layer has a single responsibility:
 
 Here's what happens when you run `tyf find calculate_sum`:
 
-```
-  CLI                      Daemon                    ty LSP server
-   │                         │                            │
-   │  1. Connect to          │                            │
-   │     Unix socket         │                            │
-   ├────────────────────────▶│                            │
-   │                         │                            │
-   │  2. Send JSON-RPC       │                            │
-   │     "Definition" req    │                            │
-   ├────────────────────────▶│                            │
-   │                         │  3. Look up workspace      │
-   │                         │     in client pool         │
-   │                         │     (hit → reuse client)   │
-   │                         │                            │
-   │                         │  4. textDocument/didOpen    │
-   │                         │     (if file not yet open)  │
-   │                         ├───────────────────────────▶│
-   │                         │                            │
-   │                         │  5. textDocument/definition │
-   │                         ├───────────────────────────▶│
-   │                         │                            │
-   │                         │  6. Location[]             │
-   │                         │◀───────────────────────────┤
-   │                         │                            │
-   │  7. JSON-RPC response   │                            │
-   │◀────────────────────────┤                            │
-   │                         │                            │
-   │  8. Format & print      │                            │
-   │     results             │                            │
-   ▼                         │                            │
+```mermaid
+sequenceDiagram
+    participant CLI as tyf CLI
+    participant D as Daemon
+    participant LSP as ty LSP server
+
+    CLI->>D: 1. Connect (Unix socket)
+    CLI->>D: 2. JSON-RPC "Definition" request
+
+    Note over D: 3. Look up workspace<br/>in client pool (hit → reuse)
+
+    D->>LSP: 4. textDocument/didOpen (if file not yet open)
+    D->>LSP: 5. textDocument/definition
+    LSP-->>D: 6. Location[]
+
+    D-->>CLI: 7. JSON-RPC response
+
+    Note over CLI: 8. Format & print results
 ```
 
 Steps 1–8 take **50–100 ms** on a warm daemon. Without the daemon, every call would pay the full LSP startup cost (several seconds).
@@ -91,43 +78,61 @@ Starting an LSP server is expensive. The ty LSP process needs to:
 
 This takes **1–5 seconds** depending on project size. The daemon pays this cost once and keeps the server running for subsequent calls.
 
-```
-  Without daemon (cold every time)        With daemon (warm after first call)
-  ─────────────────────────────────       ──────────────────────────────────
+```mermaid
+gantt
+    title Without daemon — cold start every time
+    dateFormat X
+    axisFormat %s
 
-  $ tyf find foo                          $ tyf find foo
-  ├── spawn ty lsp ........... 800ms      ├── connect to daemon .... 2ms
-  ├── LSP initialize ........ 200ms       ├── send request ......... 1ms
-  ├── index project ......... 2000ms      ├── LSP query ............ 40ms
-  ├── LSP query ............. 50ms        └── format output ........ 1ms
-  └── format output ......... 1ms               Total: ~50ms
-        Total: ~3000ms
-                                          (LSP server already running
-  $ tyf find bar                           and project already indexed)
-  ├── spawn ty lsp ........... 800ms
-  ├── LSP initialize ........ 200ms
-  ├── index project ......... 2000ms      $ tyf find bar
-  ├── LSP query ............. 50ms        ├── connect to daemon .... 2ms
-  └── format output ......... 1ms         ├── send request ......... 1ms
-        Total: ~3000ms again              ├── LSP query ............ 40ms
-                                          └── format output ........ 1ms
-                                                Total: ~50ms again
+    section tyf find foo
+    spawn ty lsp     :a1, 0, 800
+    LSP initialize   :a2, after a1, 200
+    index project    :a3, after a2, 2000
+    LSP query        :a4, after a3, 50
+    format output    :a5, after a4, 10
+
+    section tyf find bar
+    spawn ty lsp     :b1, after a5, 800
+    LSP initialize   :b2, after b1, 200
+    index project    :b3, after b2, 2000
+    LSP query        :b4, after b3, 50
+    format output    :b5, after b4, 10
+```
+
+```mermaid
+gantt
+    title With daemon — warm after first call
+    dateFormat X
+    axisFormat %s
+
+    section tyf find foo
+    connect to daemon :a1, 0, 2
+    send request      :a2, after a1, 1
+    LSP query         :a3, after a2, 40
+    format output     :a4, after a3, 1
+
+    section tyf find bar
+    connect to daemon :b1, after a4, 2
+    send request      :b2, after b1, 1
+    LSP query         :b3, after b2, 40
+    format output     :b4, after b3, 1
 ```
 
 ### Auto-start and version checking
 
 The CLI automatically manages the daemon lifecycle:
 
-```
-  tyf find foo
-   │
-   ├── Is daemon running?
-   │    ├── No  → spawn daemon, wait for ready, then proceed
-   │    └── Yes → ping daemon
-   │              ├── Version matches?  → proceed
-   │              └── Version mismatch? → stop old daemon, start new one
-   │
-   └── Send request to daemon
+```mermaid
+flowchart TD
+    A["tyf find foo"] --> B{"Is daemon<br/>running?"}
+    B -- No --> C["Spawn daemon"]
+    C --> D["Wait for ready"]
+    D --> G["Send request"]
+    B -- Yes --> E["Ping daemon"]
+    E --> F{"Version<br/>matches?"}
+    F -- Yes --> G
+    F -- No --> H["Stop old daemon"]
+    H --> C
 ```
 
 When you upgrade ty-find, the CLI detects that the running daemon is from an older version and restarts it automatically.
@@ -139,40 +144,37 @@ The daemon tracks activity at two levels:
 - **Per-workspace**: Each LSP client records its last access time. Clients idle for more than 5 minutes are cleaned up (the `ty lsp` process is terminated).
 - **Daemon-wide**: If all workspace clients are idle, the daemon shuts itself down.
 
-```
-  Time ──────────────────────────────────────────────────────▶
-
-  00:00  tyf find foo        (daemon starts, workspace A client created)
-  00:02  tyf refs bar        (workspace A client reused)
-  00:30  tyf find baz        (workspace A client reused, timer reset)
-  05:30  [no activity]       (workspace A idle > 5 min → client removed)
-  05:30  [no clients]        (daemon shuts down)
+```mermaid
+timeline
+    title Daemon lifecycle example
+    00:00 : tyf find foo
+          : Daemon starts
+          : Workspace A client created
+    00:02 : tyf refs bar
+          : Workspace A client reused
+    00:30 : tyf find baz
+          : Workspace A client reused
+          : Idle timer reset
+    05:30 : No activity for 5 min
+          : Workspace A client removed
+          : No clients remain
+          : Daemon shuts down
 ```
 
 ## LSP client pool
 
 The daemon maintains a pool of LSP clients, one per workspace. When a request arrives, the daemon resolves it to a workspace root and looks up the corresponding client.
 
-```
-  Incoming request:  { workspace: "/home/user/my-project", ... }
-                                │
-                                ▼
-                    ┌───────────────────────┐
-                    │   LSP Client Pool     │
-                    │                       │
-                    │   Fast path (locked): │
-                    │   lookup workspace    │──── Hit? ──▶ return client
-                    │   in HashMap          │
-                    │                       │
-                    │   Miss?               │
-                    │   └── release lock    │
-                    │       spawn ty lsp    │  ◀── async, no lock held
-                    │       initialize LSP  │
-                    │       re-lock         │
-                    │       └── check again │  ◀── another task may have
-                    │           insert      │      created it meanwhile
-                    │           return      │
-                    └───────────────────────┘
+```mermaid
+flowchart TD
+    R["Incoming request<br/><code>workspace: /home/user/project</code>"] --> L{"Lookup workspace<br/>in HashMap<br/><small>(lock held)</small>"}
+    L -- Hit --> RET["Return existing client"]
+    L -- Miss --> REL["Release lock"]
+    REL --> SPAWN["Spawn ty lsp<br/>Initialize LSP<br/><small>(async, no lock held)</small>"]
+    SPAWN --> RELOCK["Re-acquire lock"]
+    RELOCK --> CHECK{"Check again<br/><small>(another task may<br/>have created it)</small>"}
+    CHECK -- Already exists --> RET
+    CHECK -- Still missing --> INS["Insert new client"] --> RET
 ```
 
 The pool uses a **lock-free fast path** pattern: the `std::sync::Mutex` is held only for the HashMap lookup (microseconds), then dropped before any async work. This avoids holding a lock across `.await`, which would block other tasks.
@@ -186,7 +188,7 @@ The CLI and daemon communicate using JSON-RPC 2.0 with LSP-style message framing
 ```
 Content-Length: 128\r\n
 \r\n
-{"jsonrpc":"2.0","id":1,"method":"Definition","params":{"workspace":"/home/user/project","file":"src/main.py","line":10,"character":5}}
+{"jsonrpc":"2.0","id":1,"method":"Definition","params":{...}}
 ```
 
 Available RPC methods:
@@ -209,32 +211,33 @@ Available RPC methods:
 
 The daemon communicates with each `ty lsp` process using the standard [Language Server Protocol](https://microsoft.github.io/language-server-protocol/). Messages use the same `Content-Length` framing but carry standard LSP methods like `textDocument/definition` and `textDocument/hover`.
 
-```
-  Daemon                                   ty lsp (child process)
-   │                                            │
-   │  ─── stdin ──────────────────────────────▶ │
-   │       LSP requests (JSON-RPC 2.0)          │
-   │                                            │
-   │  ◀── stdout ─────────────────────────────  │
-   │       LSP responses                        │
-   │                                            │
+```mermaid
+sequenceDiagram
+    participant D as Daemon
+    participant LSP as ty lsp (child process)
+
+    D->>LSP: stdin: LSP request (JSON-RPC 2.0)
+    LSP-->>D: stdout: LSP response
 ```
 
 Response routing works through request IDs: each outgoing request gets a unique integer ID (from an `AtomicU64`). A background task reads responses from stdout and matches them to pending requests using a `HashMap<u64, oneshot::Sender>`.
 
-```
-  send_request("textDocument/definition", params)
-   │
-   ├── id = next_id.fetch_add(1)          // 42
-   ├── pending_requests[42] = tx          // store sender
-   ├── write to stdin                     // send to ty
-   └── await rx                           // wait for response
+```mermaid
+sequenceDiagram
+    participant Caller as send_request()
+    participant Map as pending_requests
+    participant Stdin as stdin (to ty)
+    participant Handler as response_handler
+    participant Stdout as stdout (from ty)
 
-  response_handler (background task)
-   │
-   ├── read stdout: {"id": 42, ...}
-   ├── sender = pending_requests.remove(42)
-   └── sender.send(response)              // unblocks await above
+    Caller->>Map: store tx for id=42
+    Caller->>Stdin: write JSON-RPC {id: 42, ...}
+    Note over Caller: await rx...
+
+    Stdout-->>Handler: read {id: 42, result: ...}
+    Handler->>Map: remove(42) → tx
+    Handler->>Caller: tx.send(response)
+    Note over Caller: unblocked!
 ```
 
 ## Concurrency model
@@ -245,32 +248,33 @@ All parallelism is handled by the daemon, not the CLI:
 - Multi-symbol operations (like `tyf inspect A B C`) are sent as a single batch RPC call. The daemon processes them sequentially on its LSP client and returns merged results.
 - The CLI never spawns multiple connections or concurrent requests. This keeps the architecture simple and avoids race conditions.
 
-```
-  CLI                          Daemon
-   │                             │
-   │  inspect [A, B, C]         │
-   ├────────────────────────────▶│
-   │                             ├── hover(A)  ──▶  ty lsp
-   │                             ├── hover(B)  ──▶  ty lsp
-   │                             ├── hover(C)  ──▶  ty lsp
-   │                             │
-   │  [results for A, B, C]     │
-   │◀────────────────────────────┤
-   │                             │
+```mermaid
+sequenceDiagram
+    participant CLI as tyf CLI
+    participant D as Daemon
+    participant LSP as ty LSP
+
+    CLI->>D: inspect [A, B, C]
+    D->>LSP: hover(A)
+    LSP-->>D: result A
+    D->>LSP: hover(B)
+    LSP-->>D: result B
+    D->>LSP: hover(C)
+    LSP-->>D: result C
+    D-->>CLI: [results for A, B, C]
 ```
 
 ## Document tracking
 
 The LSP protocol requires that a client sends `textDocument/didOpen` before querying a file, and only sends it once per file per session. The LSP client tracks opened documents in a `HashSet<String>`:
 
-```
-  query for "src/main.py:10:5"
-   │
-   ├── Is "file:///path/to/src/main.py" in opened_documents?
-   │    ├── No  → send didOpen, add to set, then query
-   │    └── Yes → query directly (already open)
-   │
-   └── send textDocument/definition
+```mermaid
+flowchart TD
+    Q["Query for src/main.py:10:5"] --> C{"URI in<br/>opened_documents?"}
+    C -- No --> O["Send didOpen"]
+    O --> ADD["Add URI to set"]
+    ADD --> DEF["Send textDocument/definition"]
+    C -- Yes --> DEF
 ```
 
 Sending a duplicate `didOpen` would cause the LSP server to re-analyze the file, returning null results during the re-analysis window. The tracking set prevents this.
@@ -279,16 +283,24 @@ Sending a duplicate `didOpen` would cause the LSP server to re-analyze the file,
 
 On a cold start, the LSP server may not be fully ready to answer queries even after initialization completes. The daemon handles this with automatic retries:
 
-```
-  First query after daemon start
-   │
-   ├── attempt 1: hover(symbol) → null       (server still indexing)
-   │   └── wait 100ms
-   ├── attempt 2: hover(symbol) → null       (still not ready)
-   │   └── wait 200ms
-   ├── attempt 3: hover(symbol) → result!    (server ready)
-   │
-   └── return result
+```mermaid
+sequenceDiagram
+    participant D as Daemon
+    participant LSP as ty LSP
+
+    Note over D,LSP: First query after daemon start
+
+    D->>LSP: hover(symbol)
+    LSP-->>D: null (still indexing)
+    Note over D: wait 100ms
+
+    D->>LSP: hover(symbol)
+    LSP-->>D: null (still not ready)
+    Note over D: wait 200ms
+
+    D->>LSP: hover(symbol)
+    LSP-->>D: result ✓
+    Note over D: return result
 ```
 
 Retries use exponential backoff (100ms, 200ms, 400ms) and only apply to operations that can return null during warmup (like `hover` and `workspace/symbol`). Definition lookups don't need retries because they return empty results rather than null when the server isn't ready.

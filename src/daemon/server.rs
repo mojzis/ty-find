@@ -354,7 +354,7 @@ impl DaemonServer {
         let hover = Self::hover_with_warmup(&client, &file_str, params.line, params.column).await?;
 
         let references = if params.include_references {
-            client.find_references(&file_str, params.line, params.column, true).await?
+            client.find_references(&file_str, params.line, params.column, false).await?
         } else {
             Vec::new()
         };

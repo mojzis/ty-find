@@ -73,6 +73,14 @@ async fn test_project_inspect_and_references() {
         "references should include main.py, got:\n{out}"
     );
 
+    // The definition line (models.py:6) must NOT appear in the Refs section.
+    // Extract just the Refs section and verify the definition isn't listed there.
+    let refs_section = out.split("# Refs").nth(1).expect("should have Refs section");
+    assert!(
+        !refs_section.contains("models.py:6:"),
+        "definition line models.py:6 should not appear in references, got:\n{out}"
+    );
+
     // ── 4. references by symbol name (class) ────────────────────────
     let out = run_tyf(&["refs", "Animal"]);
     assert!(

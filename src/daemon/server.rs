@@ -1,20 +1,26 @@
 //! Daemon server implementation for persistent LSP connections.
 //!
-//! This module provides the main daemon server that listens on a Unix socket
-//! and handles JSON-RPC requests from CLI clients. The server maintains a pool
-//! of LSP clients and routes requests to the appropriate LSP server.
+//! This module provides the main daemon server that listens on both a Unix
+//! socket and a TCP port (`127.0.0.1`) simultaneously. The TCP listener serves
+//! as a fallback for sandboxed environments (e.g., macOS Seatbelt) that block
+//! `connect()` to Unix domain sockets.
+//!
+//! Both transports feed into the same request router — no handler logic is
+//! duplicated. The transport is just an `AsyncRead + AsyncWrite` stream.
 
 #![allow(dead_code)]
 
 use anyhow::{Context, Result};
 use serde_json::Value;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::net::{UnixListener, UnixStream};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
+use tokio::net::{TcpListener, UnixListener};
 use tokio::sync::broadcast;
 
+use crate::daemon::pidfile::{self, PidfileData};
 use crate::daemon::pool::LspClientPool;
 use crate::daemon::protocol::{
     BatchReferencesEntry, BatchReferencesParams, BatchReferencesResult, DaemonError, DaemonRequest,
@@ -30,6 +36,12 @@ use crate::lsp::protocol::{Hover, SymbolKind};
 pub struct DaemonServer {
     /// Path to the Unix socket
     socket_path: PathBuf,
+
+    /// Path to the pidfile
+    pidfile_path: PathBuf,
+
+    /// TCP port the daemon listens on (set after binding)
+    tcp_port: u16,
 
     /// Pool of LSP clients (one per workspace).
     ///
@@ -49,9 +61,13 @@ impl DaemonServer {
     /// Create a new daemon server with the specified socket path.
     pub fn new(socket_path: PathBuf) -> Self {
         let (shutdown_tx, _) = broadcast::channel(1);
+        let pidfile_path =
+            pidfile::get_pidfile_path().unwrap_or_else(|_| socket_path.with_extension("pid"));
 
         Self {
             socket_path,
+            pidfile_path,
+            tcp_port: 0,
             lsp_pool: Arc::new(LspClientPool::new()),
             shutdown_tx,
             start_time: Instant::now(),
@@ -65,21 +81,43 @@ impl DaemonServer {
         super::client::get_socket_path()
     }
 
-    /// Start the daemon server and listen for connections.
-    pub async fn start(self) -> Result<()> {
+    /// Start the daemon server and listen for connections on both Unix socket
+    /// and TCP `127.0.0.1`.
+    pub async fn start(mut self) -> Result<()> {
+        let (unix_listener, tcp_listener) = self.bind_listeners().await?;
+        self.write_pidfile()?;
+
+        let server = Arc::new(self);
+        let local = tokio::task::LocalSet::new();
+
+        Self::spawn_accept_loops(&server, &local, unix_listener, tcp_listener);
+
+        // Wait for shutdown signal (this drives all spawned tasks)
+        let server_clone = Arc::clone(&server);
+        local
+            .run_until(async move {
+                let mut shutdown_rx = server_clone.shutdown_tx.subscribe();
+                let _ = shutdown_rx.recv().await;
+                tracing::info!("Shutdown signal received");
+            })
+            .await;
+
+        server.cleanup().await?;
+        Ok(())
+    }
+
+    /// Bind both Unix socket and TCP listeners.
+    async fn bind_listeners(&mut self) -> Result<(UnixListener, TcpListener)> {
         // Remove existing socket file if it exists
         if self.socket_path.exists() {
             std::fs::remove_file(&self.socket_path)
                 .context("Failed to remove existing socket file")?;
         }
 
-        // Bind to Unix socket
-        let listener =
+        let unix_listener =
             UnixListener::bind(&self.socket_path).context("Failed to bind Unix socket")?;
+        tracing::info!("Daemon listening on Unix socket {}", self.socket_path.display());
 
-        tracing::info!("Daemon listening on {}", self.socket_path.display());
-
-        // Set socket permissions (Unix only)
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -88,65 +126,110 @@ impl DaemonServer {
                 .context("Failed to set socket permissions")?;
         }
 
-        let server = Arc::new(self);
+        let tcp_listener = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0)))
+            .await
+            .context("Failed to bind TCP listener on 127.0.0.1")?;
+        let tcp_addr = tcp_listener.local_addr().context("Failed to get TCP local address")?;
+        self.tcp_port = tcp_addr.port();
+        tracing::info!("Daemon listening on TCP {tcp_addr}");
 
+        Ok((unix_listener, tcp_listener))
+    }
+
+    /// Write the pidfile with both transport addresses.
+    fn write_pidfile(&self) -> Result<()> {
+        let data = PidfileData {
+            pid: std::process::id(),
+            socket: self.socket_path.clone(),
+            tcp_port: self.tcp_port,
+            version: env!("CARGO_PKG_VERSION").to_string(),
+        };
+        data.write(&self.pidfile_path).context("Failed to write pidfile")?;
+        tracing::info!("Wrote pidfile to {}", self.pidfile_path.display());
+        Ok(())
+    }
+
+    /// Spawn idle timeout and both accept loops on the `LocalSet`.
+    fn spawn_accept_loops(
+        server: &Arc<Self>,
+        local: &tokio::task::LocalSet,
+        unix_listener: UnixListener,
+        tcp_listener: TcpListener,
+    ) {
         // NOTE: Using LocalSet because LspClientPool uses std::sync::Mutex
-        // internally and spawn_local avoids Send requirements. TyLspClient
-        // itself is now Send (stdin uses tokio::sync::Mutex), but the pool's
-        // internal locking pattern is simpler with LocalSet.
-        let local = tokio::task::LocalSet::new();
+        // internally and spawn_local avoids Send requirements.
 
-        // Spawn idle timeout task
-        let server_clone = Arc::clone(&server);
+        // Idle timeout
+        let s = Arc::clone(server);
+        local.spawn_local(async move { s.idle_timeout_task().await });
+
+        // Unix socket accept loop
+        let s = Arc::clone(server);
         local.spawn_local(async move {
-            server_clone.idle_timeout_task().await;
-        });
-
-        // Main accept loop
-        let server_clone = Arc::clone(&server);
-        let accept_loop = local.run_until(async move {
-            let mut shutdown_rx = server_clone.shutdown_tx.subscribe();
-
+            let mut shutdown_rx = s.shutdown_tx.subscribe();
             loop {
                 tokio::select! {
-                    // Accept new connection
-                    result = listener.accept() => {
+                    result = unix_listener.accept() => {
                         match result {
                             Ok((stream, _addr)) => {
-                                let server_for_conn = Arc::clone(&server_clone);
+                                let conn = Arc::clone(&s);
                                 tokio::task::spawn_local(async move {
-                                    if let Err(err) = server_for_conn.handle_connection(stream).await {
-                                        tracing::error!("Connection error: {err}");
+                                    if let Err(err) = conn.handle_connection(stream).await {
+                                        tracing::error!("Unix connection error: {err}");
                                     }
                                 });
                             }
-                            Err(err) => {
-                                tracing::error!("Accept error: {err}");
-                            }
+                            Err(err) => tracing::error!("Unix accept error: {err}"),
                         }
                     }
-
-                    // Shutdown signal
                     _ = shutdown_rx.recv() => {
-                        tracing::info!("Shutdown signal received");
+                        tracing::info!("Unix listener shutting down");
                         break;
                     }
                 }
             }
         });
 
-        accept_loop.await;
-
-        // Cleanup
-        server.cleanup().await?;
-
-        Ok(())
+        // TCP accept loop
+        let s = Arc::clone(server);
+        local.spawn_local(async move {
+            let mut shutdown_rx = s.shutdown_tx.subscribe();
+            loop {
+                tokio::select! {
+                    result = tcp_listener.accept() => {
+                        match result {
+                            Ok((stream, addr)) => {
+                                tracing::debug!("TCP connection from {addr}");
+                                let conn = Arc::clone(&s);
+                                tokio::task::spawn_local(async move {
+                                    if let Err(err) = conn.handle_connection(stream).await {
+                                        tracing::error!("TCP connection error: {err}");
+                                    }
+                                });
+                            }
+                            Err(err) => tracing::error!("TCP accept error: {err}"),
+                        }
+                    }
+                    _ = shutdown_rx.recv() => {
+                        tracing::info!("TCP listener shutting down");
+                        break;
+                    }
+                }
+            }
+        });
     }
 
     /// Handle a single client connection.
-    async fn handle_connection(self: Arc<Self>, stream: UnixStream) -> Result<()> {
-        let (reader, mut writer) = stream.into_split();
+    ///
+    /// Generic over any stream implementing `AsyncRead + AsyncWrite`, allowing
+    /// the same handler to serve both Unix socket and TCP connections.
+    async fn handle_connection<S>(self: Arc<Self>, stream: S) -> Result<()>
+    where
+        S: tokio::io::AsyncRead + AsyncWrite + Unpin,
+    {
+        let (reader, writer) = tokio::io::split(stream);
         let mut reader = BufReader::new(reader);
+        let mut writer = writer;
         let mut header_line = String::new();
 
         loop {
@@ -608,6 +691,8 @@ impl DaemonServer {
             uptime: self.start_time.elapsed().as_secs(),
             active_workspaces,
             cache_size: 0, // Cache not yet implemented
+            socket_path: Some(self.socket_path.to_string_lossy().into_owned()),
+            tcp_port: Some(self.tcp_port),
         };
         Ok(serde_json::to_value(result)?)
     }
@@ -715,13 +800,16 @@ impl DaemonServer {
             std::fs::remove_file(&self.socket_path).context("Failed to remove socket file")?;
         }
 
+        // Remove pidfile
+        pidfile::remove_pidfile(&self.pidfile_path);
+
         Ok(())
     }
 }
 
 /// Send a framed error response to the client.
-async fn send_error_response(
-    writer: &mut tokio::net::unix::OwnedWriteHalf,
+async fn send_error_response<W: AsyncWrite + Unpin>(
+    writer: &mut W,
     error: DaemonError,
 ) -> Result<()> {
     let error_response = DaemonResponse::error(0, error);
@@ -762,6 +850,20 @@ mod tests {
         assert_eq!(value["cache_size"], 0);
         // Uptime should be a small number since the server was just created
         assert!(value["uptime"].as_u64().unwrap() < 5);
+    }
+
+    #[tokio::test]
+    async fn test_ping_includes_transport_info() {
+        let socket_path = PathBuf::from("/tmp/test-ty-find-transport.sock");
+        let server = DaemonServer::new(socket_path.clone());
+
+        let params = serde_json::json!({});
+        let value = server.handle_ping(params).await.expect("ping should succeed");
+
+        // Socket path should be included
+        assert_eq!(value["socket_path"].as_str().unwrap(), socket_path.to_string_lossy().as_ref());
+        // TCP port defaults to 0 before binding
+        assert!(value["tcp_port"].is_number());
     }
 
     #[test]

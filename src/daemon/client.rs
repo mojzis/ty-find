@@ -1,8 +1,9 @@
 //! Daemon client for communicating with the persistent tyf daemon.
 //!
-//! This module provides a client that connects to the daemon via Unix domain
-//! sockets and sends JSON-RPC 2.0 requests. The client handles auto-starting
-//! the daemon if it's not already running.
+//! This module provides a client that connects to the daemon using a dual
+//! transport strategy: Unix domain socket (primary) with TCP fallback for
+//! sandboxed environments. The transport is auto-negotiated with zero
+//! configuration.
 
 #![allow(dead_code)]
 
@@ -12,9 +13,10 @@ use serde_json::Value;
 use std::path::PathBuf;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::net::UnixStream;
+use tokio::net::{TcpStream, UnixStream};
 use tokio::time::timeout;
 
+use super::pidfile::{self, PidfileData};
 use super::protocol::{
     BatchReferencesParams, BatchReferencesQuery, BatchReferencesResult, DaemonRequest,
     DaemonResponse, DefinitionParams, DefinitionResult, DocumentSymbolsParams,
@@ -35,11 +37,17 @@ const MAX_STARTUP_RETRIES: usize = 20;
 /// Delay between startup retry attempts (100ms).
 const STARTUP_RETRY_DELAY: Duration = Duration::from_millis(100);
 
+/// Transport layer abstraction — both `AsyncRead` and `AsyncWrite`.
+///
+/// Object-safe supertrait alias so we can store `Box<dyn DaemonTransport>`.
+trait DaemonTransport: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send {}
+impl<T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send> DaemonTransport for T {}
+
 /// Client for communicating with the tyf daemon.
 ///
-/// The client connects to the daemon via a Unix domain socket and sends
-/// JSON-RPC 2.0 requests. Messages are framed using Content-Length headers
-/// similar to the LSP protocol.
+/// The client connects to the daemon via Unix domain socket (primary) or TCP
+/// (fallback), and sends JSON-RPC 2.0 requests. Messages are framed using
+/// Content-Length headers similar to the LSP protocol.
 ///
 /// # Example
 /// ```no_run
@@ -59,12 +67,8 @@ const STARTUP_RETRY_DELAY: Duration = Duration::from_millis(100);
 /// # }
 /// ```
 pub struct DaemonClient {
-    /// Path to the Unix domain socket.
-    #[allow(dead_code)]
-    socket_path: PathBuf,
-
-    /// Connection to the daemon.
-    stream: UnixStream,
+    /// Connection to the daemon (Unix socket or TCP stream).
+    stream: Box<dyn DaemonTransport>,
 
     /// Timeout for daemon operations.
     timeout: Duration,
@@ -73,22 +77,66 @@ pub struct DaemonClient {
 impl DaemonClient {
     /// Connect to an existing daemon with the default timeout.
     ///
-    /// Returns an error if the daemon is not running or the socket doesn't exist.
+    /// Tries Unix socket first, then falls back to TCP if the Unix connect
+    /// fails with `EPERM` (sandbox), `ECONNREFUSED`, or `ENOENT`.
     pub async fn connect() -> Result<Self> {
         Self::connect_with_timeout(DEFAULT_TIMEOUT).await
     }
 
     /// Connect to an existing daemon with a custom timeout.
+    ///
+    /// Connection strategy:
+    /// 1. Read pidfile to get socket path and TCP port.
+    /// 2. Try `connect()` to the Unix socket.
+    /// 3. If Unix fails → fall back to TCP `127.0.0.1:{tcp_port}`.
+    /// 4. If neither works → return error.
     pub async fn connect_with_timeout(timeout: Duration) -> Result<Self> {
-        let socket_path = get_socket_path()?;
+        let pidfile_path = pidfile::get_pidfile_path()?;
 
+        // Try pidfile-based connection first (new format)
+        if pidfile_path.exists() {
+            if let Ok(data) = PidfileData::read(&pidfile_path) {
+                return Self::connect_with_pidfile(&data, timeout).await;
+            }
+            tracing::debug!("Pidfile exists but unreadable, falling back to socket path");
+        }
+
+        // Fallback: try connecting directly to the socket path (backward
+        // compat with old daemon that doesn't write a pidfile)
+        let socket_path = get_socket_path()?;
         let stream = UnixStream::connect(&socket_path)
             .await
-            .context("Failed to connect to daemon socket")?;
+            .context("Failed to connect to daemon (no pidfile, socket connect failed)")?;
 
-        tracing::debug!("Connected to daemon at {}", socket_path.display());
+        tracing::debug!("Connected to daemon via Unix socket (legacy, no pidfile)");
 
-        Ok(Self { socket_path, stream, timeout })
+        Ok(Self { stream: Box::new(stream), timeout })
+    }
+
+    /// Connect using pidfile data: try Unix socket first, TCP fallback.
+    async fn connect_with_pidfile(data: &PidfileData, timeout: Duration) -> Result<Self> {
+        // Try Unix socket first (fast path)
+        match UnixStream::connect(&data.socket).await {
+            Ok(stream) => {
+                tracing::debug!("Connected to daemon via Unix socket");
+                return Ok(Self { stream: Box::new(stream), timeout });
+            }
+            Err(e) => {
+                // EPERM (sandbox), ECONNREFUSED, or ENOENT → fall back to TCP.
+                // No timeout needed — sandbox-blocked connect returns EPERM immediately.
+                tracing::debug!("Unix socket connect failed ({e}), trying TCP fallback");
+            }
+        }
+
+        // TCP fallback
+        let addr = format!("127.0.0.1:{}", data.tcp_port);
+        let stream = TcpStream::connect(&addr)
+            .await
+            .with_context(|| format!("TCP fallback to {addr} also failed"))?;
+
+        tracing::info!("Connected to daemon via TCP fallback ({addr})");
+
+        Ok(Self { stream: Box::new(stream), timeout })
     }
 
     /// Send a JSON-RPC request to the daemon and wait for response.
@@ -325,9 +373,12 @@ pub const CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// one is spawned so the user always talks to a daemon matching their CLI.
 pub async fn ensure_daemon_running() -> Result<()> {
     let socket_path = get_socket_path()?;
+    let pidfile_path = pidfile::get_pidfile_path()?;
 
-    // Check if socket already exists and is connectable
-    if socket_path.exists() {
+    // Check if daemon is reachable (via pidfile or socket)
+    let reachable = pidfile_path.exists() || socket_path.exists();
+
+    if reachable {
         match DaemonClient::connect().await {
             Ok(mut client) => {
                 // Verify the running daemon has the same version as this binary.
@@ -347,19 +398,22 @@ pub async fn ensure_daemon_running() -> Result<()> {
                         // Give the old daemon a moment to release the socket.
                         tokio::time::sleep(Duration::from_millis(200)).await;
                         let _ = std::fs::remove_file(&socket_path);
+                        let _ = std::fs::remove_file(&pidfile_path);
                     }
                     Err(e) => {
                         tracing::warn!("Ping failed on existing daemon: {e} — restarting");
                         let _ = client.shutdown().await;
                         tokio::time::sleep(Duration::from_millis(200)).await;
                         let _ = std::fs::remove_file(&socket_path);
+                        let _ = std::fs::remove_file(&pidfile_path);
                     }
                 }
             }
             Err(e) => {
-                tracing::warn!("Socket exists but connection failed: {e}");
-                // Try to clean up stale socket
+                tracing::warn!("Daemon unreachable: {e}");
+                // Try to clean up stale files
                 let _ = std::fs::remove_file(&socket_path);
+                let _ = std::fs::remove_file(&pidfile_path);
             }
         }
     }
@@ -368,11 +422,12 @@ pub async fn ensure_daemon_running() -> Result<()> {
     tracing::info!("Starting daemon...");
     spawn_daemon()?;
 
-    // Wait for daemon to start
+    // Wait for daemon to start — check for pidfile (new) or socket (legacy)
     for i in 0..MAX_STARTUP_RETRIES {
         tokio::time::sleep(STARTUP_RETRY_DELAY).await;
 
-        if socket_path.exists() {
+        let ready = pidfile_path.exists() || socket_path.exists();
+        if ready {
             match timeout(Duration::from_millis(500), DaemonClient::connect()).await {
                 Ok(Ok(_)) => {
                     tracing::info!("Daemon started successfully");
@@ -524,5 +579,72 @@ mod tests {
         let error = response.error.expect("should have error field");
         assert_eq!(error.code, -32000);
         assert_eq!(error.message, "File not found");
+    }
+
+    #[tokio::test]
+    async fn test_connect_with_pidfile_tcp_fallback() {
+        // Spin up a TCP listener that speaks the daemon protocol
+        let listener =
+            tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind should succeed");
+        let port = listener.local_addr().expect("addr").port();
+
+        // Spawn a task that accepts one connection and responds to a ping
+        let handle = tokio::spawn(async move {
+            use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
+
+            let (mut stream, _) = listener.accept().await.expect("accept");
+            let mut buf_reader = tokio::io::BufReader::new(&mut stream);
+
+            // Read request
+            let mut header = String::new();
+            buf_reader.read_line(&mut header).await.expect("read header");
+            let len: usize = header
+                .trim()
+                .strip_prefix("Content-Length: ")
+                .expect("header")
+                .parse()
+                .expect("parse");
+            let mut empty = String::new();
+            buf_reader.read_line(&mut empty).await.expect("read sep");
+            let mut body = vec![0u8; len];
+            buf_reader.read_exact(&mut body).await.expect("read body");
+
+            // Send a ping response
+            let resp = serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {
+                    "status": "running",
+                    "version": env!("CARGO_PKG_VERSION"),
+                    "uptime": 1,
+                    "active_workspaces": 0,
+                    "cache_size": 0,
+                    "socket_path": "/tmp/nonexistent.sock",
+                    "tcp_port": port
+                }
+            });
+            let resp_str = serde_json::to_string(&resp).expect("serialize");
+            let framed = format!("Content-Length: {}\r\n\r\n{resp_str}", resp_str.len());
+            stream.write_all(framed.as_bytes()).await.expect("write");
+            stream.flush().await.expect("flush");
+        });
+
+        // Create a pidfile pointing to a nonexistent socket but valid TCP port
+        let data = PidfileData {
+            pid: std::process::id(),
+            socket: PathBuf::from("/tmp/nonexistent-ty-find-test.sock"),
+            tcp_port: port,
+            version: env!("CARGO_PKG_VERSION").to_string(),
+        };
+
+        // Try connecting — Unix socket should fail, TCP should succeed
+        let mut client = DaemonClient::connect_with_pidfile(&data, DEFAULT_TIMEOUT)
+            .await
+            .expect("should connect via TCP fallback");
+
+        let ping = client.ping().await.expect("ping should succeed");
+        assert_eq!(ping.status, "running");
+
+        handle.await.expect("server task");
     }
 }

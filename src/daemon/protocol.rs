@@ -659,6 +659,14 @@ pub struct PingResult {
 
     /// Number of cached responses
     pub cache_size: usize,
+
+    /// Unix socket path the daemon is listening on
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub socket_path: Option<String>,
+
+    /// TCP port on 127.0.0.1 the daemon is listening on
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tcp_port: Option<u16>,
 }
 
 /// Result of a shutdown request.
@@ -767,6 +775,8 @@ mod tests {
             uptime: 42,
             active_workspaces: 2,
             cache_size: 0,
+            socket_path: Some("/tmp/ty-find-1000.sock".to_string()),
+            tcp_port: Some(52341),
         };
 
         let json = serde_json::to_value(&result).unwrap();

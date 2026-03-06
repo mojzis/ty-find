@@ -685,7 +685,9 @@ pub async fn handle_find_command(
         #[cfg(unix)]
         {
             for symbol in symbols {
-                let locations = find_symbol_via_workspace(workspace_root, symbol, timeout).await?;
+                let locations =
+                    find_symbol_via_workspace(workspace_root, symbol, timeout, debug_log.as_ref())
+                        .await?;
                 results.push((symbol.clone(), locations));
             }
         }
@@ -724,9 +726,10 @@ async fn find_symbol_via_workspace(
     workspace_root: &Path,
     symbol: &str,
     timeout: Duration,
+    debug_log: Option<&Arc<DebugLog>>,
 ) -> Result<Vec<Location>> {
     ensure_daemon_running().await?;
-    let mut client = DaemonClient::connect_with_timeout(timeout).await?;
+    let mut client = connect_daemon(timeout, debug_log).await?;
 
     // Use exact_name filter so the daemon only returns symbols with matching names,
     // avoiding serialization of thousands of fuzzy matches.

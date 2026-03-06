@@ -104,7 +104,9 @@ impl DaemonClient {
 
     /// Send a JSON-RPC request to the daemon and wait for response.
     pub async fn send_request(&mut self, method: Method, params: Value) -> Result<DaemonResponse> {
-        let request = DaemonRequest::new(method, params);
+        let mut request = DaemonRequest::new(method, params);
+        // Set debug flag so the daemon includes raw LSP trace in the response
+        request.debug = self.debug_log.is_some();
 
         // Serialize request to JSON
         let request_json =
@@ -141,6 +143,15 @@ impl DaemonClient {
             let elapsed_ms = rpc_start.elapsed().as_millis();
             let response_json = serde_json::to_string_pretty(&response).unwrap_or_default();
             log.log_rpc_response(elapsed_ms, response.is_success(), &response_json);
+
+            // Log daemon-side LSP trace if available
+            if let Some(ref trace) = response.debug_trace {
+                log.log_lsp_trace(
+                    &trace.method,
+                    &serde_json::to_string_pretty(&trace.params).unwrap_or_default(),
+                    &serde_json::to_string_pretty(&trace.response).unwrap_or_default(),
+                );
+            }
         }
 
         Ok(response)

@@ -789,6 +789,14 @@ async fn test_debug_flag_with_daemon_logs_rpc() {
         log_content.contains("Result:"),
         "debug log should contain result summary\nLog:\n{log_content}"
     );
+    assert!(
+        log_content.contains("LSP details (daemon-side):"),
+        "debug log should contain LSP trace from daemon\nLog:\n{log_content}"
+    );
+    assert!(
+        log_content.contains("LSP method:"),
+        "debug log should contain LSP method\nLog:\n{log_content}"
+    );
 
     // Clean up debug log file
     let _ = std::fs::remove_file(log_path);

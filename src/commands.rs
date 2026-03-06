@@ -583,6 +583,7 @@ pub async fn handle_references_command(
     )
 }
 
+#[allow(clippy::too_many_lines)]
 pub async fn handle_find_command(
     workspace_root: &Path,
     file: Option<&Path>,
@@ -637,6 +638,10 @@ pub async fn handle_find_command(
             if let Some(ref log) = debug_log {
                 let cmd = format!("find {} --fuzzy", symbols.join(" "));
                 log.log_reproduction_commands(workspace_root, symbols, &cmd);
+                // Log LSP snippet for each fuzzy query
+                for sym in symbols {
+                    log.log_lsp_snippet(workspace_root, sym, 0, 0, "workspace/symbol");
+                }
             }
             return Ok(());
         }
@@ -691,6 +696,21 @@ pub async fn handle_find_command(
         log.log_result_summary(&format!("{total} definition(s) found"));
         let cmd = format!("find {}", symbols.join(" "));
         log.log_reproduction_commands(workspace_root, symbols, &cmd);
+        // Log LSP snippet using the first result location (if any)
+        for (sym, locs) in &results {
+            if let Some(loc) = locs.first() {
+                let file_path = loc.uri.strip_prefix("file://").unwrap_or(&loc.uri);
+                log.log_lsp_snippet(
+                    workspace_root,
+                    file_path,
+                    loc.range.start.line,
+                    loc.range.start.character,
+                    "textDocument/definition",
+                );
+            } else if file.is_none() {
+                log.log_lsp_snippet(workspace_root, sym, 0, 0, "workspace/symbol");
+            }
+        }
     }
 
     println!("{}", formatter.format_find_results(&results));

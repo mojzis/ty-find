@@ -110,6 +110,25 @@ impl DebugLog {
         self.write_line("RPC request sent:");
         self.write_raw(&format!("           Method: {method}\n"));
         self.write_raw(&format!("           Params: {params_json}\n"));
+
+        // Reconstruct the underlying LSP method so users know what ty sees
+        if let Some(lsp_method) = Self::daemon_to_lsp_method(method) {
+            self.write_raw(&format!("           LSP method: {lsp_method}\n"));
+        }
+    }
+
+    /// Map daemon RPC method names to the underlying LSP method names.
+    fn daemon_to_lsp_method(daemon_method: &str) -> Option<&'static str> {
+        match daemon_method {
+            "hover" => Some("textDocument/hover"),
+            "definition" => Some("textDocument/definition"),
+            "references" | "batch_references" => Some("textDocument/references"),
+            "workspace_symbols" => Some("workspace/symbol"),
+            "document_symbols" => Some("textDocument/documentSymbol"),
+            "inspect" => Some("textDocument/hover + textDocument/references"),
+            "members" => Some("textDocument/documentSymbol + textDocument/hover (per member)"),
+            _ => None,
+        }
     }
 
     /// Log an incoming RPC response with timing and the full JSON payload.
@@ -118,6 +137,14 @@ impl DebugLog {
         self.write_line(&format!("RPC response received ({elapsed_ms}ms):"));
         self.write_raw(&format!("           Status: {status}\n"));
         self.write_raw(&format!("           Result: {response_json}\n"));
+    }
+
+    /// Log the daemon-side LSP trace (method, params, response).
+    pub fn log_lsp_trace(&self, lsp_method: &str, lsp_params: &str, lsp_response: &str) {
+        self.write_line("LSP details (daemon-side):");
+        self.write_raw(&format!("           LSP method: {lsp_method}\n"));
+        self.write_raw(&format!("           LSP params: {lsp_params}\n"));
+        self.write_raw(&format!("           LSP response: {lsp_response}\n"));
     }
 
     /// Log the final result summary.
@@ -153,6 +180,67 @@ impl DebugLog {
         let _ = writeln!(cmds, "RUST_LOG=ty_find=trace tyf {command}");
 
         self.write_raw(&cmds);
+    }
+
+    /// Log a raw LSP JSON-RPC snippet that can be piped to `ty server` for manual reproduction.
+    ///
+    /// The snippet includes the Content-Length header so it can be used directly:
+    ///   echo '<snippet>' | ty server
+    pub fn log_lsp_snippet(
+        &self,
+        workspace_root: &Path,
+        file: &str,
+        line: u32,
+        column: u32,
+        lsp_method: &str,
+    ) {
+        let file_uri =
+            if file.starts_with("file://") { file.to_string() } else { format!("file://{file}") };
+
+        let init_params = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "processId": null,
+                "rootUri": format!("file://{}", workspace_root.display()),
+                "capabilities": {}
+            }
+        });
+
+        let lsp_params = match lsp_method {
+            "workspace/symbol" => {
+                // For workspace/symbol, the query is the symbol name (use file as proxy)
+                serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "method": "workspace/symbol",
+                    "params": {
+                        "query": file  // caller passes query string as "file" param
+                    }
+                })
+            }
+            _ => {
+                serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "method": lsp_method,
+                    "params": {
+                        "textDocument": { "uri": file_uri },
+                        "position": { "line": line, "character": column }
+                    }
+                })
+            }
+        };
+
+        self.write_raw("\n--- Raw LSP request (pipe to `ty server`) ---\n");
+        self.write_raw("# Initialize:\n");
+        let init_json = serde_json::to_string(&init_params).unwrap_or_default();
+        self.write_raw(&format!("Content-Length: {}\r\n\r\n{init_json}\n\n", init_json.len()));
+
+        self.write_raw(&format!("# {lsp_method} request:\n"));
+        let lsp_json = serde_json::to_string(&lsp_params).unwrap_or_default();
+        self.write_raw(&format!("Content-Length: {}\r\n\r\n{lsp_json}\n", lsp_json.len()));
     }
 
     /// Flush the log writer.
@@ -191,6 +279,8 @@ mod tests {
 
         log.log_rpc_response(42, true, r#"{"symbols": []}"#);
 
+        log.log_lsp_trace("workspace/symbol", r#"{"query": "calculate_sum"}"#, r"[]");
+
         log.log_result_summary("0 definitions found");
 
         log.log_reproduction_commands(
@@ -212,6 +302,11 @@ mod tests {
         assert!(content.contains("Daemon connection:"), "should contain daemon connection section");
         assert!(content.contains("RPC request sent:"), "should contain RPC request section");
         assert!(content.contains("RPC response received"), "should contain RPC response section");
+        assert!(
+            content.contains("LSP details (daemon-side):"),
+            "should contain LSP details section"
+        );
+        assert!(content.contains("LSP method: workspace/symbol"), "should contain LSP method");
         assert!(content.contains("Result:"), "should contain result summary");
         assert!(content.contains("Reproduction commands"), "should contain reproduction commands");
         assert!(content.contains("tyf daemon status"), "should contain daemon status command");

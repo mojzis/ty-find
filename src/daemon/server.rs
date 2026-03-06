@@ -210,6 +210,11 @@ impl DaemonServer {
 
     /// Process a single JSON-RPC request and return a response.
     async fn handle_request(&self, request: DaemonRequest) -> DaemonResponse {
+        let want_debug = request.debug;
+        let lsp_method = Self::daemon_to_lsp_method(request.method);
+        // Clone params for debug trace (only when debug is requested)
+        let debug_params = if want_debug { Some(request.params.clone()) } else { None };
+
         let result = match request.method {
             Method::Hover => self.handle_hover(request.params).await,
             Method::Definition => self.handle_definition(request.params).await,
@@ -224,9 +229,40 @@ impl DaemonServer {
             Method::Shutdown => self.handle_shutdown(request.params).await,
         };
 
-        match result {
+        let debug_trace = if want_debug {
+            lsp_method.map(|method| {
+                use crate::daemon::protocol::DebugTrace;
+                DebugTrace {
+                    method: method.to_string(),
+                    params: debug_params.unwrap_or(Value::Null),
+                    response: match &result {
+                        Ok(v) => v.clone(),
+                        Err(e) => serde_json::json!({"error": e.to_string()}),
+                    },
+                }
+            })
+        } else {
+            None
+        };
+
+        let response = match result {
             Ok(value) => DaemonResponse::success(request.id, value),
             Err(e) => DaemonResponse::error(request.id, DaemonError::internal_error(e.to_string())),
+        };
+        response.with_debug_trace(debug_trace)
+    }
+
+    /// Map daemon method to the primary underlying LSP method.
+    fn daemon_to_lsp_method(method: Method) -> Option<&'static str> {
+        match method {
+            Method::Hover => Some("textDocument/hover"),
+            Method::Definition => Some("textDocument/definition"),
+            Method::References | Method::BatchReferences => Some("textDocument/references"),
+            Method::WorkspaceSymbols => Some("workspace/symbol"),
+            Method::DocumentSymbols => Some("textDocument/documentSymbol"),
+            Method::Inspect => Some("textDocument/hover + textDocument/references"),
+            Method::Members => Some("textDocument/documentSymbol + textDocument/hover"),
+            Method::Ping | Method::Shutdown | Method::Diagnostics => None,
         }
     }
 

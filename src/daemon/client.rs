@@ -10,10 +10,13 @@ use anyhow::{Context, Result};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 use tokio::time::timeout;
+
+use crate::debug::DebugLog;
 
 use super::protocol::{
     BatchReferencesParams, BatchReferencesQuery, BatchReferencesResult, DaemonRequest,
@@ -68,6 +71,9 @@ pub struct DaemonClient {
 
     /// Timeout for daemon operations.
     timeout: Duration,
+
+    /// Optional debug log for tracing RPC requests/responses.
+    debug_log: Option<Arc<DebugLog>>,
 }
 
 impl DaemonClient {
@@ -88,22 +94,37 @@ impl DaemonClient {
 
         tracing::debug!("Connected to daemon at {}", socket_path.display());
 
-        Ok(Self { socket_path, stream, timeout })
+        Ok(Self { socket_path, stream, timeout, debug_log: None })
+    }
+
+    /// Attach a debug log for tracing RPC requests and responses.
+    pub fn set_debug_log(&mut self, log: Arc<DebugLog>) {
+        self.debug_log = Some(log);
     }
 
     /// Send a JSON-RPC request to the daemon and wait for response.
     pub async fn send_request(&mut self, method: Method, params: Value) -> Result<DaemonResponse> {
-        let request = DaemonRequest::new(method, params);
+        let mut request = DaemonRequest::new(method, params);
+        // Set debug flag so the daemon includes raw LSP trace in the response
+        request.debug = self.debug_log.is_some();
 
         // Serialize request to JSON
         let request_json =
             serde_json::to_string(&request).context("Failed to serialize request")?;
 
+        // Log the outgoing RPC request
+        if let Some(ref log) = self.debug_log {
+            let params_json = serde_json::to_string_pretty(&request.params).unwrap_or_default();
+            log.log_rpc_request(method.as_str(), &params_json);
+        }
+
+        let rpc_start = Instant::now();
+
         // Frame with Content-Length header
         let message = format!("Content-Length: {}\r\n\r\n{request_json}", request_json.len());
 
         // Send request with timeout
-        timeout(self.timeout, async {
+        let response = timeout(self.timeout, async {
             self.stream
                 .write_all(message.as_bytes())
                 .await
@@ -115,7 +136,25 @@ impl DaemonClient {
             self.read_response().await
         })
         .await
-        .context("Request timed out")?
+        .context("Request timed out")??;
+
+        // Log the incoming RPC response
+        if let Some(ref log) = self.debug_log {
+            let elapsed_ms = rpc_start.elapsed().as_millis();
+            let response_json = serde_json::to_string_pretty(&response).unwrap_or_default();
+            log.log_rpc_response(elapsed_ms, response.is_success(), &response_json);
+
+            // Log daemon-side LSP trace if available
+            if let Some(ref trace) = response.debug_trace {
+                log.log_lsp_trace(
+                    &trace.method,
+                    &serde_json::to_string_pretty(&trace.params).unwrap_or_default(),
+                    &serde_json::to_string_pretty(&trace.response).unwrap_or_default(),
+                );
+            }
+        }
+
+        Ok(response)
     }
 
     /// Read a framed JSON-RPC response from the daemon.

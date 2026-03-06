@@ -702,3 +702,102 @@ async fn test_references_command_enriched_context() {
     let has_context = stdout.lines().any(|line| line.contains("example.py:") && line.contains('('));
     assert!(has_context, "references should include context, got:\n{stdout}");
 }
+
+#[tokio::test]
+async fn test_debug_flag_creates_log_file() {
+    common::require_ty();
+
+    // Run find with --debug flag
+    let mut cmd = cargo_bin_cmd!("tyf");
+    cmd.arg("--workspace")
+        .arg(workspace_root())
+        .arg("--debug")
+        .arg("find")
+        .arg("hello_world")
+        .arg("--file")
+        .arg(fixture_path());
+
+    let output = cmd.output().expect("failed to run tyf");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "command failed: {stdout}");
+
+    // stdout should end with the debug log path
+    let debug_line = stdout
+        .lines()
+        .find(|line| line.starts_with("Debug log: "))
+        .expect("stdout should contain 'Debug log: ...' line");
+
+    let log_path = debug_line.strip_prefix("Debug log: ").unwrap().trim();
+    let log_content = std::fs::read_to_string(log_path).expect("debug log file should be readable");
+
+    // Check for key sections (not line-by-line content)
+    assert!(
+        log_content.contains("CLI args:"),
+        "debug log should contain CLI args section\nLog:\n{log_content}"
+    );
+    assert!(
+        log_content.contains("Workspace resolution:"),
+        "debug log should contain workspace resolution\nLog:\n{log_content}"
+    );
+    assert!(
+        log_content.contains("Reproduction commands"),
+        "debug log should contain reproduction commands\nLog:\n{log_content}"
+    );
+    assert!(
+        log_content.contains("tyf daemon status"),
+        "debug log should contain daemon status command\nLog:\n{log_content}"
+    );
+
+    // Clean up debug log file
+    let _ = std::fs::remove_file(log_path);
+}
+
+#[tokio::test]
+async fn test_debug_flag_with_daemon_logs_rpc() {
+    common::require_ty();
+
+    // Run find WITHOUT --file (uses daemon workspace symbols)
+    let mut cmd = cargo_bin_cmd!("tyf");
+    cmd.arg("--workspace").arg(workspace_root()).arg("--debug").arg("find").arg("hello_world");
+
+    let output = cmd.output().expect("failed to run tyf");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "command failed: {stdout}");
+
+    let debug_line = stdout
+        .lines()
+        .find(|line| line.starts_with("Debug log: "))
+        .expect("stdout should contain 'Debug log: ...' line");
+
+    let log_path = debug_line.strip_prefix("Debug log: ").unwrap().trim();
+    let log_content = std::fs::read_to_string(log_path).expect("debug log file should be readable");
+
+    // When using daemon, should log RPC request/response
+    assert!(
+        log_content.contains("Daemon connection:"),
+        "debug log should contain daemon connection info\nLog:\n{log_content}"
+    );
+    assert!(
+        log_content.contains("RPC request sent:"),
+        "debug log should contain RPC request\nLog:\n{log_content}"
+    );
+    assert!(
+        log_content.contains("RPC response received"),
+        "debug log should contain RPC response\nLog:\n{log_content}"
+    );
+    assert!(
+        log_content.contains("Result:"),
+        "debug log should contain result summary\nLog:\n{log_content}"
+    );
+    assert!(
+        log_content.contains("LSP details (daemon-side):"),
+        "debug log should contain LSP trace from daemon\nLog:\n{log_content}"
+    );
+    assert!(
+        log_content.contains("LSP method:"),
+        "debug log should contain LSP method\nLog:\n{log_content}"
+    );
+
+    // Clean up debug log file
+    let _ = std::fs::remove_file(log_path);
+}

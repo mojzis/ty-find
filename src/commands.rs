@@ -1,6 +1,7 @@
 use anyhow::Result;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 #[cfg(unix)]
@@ -15,9 +16,31 @@ use crate::daemon::client::{ensure_daemon_running, spawn_daemon, DaemonClient};
 use crate::daemon::protocol::BatchReferencesQuery;
 #[cfg(unix)]
 use crate::daemon::server::DaemonServer;
+use crate::debug::DebugLog;
 use crate::lsp::client::TyLspClient;
 use crate::lsp::protocol::{DocumentSymbol, Location};
 use crate::workspace::navigation::SymbolFinder;
+
+/// Helper: connect to the daemon and attach the debug log if present.
+#[cfg(unix)]
+async fn connect_daemon(
+    timeout: Duration,
+    debug_log: Option<&Arc<DebugLog>>,
+) -> Result<DaemonClient> {
+    let mut client = DaemonClient::connect_with_timeout(timeout).await?;
+    if let Some(log) = debug_log {
+        let socket_path = crate::daemon::client::get_socket_path()?;
+        log.log_daemon_connection(&socket_path.to_string_lossy(), true, None);
+
+        // Log daemon version info via a quick ping
+        if let Ok(ping) = client.ping().await {
+            log.log_daemon_version(&ping.version, crate::daemon::client::CLIENT_VERSION);
+        }
+
+        client.set_debug_log(Arc::clone(log));
+    }
+    Ok(client)
+}
 
 /// Check whether a file URI corresponds to a Python test file.
 ///
@@ -398,12 +421,13 @@ pub async fn handle_references_command(
     formatter: &OutputFormatter,
     timeout: Duration,
     show_tests: bool,
+    debug_log: Option<Arc<DebugLog>>,
 ) -> Result<()> {
     ensure_daemon_running().await?;
 
     // Explicit --file -l -c: single position mode
     if let (Some(file), Some((line, col))) = (file, position) {
-        let mut client = DaemonClient::connect_with_timeout(timeout).await?;
+        let mut client = connect_daemon(timeout, debug_log.as_ref()).await?;
         let result = client
             .execute_references(
                 workspace_root.to_path_buf(),
@@ -413,6 +437,10 @@ pub async fn handle_references_command(
                 include_declaration,
             )
             .await?;
+
+        if let Some(ref log) = debug_log {
+            log.log_result_summary(&format!("{} reference(s) found", result.locations.len()));
+        }
 
         let label = format!("{}:{line}:{col}", file.display());
         let enriched = enrich_and_limit_references(
@@ -457,6 +485,13 @@ pub async fn handle_references_command(
         )
         .await?;
         enriched_results.push(enriched);
+    }
+
+    if let Some(ref log) = debug_log {
+        let total: usize = enriched_results.iter().map(|r| r.total_count).sum();
+        log.log_result_summary(&format!("{total} reference(s) found"));
+        let cmd = format!("refs {}", all_queries.join(" "));
+        log.log_reproduction_commands(workspace_root, &all_queries, &cmd);
     }
 
     println!("{}", formatter.format_enriched_references_results(&enriched_results));
@@ -541,6 +576,7 @@ pub async fn handle_references_command(
     _formatter: &OutputFormatter,
     _timeout: Duration,
     _show_tests: bool,
+    _debug_log: Option<Arc<DebugLog>>,
 ) -> Result<()> {
     anyhow::bail!(
         "The 'refs' command requires the background daemon, which is only supported on Unix systems"
@@ -554,12 +590,13 @@ pub async fn handle_find_command(
     fuzzy: bool,
     formatter: &OutputFormatter,
     timeout: Duration,
+    debug_log: Option<Arc<DebugLog>>,
 ) -> Result<()> {
     // --fuzzy mode: use workspace/symbol pure fuzzy query
     if fuzzy {
         #[cfg(not(unix))]
         {
-            let _ = (workspace_root, symbols, timeout);
+            let _ = (workspace_root, symbols, timeout, debug_log);
             anyhow::bail!(
                 "The --fuzzy flag requires the background daemon, which is only \
                  supported on Unix systems."
@@ -568,7 +605,7 @@ pub async fn handle_find_command(
         #[cfg(unix)]
         {
             ensure_daemon_running().await?;
-            let mut client = DaemonClient::connect_with_timeout(timeout).await?;
+            let mut client = connect_daemon(timeout, debug_log.as_ref()).await?;
 
             for symbol in symbols {
                 let result = client
@@ -576,8 +613,19 @@ pub async fn handle_find_command(
                     .await?;
 
                 if result.symbols.is_empty() {
+                    if let Some(ref log) = debug_log {
+                        log.log_result_summary(&format!(
+                            "0 symbols found matching '{symbol}' (fuzzy)"
+                        ));
+                    }
                     println!("No symbols found matching '{symbol}'");
                 } else {
+                    if let Some(ref log) = debug_log {
+                        log.log_result_summary(&format!(
+                            "{} symbol(s) found matching '{symbol}' (fuzzy)",
+                            result.symbols.len()
+                        ));
+                    }
                     if symbols.len() > 1 {
                         let heading =
                             format!("=== {symbol} ({} match(es)) ===", result.symbols.len());
@@ -585,6 +633,10 @@ pub async fn handle_find_command(
                     }
                     println!("{}", formatter.format_workspace_symbols(&result.symbols));
                 }
+            }
+            if let Some(ref log) = debug_log {
+                let cmd = format!("find {} --fuzzy", symbols.join(" "));
+                log.log_reproduction_commands(workspace_root, symbols, &cmd);
             }
             return Ok(());
         }
@@ -619,7 +671,7 @@ pub async fn handle_find_command(
     } else {
         #[cfg(not(unix))]
         {
-            let _ = (workspace_root, symbols, timeout);
+            let _ = (workspace_root, symbols, timeout, debug_log);
             anyhow::bail!(
                 "Finding symbols without --file requires the background daemon, which is only \
                  supported on Unix systems. Use --file to search within a specific file instead."
@@ -632,6 +684,13 @@ pub async fn handle_find_command(
                 results.push((symbol.clone(), locations));
             }
         }
+    }
+
+    if let Some(ref log) = debug_log {
+        let total: usize = results.iter().map(|(_, locs)| locs.len()).sum();
+        log.log_result_summary(&format!("{total} definition(s) found"));
+        let cmd = format!("find {}", symbols.join(" "));
+        log.log_reproduction_commands(workspace_root, symbols, &cmd);
     }
 
     println!("{}", formatter.format_find_results(&results));
@@ -667,7 +726,7 @@ async fn find_symbol_via_workspace(
 }
 
 #[cfg(unix)]
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 pub async fn handle_inspect_command(
     workspace_root: &Path,
     file: Option<&Path>,
@@ -677,6 +736,7 @@ pub async fn handle_inspect_command(
     show_individual_refs: bool,
     references_limit: usize,
     show_tests: bool,
+    debug_log: Option<Arc<DebugLog>>,
 ) -> Result<()> {
     ensure_daemon_running().await?;
 
@@ -685,6 +745,20 @@ pub async fn handle_inspect_command(
         // Always fetch references for the count summary
         let result = inspect_single_symbol(workspace_root, file, symbol, timeout, true).await?;
         results.push(result);
+    }
+
+    if let Some(ref log) = debug_log {
+        for r in &results {
+            let has_hover = if r.hover.is_some() { "yes" } else { "no" };
+            log.log_result_summary(&format!(
+                "inspect '{}': {} definition(s), hover={has_hover}, {} reference(s)",
+                r.symbol,
+                r.definitions.len(),
+                r.references.len(),
+            ));
+        }
+        let cmd = format!("inspect {}", symbols.join(" "));
+        log.log_reproduction_commands(workspace_root, symbols, &cmd);
     }
 
     // Build enriched entries — reuse a single daemon connection for all enrichment
@@ -791,6 +865,7 @@ pub async fn handle_inspect_command(
     _show_individual_refs: bool,
     _references_limit: usize,
     _show_tests: bool,
+    _debug_log: Option<Arc<DebugLog>>,
 ) -> Result<()> {
     anyhow::bail!(
         "The 'inspect' command requires the background daemon, which is only supported on Unix systems"
@@ -932,13 +1007,24 @@ pub async fn handle_document_symbols_command(
     file: &Path,
     formatter: &OutputFormatter,
     timeout: Duration,
+    debug_log: Option<Arc<DebugLog>>,
 ) -> Result<()> {
     ensure_daemon_running().await?;
-    let mut client = DaemonClient::connect_with_timeout(timeout).await?;
+    let mut client = connect_daemon(timeout, debug_log.as_ref()).await?;
 
     let result = client
         .execute_document_symbols(workspace_root.to_path_buf(), file.to_string_lossy().to_string())
         .await?;
+
+    if let Some(ref log) = debug_log {
+        log.log_result_summary(&format!(
+            "{} symbol(s) found in {}",
+            result.symbols.len(),
+            file.display()
+        ));
+        let cmd = format!("list {}", file.display());
+        log.log_reproduction_commands(workspace_root, &[], &cmd);
+    }
 
     if result.symbols.is_empty() {
         println!("No symbols found in {}", file.display());
@@ -956,6 +1042,7 @@ pub async fn handle_document_symbols_command(
     _file: &Path,
     _formatter: &OutputFormatter,
     _timeout: Duration,
+    _debug_log: Option<Arc<DebugLog>>,
 ) -> Result<()> {
     anyhow::bail!(
         "The 'list' command requires the background daemon, which is only supported on Unix systems"
@@ -970,6 +1057,7 @@ pub async fn handle_members_command(
     include_all: bool,
     formatter: &OutputFormatter,
     timeout: Duration,
+    debug_log: Option<Arc<DebugLog>>,
 ) -> Result<()> {
     ensure_daemon_running().await?;
 
@@ -1010,6 +1098,18 @@ pub async fn handle_members_command(
                 valid_results.push(result);
             }
         }
+    }
+
+    if let Some(ref log) = debug_log {
+        for r in &valid_results {
+            log.log_result_summary(&format!(
+                "members '{}': {} member(s)",
+                r.class_name,
+                r.members.len(),
+            ));
+        }
+        let cmd = format!("members {}", symbols.join(" "));
+        log.log_reproduction_commands(workspace_root, symbols, &cmd);
     }
 
     if !valid_results.is_empty() {
@@ -1084,6 +1184,7 @@ pub async fn handle_members_command(
     _include_all: bool,
     _formatter: &OutputFormatter,
     _timeout: Duration,
+    _debug_log: Option<Arc<DebugLog>>,
 ) -> Result<()> {
     anyhow::bail!(
         "The 'members' command requires the background daemon, which is only supported on Unix systems"

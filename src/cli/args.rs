@@ -57,6 +57,10 @@ pub struct Cli {
     #[arg(short, long)]
     pub verbose: bool,
 
+    /// Write a detailed debug trace to a temp file for diagnosing issues
+    #[arg(short, long)]
+    pub debug: bool,
+
     #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
     pub format: OutputFormat,
 
@@ -280,6 +284,7 @@ mod tests {
         let expected_flags = &[
             "--workspace",
             "--verbose",
+            "--debug",
             "--format",
             "--detail",
             "--timeout",

@@ -2543,6 +2543,37 @@ mod tests {
     }
 
     #[test]
+    fn test_format_inspect_full_with_test_refs_hint() {
+        let formatter = OutputFormatter::with_detail(
+            OutputFormat::Human,
+            OutputDetail::Full,
+            Styler::no_color(),
+        );
+        let defs = [make_location("file:///test.py", 0, 0)];
+        let entry = InspectEntry {
+            symbol: "my_func",
+            kind: Some(&SymbolKind::Function),
+            definitions: &defs,
+            hover: None,
+            total_reference_count: 2,
+            total_reference_files: 1,
+            displayed_references: Vec::new(),
+            remaining_reference_count: 0,
+            show_individual_refs: false,
+            test_references: Some(TestReferencesSection {
+                total_count: 4,
+                displayed: Vec::new(),
+                remaining_count: 0,
+            }),
+        };
+        let result = formatter.format_inspect(&entry);
+        assert!(
+            result.contains("Test Refs: 4 (use --tests/-t to show)"),
+            "full inspect should show test refs heading with count, got:\n{result}"
+        );
+    }
+
+    #[test]
     fn test_format_inspect_condensed_with_test_refs_shown() {
         let formatter = OutputFormatter::new(OutputFormat::Human);
         let defs = [make_location("file:///test.py", 0, 0)];

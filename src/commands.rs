@@ -619,7 +619,10 @@ pub async fn handle_find_command(
                             "0 symbols found matching '{symbol}' (fuzzy)"
                         ));
                     }
-                    println!("No symbols found matching '{symbol}'");
+                    println!(
+                        "{}",
+                        formatter.styler().error(&format!("No results found matching '{symbol}'"))
+                    );
                 } else {
                     if let Some(ref log) = debug_log {
                         log.log_result_summary(&format!(
@@ -1050,7 +1053,10 @@ pub async fn handle_document_symbols_command(
     }
 
     if result.symbols.is_empty() {
-        println!("No symbols found in {}", file.display());
+        println!(
+            "{}",
+            formatter.styler().error(&format!("No symbols found in {}", file.display()))
+        );
     } else {
         println!("Document outline for {}:\n", file.display());
         println!("{}", formatter.format_document_symbols(&result.symbols));

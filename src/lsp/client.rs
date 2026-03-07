@@ -104,6 +104,11 @@ impl TyLspClient {
 
         self.send_notification("initialized", serde_json::json!({})).await?;
 
+        // Readiness probe: ensure the server can process requests after
+        // initialization. Without this, the first real request often arrives
+        // before the server is ready, returning empty/null results.
+        self.send_request("workspace/symbol", serde_json::json!({"query": ""})).await?;
+
         Ok(())
     }
 
@@ -339,24 +344,59 @@ impl TyLspClient {
                                 let mut content = vec![0; len];
                                 if stdout.read_exact(&mut content).await.is_ok() {
                                     if let Ok(response_str) = String::from_utf8(content) {
-                                        if let Ok(response) =
-                                            serde_json::from_str::<LSPResponse>(&response_str)
-                                        {
-                                            if let Value::Number(id_num) = &response.id {
-                                                if let Some(id) = id_num.as_u64() {
-                                                    let mut pending = pending_requests
-                                                        .lock()
-                                                        .expect("pending_requests mutex poisoned");
-                                                    if let Some(sender) = pending.remove(&id) {
-                                                        let _ = sender.send(response);
+                                        // Parse as generic JSON first to distinguish
+                                        // responses from server-initiated messages.
+                                        // Server notifications and requests have a "method"
+                                        // field; responses do not. Without this check,
+                                        // serde ignores unknown fields and a server request
+                                        // like client/registerCapability could deserialize
+                                        // as LSPResponse{id, result:None, error:None},
+                                        // consuming a pending request's channel with a
+                                        // bogus empty response.
+                                        match serde_json::from_str::<Value>(&response_str) {
+                                            Ok(value) => {
+                                                if value.get("method").is_some() {
+                                                    let method = value
+                                                        .get("method")
+                                                        .and_then(|m| m.as_str())
+                                                        .unwrap_or("unknown");
+                                                    tracing::debug!(
+                                                        "Skipping server-initiated message: {method}"
+                                                    );
+                                                    continue;
+                                                }
+                                                if let Ok(response) =
+                                                    serde_json::from_value::<LSPResponse>(value)
+                                                {
+                                                    if let Value::Number(id_num) = &response.id {
+                                                        if let Some(id) = id_num.as_u64() {
+                                                            let mut pending = pending_requests
+                                                                .lock()
+                                                                .expect(
+                                                                    "pending_requests mutex poisoned",
+                                                                );
+                                                            if let Some(sender) =
+                                                                pending.remove(&id)
+                                                            {
+                                                                let _ = sender.send(response);
+                                                            }
+                                                        }
                                                     }
+                                                } else {
+                                                    tracing::debug!(
+                                                        "Failed to parse LSP response: {}",
+                                                        response_str
+                                                            .chars()
+                                                            .take(200)
+                                                            .collect::<String>()
+                                                    );
                                                 }
                                             }
-                                        } else {
-                                            tracing::debug!(
-                                                "Failed to parse LSP response: {}",
-                                                response_str.chars().take(200).collect::<String>()
-                                            );
+                                            Err(e) => {
+                                                tracing::debug!(
+                                                    "Failed to parse LSP message as JSON: {e}"
+                                                );
+                                            }
                                         }
                                     }
                                 }

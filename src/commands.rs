@@ -1228,18 +1228,16 @@ pub async fn handle_daemon_command(command: DaemonCommands) -> Result<()> {
 
             // Check if daemon is already running
             let socket_path = crate::daemon::client::get_socket_path()?;
+            let pidfile_path = crate::daemon::pidfile::get_pidfile_path()?;
 
-            if socket_path.exists() {
-                match DaemonClient::connect().await {
-                    Ok(_) => {
-                        println!("Daemon is already running");
-                        return Ok(());
-                    }
-                    Err(_) => {
-                        // Socket exists but connection failed, clean up stale socket
-                        let _ = std::fs::remove_file(&socket_path);
-                    }
+            if socket_path.exists() || pidfile_path.exists() {
+                if DaemonClient::connect().await.is_ok() {
+                    println!("Daemon is already running");
+                    return Ok(());
                 }
+                // Stale files — clean up
+                let _ = std::fs::remove_file(&socket_path);
+                let _ = std::fs::remove_file(&pidfile_path);
             }
 
             // Spawn daemon in background
@@ -1269,16 +1267,28 @@ pub async fn handle_daemon_command(command: DaemonCommands) -> Result<()> {
         DaemonCommands::Status => match DaemonClient::connect().await {
             Ok(mut client) => {
                 let status = client.ping().await?;
-                println!("Daemon: running (v{})", status.version);
+                let uptime_secs = status.uptime;
+                let mins = uptime_secs / 60;
+                let secs = uptime_secs % 60;
+                let uptime_str =
+                    if mins > 0 { format!("{mins}m {secs}s") } else { format!("{secs}s") };
+
+                println!("Daemon running (v{})", status.version);
                 println!("PID: {}", status.pid);
                 if let Some(ref cwd) = status.cwd {
-                    println!("Working dir: {cwd}");
+                    println!("  Working dir: {cwd}");
                 }
-                println!("Uptime: {}s", status.uptime);
-                println!("Active workspaces: {}", status.active_workspaces);
+                if let Some(ref sock) = status.socket_path {
+                    println!("  Unix socket: {sock}");
+                }
+                if let Some(port) = status.tcp_port {
+                    println!("  TCP: 127.0.0.1:{port}");
+                }
+                println!("  Uptime: {uptime_str}");
+                println!("  Active workspaces: {}", status.active_workspaces);
                 if !status.workspace_paths.is_empty() {
                     for ws in &status.workspace_paths {
-                        println!("  - {ws}");
+                        println!("    - {ws}");
                     }
                 }
             }

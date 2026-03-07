@@ -703,6 +703,14 @@ pub struct PingResult {
     /// Number of cached responses
     pub cache_size: usize,
 
+    /// Unix socket path the daemon is listening on
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub socket_path: Option<String>,
+
+    /// TCP port on 127.0.0.1 the daemon is listening on
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tcp_port: Option<u16>,
+
     /// Paths of loaded workspaces (empty if none)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub workspace_paths: Vec<String>,
@@ -822,6 +830,8 @@ mod tests {
             uptime: 42,
             active_workspaces: 2,
             cache_size: 0,
+            socket_path: Some("/tmp/ty-find-1000.sock".to_string()),
+            tcp_port: Some(52341),
             workspace_paths: vec!["/path/to/ws1".to_string(), "/path/to/ws2".to_string()],
             pid: 12345,
             cwd: Some("/home/user".to_string()),

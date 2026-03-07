@@ -14,96 +14,37 @@ ty-find is a command-line tool that interfaces with ty's LSP server to provide g
 
 ## Common Commands
 
-### Build and Development
 ```bash
-# Build Rust binary for development
-cargo build
+# Pre-commit checks (always run before committing)
+cargo fmt --check && cargo clippy --all-targets --all-features -- -D warnings && cargo test --all-features
 
-# Build optimized release version
-cargo build --release
-
-# Run the tool directly during development
-cargo run -- find hello_world
-
-# Install ty (required for integration tests)
-uv add --dev ty
-
-# Test the Rust code
+# Run unit tests
 cargo test
 
 # Run integration tests (requires ty on PATH)
 cargo test --test test_basic
 
-```
-
-### Python Packaging (maturin)
-```bash
-# Build Python wheel with Rust binary
-maturin build
-
 # Build and install locally for testing
 maturin develop
-
-# Build release wheel
-maturin build --release
 ```
 
-### Testing with ty LSP server
-```bash
-# Requires ty to be installed: uv add --dev ty
-tyf find calculate_sum
-tyf find calculate_sum multiply divide   # multiple symbols in one call
-tyf find handle_ --fuzzy                 # fuzzy/prefix match
-tyf inspect MyClass my_function          # inspect multiple symbols at once
-tyf members MyClass                      # public interface of a class
-tyf members MyClass --all                # include dunder/private members
-```
-
-### Releasing
-```bash
-# Install cargo-release (one-time setup)
-cargo install cargo-release
-
-# Bump patch version (0.1.1 -> 0.1.2), commit, tag, and push
-cargo release patch --execute
-
-# Bump minor version (0.1.x -> 0.2.0)
-cargo release minor --execute
-
-# Dry run (default, shows what would happen without --execute)
-cargo release patch
-```
-
-Version is defined in `Cargo.toml` and `pyproject.toml` picks it up automatically via `dynamic = ["version"]`. `release.toml` disables crates.io publish since we distribute via maturin/pip.
-
-## Pre-commit Checks
-
-**Always run all checks before committing to avoid CI pipeline failures:**
-
-```bash
-cargo fmt --check && cargo clippy --all-targets --all-features -- -D warnings && cargo test --all-features
-```
+Run `tyf --help` and `tyf <cmd> --help` for CLI usage examples.
 
 If formatting fails, fix it with `cargo fmt` and re-run the checks.
 
-## Development Workflow — TDD (Red-Green-Refactor)
+## Development Workflow
 
-All new features and bug fixes **must** follow Test-Driven Development:
+All features and bug fixes follow TDD (red-green-refactor). No implementation code without a failing test first. Bug fixes must include a regression test that fails without the fix.
 
-1. **Red** — Write a failing test first that describes the expected behavior or reproduces the bug. Run it and confirm it fails.
-2. **Green** — Write the minimal implementation to make the test pass. Run the test and confirm it passes.
-3. **Refactor** — Clean up the implementation while keeping tests green.
+## Test Changes Require Deliberation
 
-**For new features:**
-- Start by writing a test that exercises the new behavior before any production code exists.
-- The test should fail with a compilation error or assertion failure — this is expected and correct.
-- Only then write the production code to make it pass.
+When a test fails during implementation:
 
-**For bug fixes:**
-- First write a test that reproduces the bug (the test must fail, proving the bug exists).
-- Then fix the bug and confirm the test goes green.
-
-**Do not** write implementation code without a corresponding failing test already in place.
+1. **Stop and diagnose.** Understand WHY it fails before changing anything. Is the test wrong, or is the implementation wrong?
+2. **Default assumption: the test is right.** Fix the implementation first.
+3. **If the test genuinely needs updating** (requirements changed, API evolved), explain what changed and why the old assertion is no longer correct before modifying it.
+4. **Never weaken an assertion just to make it pass.** Making a test more permissive without understanding the failure is not a fix.
+5. **If uncertain, ask.** A 2-line question is cheaper than a silent wrong decision.
 
 ## Architecture
 
@@ -113,41 +54,7 @@ All new features and bug fixes **must** follow Test-Driven Development:
 3. **Workspace Detection (`src/workspace/`)** - Python project detection and symbol finding
 4. **Main Application (`src/main.rs`)** - Orchestrates the main modes: find, inspect, refs, members, list
 
-### Key Architectural Patterns
-
-**LSP Communication Flow**:
-- `TyLspServer` spawns and manages the `ty lsp` process
-- `TyLspClient` handles JSON-RPC protocol with initialization, requests, and response parsing
-- Communication is async using tokio with proper message framing (Content-Length headers)
-
-**Dual Build System**:
-- `Cargo.toml` defines the Rust binary with CLI dependencies (clap, tokio, serde)
-- `pyproject.toml` uses maturin backend (`bindings = "bin"`) to package the Rust binary as a Python wheel
-
-**Command Processing**:
-- Main commands: `inspect` (all-in-one), `find` (definitions), `refs` (references), `members` (class interface), `list` (file outline)
-- `find` supports `--fuzzy` for partial/prefix matching via workspace symbols
-- `find`, `inspect`, `refs`, and `members` accept multiple symbols in one call to reduce tool invocations (results grouped by symbol)
-- `SymbolFinder` does text-based symbol matching with whole-word detection
-- `OutputFormatter` supports multiple formats: human, JSON, CSV, paths-only
-
-**Concurrency rule — daemon handles all parallelism**:
-- All multi-query operations (batch references, multi-symbol inspect, etc.) must be batched into a single RPC call and processed by the daemon, **not** parallelized on the CLI client side.
-- The ty LSP server communicates through a single stdin/stdout pipe, so LSP requests are inherently sequential. Spawning parallel client connections only adds connection overhead without concurrency benefit.
-- Use `BatchReferences` (or similar batch RPC methods) to send multiple queries in one call. The daemon processes them sequentially on the shared LSP client and returns merged results.
-
-### Python Integration Strategy
-The project uses maturin to bridge Rust and Python ecosystems:
-- Rust binary provides performance for LSP communication
-- Python packaging allows `pip install` and `uv sync` integration
-- Users add `ty-find @ git+https://github.com/user/ty-find.git` to pyproject.toml
-- maturin automatically builds Rust binary during Python package installation
-
-### Dependencies
-- **ty LSP server** must be available in PATH or via `uvx` (users install via `uv add --dev ty`)
-- **Rust toolchain** required for building from source
-- **tokio** for async LSP communication and process management
-- **clap** for CLI parsing with subcommands and multiple output formats
+Architecture details, patterns, and dependencies: see `docs/dev/ARCHITECTURE.md`.
 
 ## Branch Hygiene
 
@@ -158,6 +65,15 @@ git fetch origin main && git merge origin/main
 ```
 
 Then re-run the full check suite (`cargo fmt --check && cargo clippy --all-targets --all-features -- -D warnings && cargo test --all-features`) to verify the merge didn't introduce breakage.
+
+## When Stuck
+
+If hitting a wall (test won't pass, architecture doesn't fit, LSP returns unexpected data):
+1. Do not silently work around it — state the problem explicitly.
+2. Do not attempt more than 3 approaches without reporting what was tried and why each failed.
+3. Do not modify unrelated code hoping it fixes the issue.
+4. Revert to last known good state if changes made things worse.
+5. When in doubt, a 2-line question to the user is always better than a silent workaround.
 
 ## Review Before Completing Work
 
@@ -182,3 +98,4 @@ Before marking any task as complete, run the review process:
 - Prefer `&str`/`&[T]`/`&Path` over owned types in function parameters when ownership isn't needed
 - Tests must assert on values, not just "runs without panic"
 - Extract shared logic — don't duplicate LSP message patterns or error handling boilerplate
+- Flaky tests need root-cause analysis, not looser assertions — if unclear, ask before changing

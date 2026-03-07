@@ -5,6 +5,7 @@
 //! subsequent requests.
 
 pub mod client;
+pub mod pidfile;
 pub mod pool;
 pub mod protocol;
 pub mod server;
@@ -12,6 +13,8 @@ pub mod server;
 // Re-export main types for convenience
 #[allow(unused_imports)]
 pub use client::{ensure_daemon_running, get_socket_path, spawn_daemon, DaemonClient};
+#[allow(unused_imports)]
+pub use pidfile::{get_pidfile_path, PidfileData};
 #[allow(unused_imports)]
 pub use pool::LspClientPool;
 #[allow(unused_imports)]

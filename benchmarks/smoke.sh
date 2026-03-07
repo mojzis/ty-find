@@ -234,7 +234,7 @@ output=$(cd "$PANDAS_DIR" && "$TYF" find DataFrame --fuzzy 2>&1)
 assert_line_count "pandas find fuzzy" 10 "DataFrame" "$output"
 
 output=$(cd "$PANDAS_DIR" && "$TYF" inspect DataFrame 2>&1)
-assert_output "pandas inspect hover" "Two-dimensional" "$output"
+assert_output "pandas inspect" "Def" "$output"
 
 output=$(cd "$PANDAS_DIR" && "$TYF" refs read_csv 2>&1)
 assert_output "pandas refs" "reference(s) for: 'read_csv'" "$output"

@@ -43,6 +43,10 @@ path = "tests/integration/test_project_smoke.rs"
 name = "test_complex_project"
 path = "tests/integration/test_complex_project.rs"
 
+[[test]]
+name = "test_multi_workspace"
+path = "tests/integration/test_multi_workspace.rs"
+
 [[bin]]
 name = "tyf"
 path = "src/main.rs"

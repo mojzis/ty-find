@@ -719,13 +719,14 @@ async fn test_debug_flag_creates_log_file() {
 
     let output = cmd.output().expect("failed to run tyf");
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(output.status.success(), "command failed: {stdout}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "command failed: {stdout}\nstderr: {stderr}");
 
-    // stdout should end with the debug log path
-    let debug_line = stdout
+    // Debug log path is printed to stderr so it appears even on error
+    let debug_line = stderr
         .lines()
         .find(|line| line.starts_with("Debug log: "))
-        .expect("stdout should contain 'Debug log: ...' line");
+        .expect("stderr should contain 'Debug log: ...' line");
 
     let log_path = debug_line.strip_prefix("Debug log: ").unwrap().trim();
     let log_content = std::fs::read_to_string(log_path).expect("debug log file should be readable");
@@ -762,12 +763,14 @@ async fn test_debug_flag_with_daemon_logs_rpc() {
 
     let output = cmd.output().expect("failed to run tyf");
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(output.status.success(), "command failed: {stdout}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "command failed: {stdout}\nstderr: {stderr}");
 
-    let debug_line = stdout
+    // Debug log path is printed to stderr so it appears even on error
+    let debug_line = stderr
         .lines()
         .find(|line| line.starts_with("Debug log: "))
-        .expect("stdout should contain 'Debug log: ...' line");
+        .expect("stderr should contain 'Debug log: ...' line");
 
     let log_path = debug_line.strip_prefix("Debug log: ").unwrap().trim();
     let log_content = std::fs::read_to_string(log_path).expect("debug log file should be readable");

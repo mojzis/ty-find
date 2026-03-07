@@ -1270,9 +1270,17 @@ pub async fn handle_daemon_command(command: DaemonCommands) -> Result<()> {
             Ok(mut client) => {
                 let status = client.ping().await?;
                 println!("Daemon: running (v{})", status.version);
+                println!("PID: {}", status.pid);
+                if let Some(ref cwd) = status.cwd {
+                    println!("Working dir: {cwd}");
+                }
                 println!("Uptime: {}s", status.uptime);
                 println!("Active workspaces: {}", status.active_workspaces);
-                println!("Cache size: {}", status.cache_size);
+                if !status.workspace_paths.is_empty() {
+                    for ws in &status.workspace_paths {
+                        println!("  - {ws}");
+                    }
+                }
             }
             Err(_) => {
                 println!("Daemon: not running");

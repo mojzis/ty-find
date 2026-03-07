@@ -702,6 +702,18 @@ pub struct PingResult {
 
     /// Number of cached responses
     pub cache_size: usize,
+
+    /// Paths of loaded workspaces (empty if none)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub workspace_paths: Vec<String>,
+
+    /// Daemon process ID
+    #[serde(default)]
+    pub pid: u32,
+
+    /// Daemon process working directory
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
 }
 
 /// Result of a shutdown request.
@@ -810,6 +822,9 @@ mod tests {
             uptime: 42,
             active_workspaces: 2,
             cache_size: 0,
+            workspace_paths: vec!["/path/to/ws1".to_string(), "/path/to/ws2".to_string()],
+            pid: 12345,
+            cwd: Some("/home/user".to_string()),
         };
 
         let json = serde_json::to_value(&result).unwrap();

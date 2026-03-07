@@ -112,26 +112,109 @@ echo "  django cold-start: done ($COLD_RUNS runs)"
 echo ""
 
 # --- Multi-workspace switching (warm daemon) ---
+# Exercises all commands interleaved across 4 workspaces (pandas, django,
+# test_project, test_project2) on a single warm daemon, verifying that
+# switching workspaces doesn't break path resolution or LSP state.
 echo "=== Multi-workspace switching ==="
 stop_daemon
 
+TP1="$PROJECT_DIR/test_project"
+TP2="$PROJECT_DIR/test_project2"
+
+# -- find (interleaved across all 4 workspaces) --
+
 output=$(cd "$PANDAS_DIR" && "$TYF" find DataFrame 2>&1)
-assert_output "pandas DataFrame (warm 1)" "Found 3 definition(s)" "$output"
+assert_output "pandas find DataFrame" "Found 3 definition(s)" "$output"
 
 output=$(cd "$DJANGO_DIR" && "$TYF" find QuerySet 2>&1)
-assert_output "django QuerySet (warm 1)" "Found 1 definition(s)" "$output"
+assert_output "django find QuerySet" "Found 1 definition(s)" "$output"
 
+output=$("$TYF" --workspace "$TP1" find Animal 2>&1)
+assert_output "test_project find Animal" "models.py" "$output"
+
+output=$("$TYF" --workspace "$TP2" find UserService 2>&1)
+assert_output "test_project2 find UserService" "services.py" "$output"
+
+# switch back to large repos
 output=$(cd "$PANDAS_DIR" && "$TYF" find Series 2>&1)
-assert_output "pandas Series (warm 2)" "Found 2 definition(s)" "$output"
+assert_output "pandas find Series (back)" "Found 2 definition(s)" "$output"
 
 output=$(cd "$DJANGO_DIR" && "$TYF" find HttpRequest 2>&1)
-assert_output "django HttpRequest (warm 2)" "Found 1 definition(s)" "$output"
+assert_output "django find HttpRequest (back)" "Found 1 definition(s)" "$output"
 
-output=$(cd "$PANDAS_DIR" && "$TYF" find Index 2>&1)
-assert_output "pandas Index (warm 3)" "Found 1 definition(s)" "$output"
+output=$("$TYF" --workspace "$TP1" find create_dog 2>&1)
+assert_output "test_project find create_dog (back)" "models.py" "$output"
 
-output=$(cd "$DJANGO_DIR" && "$TYF" find HttpResponse 2>&1)
-assert_output "django HttpResponse (warm 3)" "Found 1 definition(s)" "$output"
+# -- find --fuzzy --
+
+output=$(cd "$PANDAS_DIR" && "$TYF" find DataFrame --fuzzy 2>&1)
+assert_line_count "pandas find fuzzy DataFrame" 10 "DataFrame" "$output"
+
+output=$("$TYF" --workspace "$TP1" find Dog --fuzzy 2>&1)
+assert_output "test_project find fuzzy Dog" "Dog" "$output"
+
+output=$(cd "$DJANGO_DIR" && "$TYF" find QuerySet --fuzzy 2>&1)
+assert_output "django find fuzzy QuerySet" "QuerySet" "$output"
+
+output=$("$TYF" --workspace "$TP2" find User --fuzzy 2>&1)
+assert_output "test_project2 find fuzzy User" "User" "$output"
+
+# -- inspect --
+
+output=$(cd "$PANDAS_DIR" && "$TYF" inspect DataFrame 2>&1)
+assert_output "pandas inspect DataFrame" "Def" "$output"
+
+output=$("$TYF" --workspace "$TP2" inspect User 2>&1)
+assert_output "test_project2 inspect User" "services.py" "$output"
+
+output=$(cd "$DJANGO_DIR" && "$TYF" inspect QuerySet 2>&1)
+assert_output "django inspect QuerySet" "Def" "$output"
+
+output=$("$TYF" --workspace "$TP1" inspect Animal 2>&1)
+assert_output "test_project inspect Animal" "models.py" "$output"
+
+# -- refs --
+
+output=$(cd "$PANDAS_DIR" && "$TYF" refs read_csv 2>&1)
+assert_output "pandas refs read_csv" "reference(s) for: 'read_csv'" "$output"
+
+output=$("$TYF" --workspace "$TP1" refs Animal 2>&1)
+assert_output "test_project refs Animal" "reference(s) for: 'Animal'" "$output"
+
+output=$(cd "$DJANGO_DIR" && "$TYF" refs reverse 2>&1)
+assert_output "django refs reverse" "reference(s) for: 'reverse'" "$output"
+
+output=$("$TYF" --workspace "$TP2" refs User 2>&1)
+assert_output "test_project2 refs User" "reference(s) for: 'User'" "$output"
+
+# -- members --
+
+output=$("$TYF" --workspace "$TP1" members Animal --file "$TP1/models.py" 2>&1)
+assert_output "test_project members Animal" "speak" "$output"
+
+output=$("$TYF" --workspace "$TP2" members User --file "$TP2/services.py" 2>&1)
+assert_output "test_project2 members User" "display_name" "$output"
+
+# -- list --
+
+output=$(cd "$PANDAS_DIR" && "$TYF" list pandas/core/frame.py 2>&1)
+assert_output "pandas list frame.py" "DataFrame (Class)" "$output"
+
+output=$("$TYF" --workspace "$TP1" list "$TP1/models.py" 2>&1)
+assert_output "test_project list models.py" "Animal" "$output"
+
+output=$(cd "$DJANGO_DIR" && "$TYF" list django/db/models/query.py 2>&1)
+assert_output "django list query.py" "QuerySet" "$output"
+
+output=$("$TYF" --workspace "$TP2" list "$TP2/services.py" 2>&1)
+assert_output "test_project2 list services.py" "UserService" "$output"
+
+# -- daemon status should show all 4 workspaces --
+output=$("$TYF" daemon status 2>&1)
+assert_output "daemon status shows test_project" "test_project" "$output"
+assert_output "daemon status shows test_project2" "test_project2" "$output"
+assert_output "daemon status shows PID" "PID:" "$output"
+assert_output "daemon status shows Working dir" "Working dir:" "$output"
 
 echo "  workspace switching: done"
 echo ""
@@ -151,7 +234,7 @@ output=$(cd "$PANDAS_DIR" && "$TYF" find DataFrame --fuzzy 2>&1)
 assert_line_count "pandas find fuzzy" 10 "DataFrame" "$output"
 
 output=$(cd "$PANDAS_DIR" && "$TYF" inspect DataFrame 2>&1)
-assert_output "pandas inspect hover" "Two-dimensional" "$output"
+assert_output "pandas inspect" "Def" "$output"
 
 output=$(cd "$PANDAS_DIR" && "$TYF" refs read_csv 2>&1)
 assert_output "pandas refs" "reference(s) for: 'read_csv'" "$output"

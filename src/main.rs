@@ -1,12 +1,15 @@
 use anyhow::{Context, Result};
 use clap::{CommandFactory, Parser};
 use std::fmt::Write;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 mod cli;
 mod commands;
 #[cfg(unix)]
 mod daemon;
+mod debug;
 mod lsp;
 mod workspace;
 
@@ -17,6 +20,7 @@ use cli::style::{Styler, UseColor};
 use daemon::client::DEFAULT_TIMEOUT;
 #[cfg(not(unix))]
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
+use debug::DebugLog;
 use workspace::detection::WorkspaceDetector;
 
 #[tokio::main]
@@ -30,7 +34,28 @@ async fn main() {
     let use_color = UseColor::resolve(&cli.color);
     let styler = Styler::new(use_color);
 
-    if let Err(e) = run(cli, styler).await {
+    // Create debug log early so we can print its path even on error
+    let debug_log = if cli.debug {
+        match DebugLog::create() {
+            Ok(log) => Some(Arc::new(log)),
+            Err(e) => {
+                eprintln!("Warning: failed to create debug log: {e}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    let result = run(cli, styler, debug_log.clone()).await;
+
+    // Always print debug log path (even on error)
+    if let Some(ref log) = debug_log {
+        log.flush();
+        eprintln!("Debug log: {}", log.path().display());
+    }
+
+    if let Err(e) = result {
         eprintln!("{}", styler.error(&format!("Error: {}", format_error_chain(&e))));
         #[allow(clippy::exit)]
         std::process::exit(1);
@@ -47,29 +72,68 @@ fn format_error_chain(error: &anyhow::Error) -> String {
     msg
 }
 
-async fn run(cli: Cli, styler: Styler) -> Result<()> {
-    let workspace_root = if let Some(ws) = cli.workspace {
-        ws.canonicalize().context("Failed to canonicalize workspace path")?
+/// Resolve the workspace root directory and describe the detection method.
+fn resolve_workspace(explicit: Option<&Path>, cwd: &Path) -> Result<(PathBuf, String)> {
+    if let Some(ws) = explicit {
+        let root = ws.canonicalize().context("Failed to canonicalize workspace path")?;
+        return Ok((root, "explicit --workspace flag".to_string()));
+    }
+
+    if let Some(detected) = WorkspaceDetector::find_workspace_root(cwd) {
+        let method = WorkspaceDetector::describe_detection(&detected);
+        let root = detected.canonicalize().context("Failed to canonicalize workspace path")?;
+        Ok((root, method))
     } else {
-        let cwd = std::env::current_dir().context("Failed to get current directory")?;
-        WorkspaceDetector::find_workspace_root(&cwd)
-            .unwrap_or(cwd)
-            .canonicalize()
-            .context("Failed to canonicalize workspace path")?
-    };
+        let root = cwd.canonicalize().context("Failed to canonicalize workspace path")?;
+        Ok((root, "no project markers found, using CWD".to_string()))
+    }
+}
+
+async fn run(cli: Cli, styler: Styler, debug_log: Option<Arc<DebugLog>>) -> Result<()> {
+    // Log CLI args
+    if let Some(ref log) = debug_log {
+        let args: Vec<String> = std::env::args().collect();
+        log.log_cli_args(&args);
+    }
+
+    let cwd = std::env::current_dir().context("Failed to get current directory")?;
+    let (workspace_root, detection_method) = resolve_workspace(cli.workspace.as_deref(), &cwd)?;
+
+    // Log workspace resolution
+    if let Some(ref log) = debug_log {
+        log.log_workspace_resolution(
+            &cwd,
+            &workspace_root,
+            cli.workspace.as_deref(),
+            &detection_method,
+        );
+    }
 
     let formatter = OutputFormatter::with_detail(cli.format, cli.detail, styler);
     let timeout = cli.timeout.map_or(DEFAULT_TIMEOUT, Duration::from_secs);
 
-    match cli.command {
+    dispatch_command(cli.command, &workspace_root, &formatter, timeout, debug_log.as_ref()).await?;
+
+    Ok(())
+}
+
+async fn dispatch_command(
+    command: Commands,
+    workspace_root: &Path,
+    formatter: &OutputFormatter,
+    timeout: Duration,
+    debug_log: Option<&Arc<DebugLog>>,
+) -> Result<()> {
+    match command {
         Commands::Find { file, symbols, fuzzy } => {
             commands::handle_find_command(
-                &workspace_root,
+                workspace_root,
                 file.as_deref(),
                 &symbols,
                 fuzzy,
-                &formatter,
+                formatter,
                 timeout,
+                debug_log.cloned(),
             )
             .await?;
         }
@@ -85,44 +149,53 @@ async fn run(cli: Cli, styler: Styler) -> Result<()> {
         } => {
             let position = line.zip(column);
             commands::handle_references_command(
-                &workspace_root,
+                workspace_root,
                 file.as_deref(),
                 &queries,
                 position,
                 stdin,
                 include_declaration,
                 references_limit,
-                &formatter,
+                formatter,
                 timeout,
                 tests,
+                debug_log.cloned(),
             )
             .await?;
         }
         Commands::Members { file, symbols, all } => {
             commands::handle_members_command(
-                &workspace_root,
+                workspace_root,
                 file.as_deref(),
                 &symbols,
                 all,
-                &formatter,
+                formatter,
                 timeout,
+                debug_log.cloned(),
             )
             .await?;
         }
         Commands::DocumentSymbols { file } => {
-            commands::handle_document_symbols_command(&workspace_root, &file, &formatter, timeout)
-                .await?;
+            commands::handle_document_symbols_command(
+                workspace_root,
+                &file,
+                formatter,
+                timeout,
+                debug_log.cloned(),
+            )
+            .await?;
         }
         Commands::Inspect { file, symbols, references, references_limit, tests } => {
             commands::handle_inspect_command(
-                &workspace_root,
+                workspace_root,
                 file.as_deref(),
                 &symbols,
-                &formatter,
+                formatter,
                 timeout,
                 references,
                 references_limit,
                 tests,
+                debug_log.cloned(),
             )
             .await?;
         }

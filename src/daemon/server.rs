@@ -30,7 +30,11 @@ use crate::daemon::protocol::{
     ShutdownResult, WorkspaceSymbolsParams, WorkspaceSymbolsResult,
 };
 use crate::lsp::client::TyLspClient;
-use crate::lsp::protocol::{Hover, SymbolKind};
+use crate::lsp::protocol::{DocumentSymbol, Hover, Location, SymbolKind};
+
+/// Default warmup delays (ms) for LSP operations that may return empty on cold start.
+/// Total: 200 + 400 + 800 + 1600 = 3000ms.
+const WARMUP_DELAYS: [u64; 4] = [200, 400, 800, 1600];
 
 /// The daemon server that handles client connections and LSP requests.
 pub struct DaemonServer {
@@ -293,6 +297,11 @@ impl DaemonServer {
 
     /// Process a single JSON-RPC request and return a response.
     async fn handle_request(&self, request: DaemonRequest) -> DaemonResponse {
+        let want_debug = request.debug;
+        let lsp_method = Self::daemon_to_lsp_method(request.method);
+        // Clone params for debug trace (only when debug is requested)
+        let debug_params = if want_debug { Some(request.params.clone()) } else { None };
+
         let result = match request.method {
             Method::Hover => self.handle_hover(request.params).await,
             Method::Definition => self.handle_definition(request.params).await,
@@ -307,9 +316,54 @@ impl DaemonServer {
             Method::Shutdown => self.handle_shutdown(request.params).await,
         };
 
-        match result {
+        let debug_trace = if want_debug {
+            lsp_method.map(|method| {
+                use crate::daemon::protocol::DebugTrace;
+                DebugTrace {
+                    method: method.to_string(),
+                    params: debug_params.unwrap_or(Value::Null),
+                    response: match &result {
+                        Ok(v) => v.clone(),
+                        Err(e) => serde_json::json!({"error": e.to_string()}),
+                    },
+                }
+            })
+        } else {
+            None
+        };
+
+        let response = match result {
             Ok(value) => DaemonResponse::success(request.id, value),
             Err(e) => DaemonResponse::error(request.id, DaemonError::internal_error(e.to_string())),
+        };
+        response.with_debug_trace(debug_trace)
+    }
+
+    /// Resolve a file path against the workspace root.
+    ///
+    /// If the file path is relative, it is joined with the workspace root to
+    /// produce an absolute path.  This ensures `file_uri()` (which calls
+    /// `tokio::fs::canonicalize`) resolves relative to the workspace, not the
+    /// daemon process's CWD.
+    fn resolve_file(workspace: &std::path::Path, file: PathBuf) -> PathBuf {
+        if file.is_absolute() {
+            file
+        } else {
+            workspace.join(file)
+        }
+    }
+
+    /// Map daemon method to the primary underlying LSP method.
+    fn daemon_to_lsp_method(method: Method) -> Option<&'static str> {
+        match method {
+            Method::Hover => Some("textDocument/hover"),
+            Method::Definition => Some("textDocument/definition"),
+            Method::References | Method::BatchReferences => Some("textDocument/references"),
+            Method::WorkspaceSymbols => Some("workspace/symbol"),
+            Method::DocumentSymbols => Some("textDocument/documentSymbol"),
+            Method::Inspect => Some("textDocument/hover + textDocument/references"),
+            Method::Members => Some("textDocument/documentSymbol + textDocument/hover"),
+            Method::Ping | Method::Shutdown | Method::Diagnostics => None,
         }
     }
 
@@ -318,9 +372,10 @@ impl DaemonServer {
         let params: HoverParams =
             serde_json::from_value(params).context("Invalid hover parameters")?;
 
-        let client = self.lsp_pool.get_or_create(params.workspace).await?;
+        let client = self.lsp_pool.get_or_create(params.workspace.clone()).await?;
 
-        let file_str = params.file.to_string_lossy().to_string();
+        let resolved = Self::resolve_file(&params.workspace, params.file);
+        let file_str = resolved.to_string_lossy().to_string();
         client.open_document(&file_str).await?;
 
         let hover = Self::hover_with_warmup(&client, &file_str, params.line, params.column).await?;
@@ -334,11 +389,18 @@ impl DaemonServer {
         let params: DefinitionParams =
             serde_json::from_value(params).context("Invalid definition parameters")?;
 
-        let client = self.lsp_pool.get_or_create(params.workspace).await?;
+        let client = self.lsp_pool.get_or_create(params.workspace.clone()).await?;
 
-        let file_str = params.file.to_string_lossy().to_string();
+        let resolved = Self::resolve_file(&params.workspace, params.file);
+        let file_str = resolved.to_string_lossy().to_string();
         client.open_document(&file_str).await?;
-        let locations = client.goto_definition(&file_str, params.line, params.column).await?;
+        let locations = with_warmup(
+            "definition",
+            &WARMUP_DELAYS,
+            |locs: &Vec<Location>| !locs.is_empty(),
+            || client.goto_definition(&file_str, params.line, params.column),
+        )
+        .await?;
 
         let location = locations.into_iter().next();
         let result = DefinitionResult { location };
@@ -373,11 +435,18 @@ impl DaemonServer {
         let params: DocumentSymbolsParams =
             serde_json::from_value(params).context("Invalid document symbols parameters")?;
 
-        let client = self.lsp_pool.get_or_create(params.workspace).await?;
+        let client = self.lsp_pool.get_or_create(params.workspace.clone()).await?;
 
-        let file_str = params.file.to_string_lossy().to_string();
+        let resolved = Self::resolve_file(&params.workspace, params.file);
+        let file_str = resolved.to_string_lossy().to_string();
         client.open_document(&file_str).await?;
-        let symbols = client.document_symbols(&file_str).await?;
+        let symbols = with_warmup(
+            "document symbols",
+            &WARMUP_DELAYS,
+            |syms: &Vec<DocumentSymbol>| !syms.is_empty(),
+            || client.document_symbols(&file_str),
+        )
+        .await?;
 
         let result = DocumentSymbolsResult { symbols };
         Ok(serde_json::to_value(result)?)
@@ -388,13 +457,25 @@ impl DaemonServer {
         let params: ReferencesParams =
             serde_json::from_value(params).context("Invalid references parameters")?;
 
-        let client = self.lsp_pool.get_or_create(params.workspace).await?;
+        let client = self.lsp_pool.get_or_create(params.workspace.clone()).await?;
 
-        let file_str = params.file.to_string_lossy().to_string();
+        let resolved = Self::resolve_file(&params.workspace, params.file);
+        let file_str = resolved.to_string_lossy().to_string();
         client.open_document(&file_str).await?;
-        let locations = client
-            .find_references(&file_str, params.line, params.column, params.include_declaration)
-            .await?;
+        let locations = with_warmup(
+            "references",
+            &WARMUP_DELAYS,
+            |locs: &Vec<Location>| !locs.is_empty(),
+            || {
+                client.find_references(
+                    &file_str,
+                    params.line,
+                    params.column,
+                    params.include_declaration,
+                )
+            },
+        )
+        .await?;
 
         let result = ReferencesResult { locations };
         Ok(serde_json::to_value(result)?)
@@ -405,15 +486,20 @@ impl DaemonServer {
         let params: BatchReferencesParams =
             serde_json::from_value(params).context("Invalid batch references parameters")?;
 
-        let client = self.lsp_pool.get_or_create(params.workspace).await?;
+        let client = self.lsp_pool.get_or_create(params.workspace.clone()).await?;
 
         let mut entries = Vec::with_capacity(params.queries.len());
         for q in &params.queries {
-            let file_str = q.file.to_string_lossy().to_string();
+            let resolved = Self::resolve_file(&params.workspace, q.file.clone());
+            let file_str = resolved.to_string_lossy().to_string();
             client.open_document(&file_str).await?;
-            let locations = client
-                .find_references(&file_str, q.line, q.column, params.include_declaration)
-                .await?;
+            let locations = with_warmup(
+                "batch references",
+                &WARMUP_DELAYS,
+                |locs: &Vec<Location>| !locs.is_empty(),
+                || client.find_references(&file_str, q.line, q.column, params.include_declaration),
+            )
+            .await?;
             entries.push(BatchReferencesEntry { label: q.label.clone(), locations });
         }
 
@@ -429,9 +515,10 @@ impl DaemonServer {
         let params: InspectParams =
             serde_json::from_value(params).context("Invalid inspect parameters")?;
 
-        let client = self.lsp_pool.get_or_create(params.workspace).await?;
+        let client = self.lsp_pool.get_or_create(params.workspace.clone()).await?;
 
-        let file_str = params.file.to_string_lossy().to_string();
+        let resolved = Self::resolve_file(&params.workspace, params.file);
+        let file_str = resolved.to_string_lossy().to_string();
         client.open_document(&file_str).await?;
 
         let hover = Self::hover_with_warmup(&client, &file_str, params.line, params.column).await?;
@@ -455,9 +542,10 @@ impl DaemonServer {
         let params: MembersParams =
             serde_json::from_value(params).context("Invalid members parameters")?;
 
-        let client = self.lsp_pool.get_or_create(params.workspace).await?;
+        let client = self.lsp_pool.get_or_create(params.workspace.clone()).await?;
 
-        let file_str = params.file.to_string_lossy().to_string();
+        let resolved = Self::resolve_file(&params.workspace, params.file);
+        let file_str = resolved.to_string_lossy().to_string();
         client.open_document(&file_str).await?;
 
         let doc_symbols = client.document_symbols(&file_str).await?;
@@ -683,16 +771,26 @@ impl DaemonServer {
     /// Handle a ping request.
     #[allow(clippy::unused_async)] // Matches async handler interface
     async fn handle_ping(&self, _params: Value) -> Result<Value> {
-        let active_workspaces = self.lsp_pool.len();
+        let workspace_paths: Vec<String> = self
+            .lsp_pool
+            .active_workspaces()
+            .into_iter()
+            .map(|p| p.to_string_lossy().to_string())
+            .collect();
+
+        let cwd = std::env::current_dir().ok().map(|p| p.to_string_lossy().to_string());
 
         let result = PingResult {
             status: "running".to_string(),
             version: env!("CARGO_PKG_VERSION").to_string(),
             uptime: self.start_time.elapsed().as_secs(),
-            active_workspaces,
+            active_workspaces: workspace_paths.len(),
             cache_size: 0, // Cache not yet implemented
             socket_path: Some(self.socket_path.to_string_lossy().into_owned()),
             tcp_port: Some(self.tcp_port),
+            workspace_paths,
+            pid: std::process::id(),
+            cwd,
         };
         Ok(serde_json::to_value(result)?)
     }
@@ -700,59 +798,37 @@ impl DaemonServer {
     /// Hover with retry on cold start.
     ///
     /// The ty LSP server may return null hover when a document was recently
-    /// opened and analysis hasn't completed. This is common on cold start
-    /// (first daemon request) but can also happen when multiple handlers
-    /// race to query a freshly-opened file. Retry a few times with
-    /// increasing delays before giving up.
+    /// opened and analysis hasn't completed. Retry with back-off.
     async fn hover_with_warmup(
         client: &TyLspClient,
         file: &str,
         line: u32,
         column: u32,
     ) -> Result<Option<Hover>> {
-        let hover = client.hover(file, line, column).await?;
-        if hover.is_some() {
-            return Ok(hover);
-        }
-
-        for delay_ms in [100, 200, 400] {
-            tracing::debug!("hover returned null, retrying in {delay_ms}ms...");
-            tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
-            let hover = client.hover(file, line, column).await?;
-            if hover.is_some() {
-                return Ok(hover);
-            }
-        }
-
-        tracing::debug!("hover still null after retries");
-        Ok(None)
+        with_warmup(
+            "hover",
+            &WARMUP_DELAYS,
+            |h: &Option<Hover>| h.is_some(),
+            || client.hover(file, line, column),
+        )
+        .await
     }
 
     /// Workspace symbols with retry on cold start.
     ///
     /// On cold start the ty LSP server may not have finished indexing the
-    /// workspace yet, returning zero symbols. Retry with back-off so callers
-    /// (inspect, find, references) get results once indexing completes.
+    /// workspace yet, returning zero symbols. Retry with back-off.
     async fn workspace_symbols_with_warmup(
         client: &TyLspClient,
         query: &str,
     ) -> Result<Vec<crate::lsp::protocol::SymbolInformation>> {
-        let symbols = client.workspace_symbols(query).await?;
-        if !symbols.is_empty() {
-            return Ok(symbols);
-        }
-
-        for delay_ms in [100, 200, 400] {
-            tracing::debug!("workspace symbols empty, retrying in {delay_ms}ms...");
-            tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
-            let symbols = client.workspace_symbols(query).await?;
-            if !symbols.is_empty() {
-                return Ok(symbols);
-            }
-        }
-
-        tracing::debug!("workspace symbols still empty after retries");
-        Ok(Vec::new())
+        with_warmup(
+            "workspace symbols",
+            &WARMUP_DELAYS,
+            |syms: &Vec<crate::lsp::protocol::SymbolInformation>| !syms.is_empty(),
+            || client.workspace_symbols(query),
+        )
+        .await
     }
 
     /// Handle a shutdown request.
@@ -805,6 +881,39 @@ impl DaemonServer {
 
         Ok(())
     }
+}
+
+/// Retry an LSP operation with exponential back-off when it returns an "empty" result.
+///
+/// On cold start the ty LSP server may not have finished indexing a document
+/// or the workspace, causing operations to return empty/null results. This
+/// helper retries with the given delays until `is_ready` returns `true`.
+async fn with_warmup<T, F, Fut>(
+    description: &str,
+    delays: &[u64],
+    is_ready: impl Fn(&T) -> bool,
+    mut operation: F,
+) -> Result<T>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T>>,
+{
+    let result = operation().await?;
+    if is_ready(&result) {
+        return Ok(result);
+    }
+
+    for delay_ms in delays {
+        tracing::debug!("{description} not ready, retrying in {delay_ms}ms...");
+        tokio::time::sleep(Duration::from_millis(*delay_ms)).await;
+        let result = operation().await?;
+        if is_ready(&result) {
+            return Ok(result);
+        }
+    }
+
+    tracing::debug!("{description} still not ready after retries");
+    operation().await
 }
 
 /// Send a framed error response to the client.

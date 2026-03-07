@@ -494,11 +494,9 @@ impl OutputFormatter {
                         writeln!(output, "... and {} more test ref(s)", test_refs.remaining_count);
                 }
             } else if test_refs.total_count > 0 {
-                let _ = writeln!(
-                    output,
-                    "({} test reference(s) hidden — use --tests to show)",
-                    test_refs.total_count
-                );
+                let heading =
+                    format!("Test references: {} (use --tests/-t to show)", test_refs.total_count);
+                let _ = writeln!(output, "\n{}", self.s.heading(&heading));
             }
         }
     }
@@ -870,11 +868,9 @@ impl OutputFormatter {
                         writeln!(output, "... and {} more test ref(s)", test_refs.remaining_count);
                 }
             } else if test_refs.total_count > 0 {
-                let _ = writeln!(
-                    output,
-                    "\n({} test reference(s) hidden — use --tests to show)",
-                    test_refs.total_count
-                );
+                let test_heading =
+                    format!("\n{h} Test Refs: {} (use --tests/-t to show)", test_refs.total_count);
+                let _ = writeln!(output, "{}", self.s.heading(&test_heading));
             }
         }
 
@@ -987,11 +983,9 @@ impl OutputFormatter {
                         writeln!(output, "... and {} more test ref(s)", test_refs.remaining_count);
                 }
             } else if test_refs.total_count > 0 {
-                let _ = writeln!(
-                    output,
-                    "\n({} test reference(s) hidden — use --tests to show)",
-                    test_refs.total_count
-                );
+                let test_heading =
+                    format!("\n{h2} Test Refs: {} (use --tests/-t to show)", test_refs.total_count);
+                let _ = writeln!(output, "{}", self.s.heading(&test_heading));
             }
         }
 
@@ -2397,12 +2391,8 @@ mod tests {
         };
         let output = formatter.format_enriched_references_results(&[result]);
         assert!(
-            output.contains("3 test reference(s) hidden"),
-            "should show hidden hint, got:\n{output}"
-        );
-        assert!(
-            !output.contains("Test references ("),
-            "should NOT show test references section, got:\n{output}"
+            output.contains("Test references: 3 (use --tests/-t to show)"),
+            "should show test refs heading with count, got:\n{output}"
         );
     }
 
@@ -2547,8 +2537,39 @@ mod tests {
         };
         let result = formatter.format_inspect(&entry);
         assert!(
-            result.contains("5 test reference(s) hidden"),
-            "should show hidden hint, got:\n{result}"
+            result.contains("Test Refs: 5 (use --tests/-t to show)"),
+            "should show test refs heading with count, got:\n{result}"
+        );
+    }
+
+    #[test]
+    fn test_format_inspect_full_with_test_refs_hint() {
+        let formatter = OutputFormatter::with_detail(
+            OutputFormat::Human,
+            OutputDetail::Full,
+            Styler::no_color(),
+        );
+        let defs = [make_location("file:///test.py", 0, 0)];
+        let entry = InspectEntry {
+            symbol: "my_func",
+            kind: Some(&SymbolKind::Function),
+            definitions: &defs,
+            hover: None,
+            total_reference_count: 2,
+            total_reference_files: 1,
+            displayed_references: Vec::new(),
+            remaining_reference_count: 0,
+            show_individual_refs: false,
+            test_references: Some(TestReferencesSection {
+                total_count: 4,
+                displayed: Vec::new(),
+                remaining_count: 0,
+            }),
+        };
+        let result = formatter.format_inspect(&entry);
+        assert!(
+            result.contains("Test Refs: 4 (use --tests/-t to show)"),
+            "full inspect should show test refs heading with count, got:\n{result}"
         );
     }
 

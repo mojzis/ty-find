@@ -1,5 +1,17 @@
 use std::path::{Path, PathBuf};
 
+/// Python project marker files/directories, checked in order of priority.
+const MARKERS: &[&str] = &[
+    "pyproject.toml",
+    "setup.py",
+    "setup.cfg",
+    "requirements.txt",
+    "Pipfile",
+    "poetry.lock",
+    ".git",
+    "src",
+];
+
 #[allow(dead_code)]
 pub struct WorkspaceDetector;
 
@@ -23,19 +35,20 @@ impl WorkspaceDetector {
         None
     }
 
-    fn has_python_markers(path: &Path) -> bool {
-        let markers = [
-            "pyproject.toml",
-            "setup.py",
-            "setup.cfg",
-            "requirements.txt",
-            "Pipfile",
-            "poetry.lock",
-            ".git",
-            "src",
-        ];
+    /// Describe how the workspace root was detected (for debug logging).
+    pub fn describe_detection(workspace_root: &Path) -> String {
+        for marker in MARKERS {
+            let marker_path = workspace_root.join(marker);
+            if marker_path.exists() {
+                return format!("found {marker} at {}", marker_path.display());
+            }
+        }
 
-        markers.iter().any(|marker| path.join(marker).exists())
+        format!("walked to {}, no specific marker identified", workspace_root.display())
+    }
+
+    fn has_python_markers(path: &Path) -> bool {
+        MARKERS.iter().any(|marker| path.join(marker).exists())
     }
 }
 

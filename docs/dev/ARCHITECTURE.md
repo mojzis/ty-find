@@ -1,0 +1,39 @@
+# Architecture
+
+## Key Architectural Patterns
+
+**LSP Communication Flow**:
+- `TyLspServer` spawns and manages the `ty lsp` process
+- `TyLspClient` handles JSON-RPC protocol with initialization, requests, and response parsing
+- Communication is async using tokio with proper message framing (Content-Length headers)
+
+**Dual Build System**:
+- `Cargo.toml` defines the Rust binary with CLI dependencies (clap, tokio, serde)
+- `pyproject.toml` uses maturin backend (`bindings = "bin"`) to package the Rust binary as a Python wheel
+
+**Command Processing**:
+- Main commands: `inspect` (all-in-one), `find` (definitions), `refs` (references), `members` (class interface), `list` (file outline)
+- `find` supports `--fuzzy` for partial/prefix matching via workspace symbols
+- `find`, `inspect`, `refs`, and `members` accept multiple symbols in one call to reduce tool invocations (results grouped by symbol)
+- `SymbolFinder` does text-based symbol matching with whole-word detection
+- `OutputFormatter` supports multiple formats: human, JSON, CSV, paths-only
+
+**Concurrency rule — daemon handles all parallelism**:
+- All multi-query operations (batch references, multi-symbol inspect, etc.) must be batched into a single RPC call and processed by the daemon, **not** parallelized on the CLI client side.
+- The ty LSP server communicates through a single stdin/stdout pipe, so LSP requests are inherently sequential. Spawning parallel client connections only adds connection overhead without concurrency benefit.
+- Use `BatchReferences` (or similar batch RPC methods) to send multiple queries in one call. The daemon processes them sequentially on the shared LSP client and returns merged results.
+
+## Python Integration Strategy
+
+The project uses maturin to bridge Rust and Python ecosystems:
+- Rust binary provides performance for LSP communication
+- Python packaging allows `pip install` and `uv sync` integration
+- Users add `ty-find @ git+https://github.com/user/ty-find.git` to pyproject.toml
+- maturin automatically builds Rust binary during Python package installation
+
+## Dependencies
+
+- **ty LSP server** must be available in PATH or via `uvx` (users install via `uv add --dev ty`)
+- **Rust toolchain** required for building from source
+- **tokio** for async LSP communication and process management
+- **clap** for CLI parsing with subcommands and multiple output formats

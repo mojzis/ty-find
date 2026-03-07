@@ -116,9 +116,14 @@ Use **grep** for non-symbol text:
 - Comments and documentation content
 - Non-Python files
 
+## Performance Tips
+
+Install [ripgrep](https://github.com/BurntSushi/ripgrep) (`rg`) to speed up lookups for non-existent symbols. When a symbol isn't found on the first LSP attempt, tyf uses `rg` to quickly check if the symbol text exists in any `.py` file. If not, it skips the retry chain (~3 seconds) and returns immediately.
+
 ## Installation
 
 Requires [ty](https://github.com/astral-sh/ty) (`uv add --dev ty`).
+Optional: [ripgrep](https://github.com/BurntSushi/ripgrep) for faster non-existent symbol lookups.
 
 ```
 pip install ty-find

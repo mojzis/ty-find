@@ -36,6 +36,19 @@ Grep is still appropriate for string literals, config values, TODOs, and non-sym
 
 **Prerequisite:** [ty](https://github.com/astral-sh/ty) type checker (`uv add --dev ty`)
 
+**Optional:** [ripgrep](https://github.com/BurntSushi/ripgrep) (`rg`) — speeds up lookups for non-existent symbols by quickly verifying whether a symbol appears in any `.py` file before retrying LSP queries. Without it, searches for non-existent symbols still work but may be slower.
+
+```bash
+# macOS
+brew install ripgrep
+
+# Ubuntu/Debian
+sudo apt install ripgrep
+
+# Or via cargo
+cargo install ripgrep
+```
+
 ### From PyPI
 
 ```bash

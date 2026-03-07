@@ -34,7 +34,28 @@ async fn main() {
     let use_color = UseColor::resolve(&cli.color);
     let styler = Styler::new(use_color);
 
-    if let Err(e) = run(cli, styler).await {
+    // Create debug log early so we can print its path even on error
+    let debug_log = if cli.debug {
+        match DebugLog::create() {
+            Ok(log) => Some(Arc::new(log)),
+            Err(e) => {
+                eprintln!("Warning: failed to create debug log: {e}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    let result = run(cli, styler, debug_log.clone()).await;
+
+    // Always print debug log path (even on error)
+    if let Some(ref log) = debug_log {
+        log.flush();
+        eprintln!("Debug log: {}", log.path().display());
+    }
+
+    if let Err(e) = result {
         eprintln!("{}", styler.error(&format!("Error: {}", format_error_chain(&e))));
         #[allow(clippy::exit)]
         std::process::exit(1);
@@ -68,10 +89,7 @@ fn resolve_workspace(explicit: Option<&Path>, cwd: &Path) -> Result<(PathBuf, St
     }
 }
 
-async fn run(cli: Cli, styler: Styler) -> Result<()> {
-    // Create debug log if --debug is passed
-    let debug_log = if cli.debug { Some(Arc::new(DebugLog::create()?)) } else { None };
-
+async fn run(cli: Cli, styler: Styler, debug_log: Option<Arc<DebugLog>>) -> Result<()> {
     // Log CLI args
     if let Some(ref log) = debug_log {
         let args: Vec<String> = std::env::args().collect();
@@ -95,12 +113,6 @@ async fn run(cli: Cli, styler: Styler) -> Result<()> {
     let timeout = cli.timeout.map_or(DEFAULT_TIMEOUT, Duration::from_secs);
 
     dispatch_command(cli.command, &workspace_root, &formatter, timeout, debug_log.as_ref()).await?;
-
-    // Print debug log path at the end of normal output
-    if let Some(ref log) = debug_log {
-        log.flush();
-        println!("Debug log: {}", log.path().display());
-    }
 
     Ok(())
 }

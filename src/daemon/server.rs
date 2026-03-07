@@ -256,6 +256,20 @@ impl DaemonServer {
         response.with_debug_trace(debug_trace)
     }
 
+    /// Resolve a file path against the workspace root.
+    ///
+    /// If the file path is relative, it is joined with the workspace root to
+    /// produce an absolute path.  This ensures `file_uri()` (which calls
+    /// `tokio::fs::canonicalize`) resolves relative to the workspace, not the
+    /// daemon process's CWD.
+    fn resolve_file(workspace: &std::path::Path, file: PathBuf) -> PathBuf {
+        if file.is_absolute() {
+            file
+        } else {
+            workspace.join(file)
+        }
+    }
+
     /// Map daemon method to the primary underlying LSP method.
     fn daemon_to_lsp_method(method: Method) -> Option<&'static str> {
         match method {
@@ -275,9 +289,10 @@ impl DaemonServer {
         let params: HoverParams =
             serde_json::from_value(params).context("Invalid hover parameters")?;
 
-        let client = self.lsp_pool.get_or_create(params.workspace).await?;
+        let client = self.lsp_pool.get_or_create(params.workspace.clone()).await?;
 
-        let file_str = params.file.to_string_lossy().to_string();
+        let resolved = Self::resolve_file(&params.workspace, params.file);
+        let file_str = resolved.to_string_lossy().to_string();
         client.open_document(&file_str).await?;
 
         let hover = Self::hover_with_warmup(&client, &file_str, params.line, params.column).await?;
@@ -291,9 +306,10 @@ impl DaemonServer {
         let params: DefinitionParams =
             serde_json::from_value(params).context("Invalid definition parameters")?;
 
-        let client = self.lsp_pool.get_or_create(params.workspace).await?;
+        let client = self.lsp_pool.get_or_create(params.workspace.clone()).await?;
 
-        let file_str = params.file.to_string_lossy().to_string();
+        let resolved = Self::resolve_file(&params.workspace, params.file);
+        let file_str = resolved.to_string_lossy().to_string();
         client.open_document(&file_str).await?;
         let locations = with_warmup(
             "definition",
@@ -336,9 +352,10 @@ impl DaemonServer {
         let params: DocumentSymbolsParams =
             serde_json::from_value(params).context("Invalid document symbols parameters")?;
 
-        let client = self.lsp_pool.get_or_create(params.workspace).await?;
+        let client = self.lsp_pool.get_or_create(params.workspace.clone()).await?;
 
-        let file_str = params.file.to_string_lossy().to_string();
+        let resolved = Self::resolve_file(&params.workspace, params.file);
+        let file_str = resolved.to_string_lossy().to_string();
         client.open_document(&file_str).await?;
         let symbols = with_warmup(
             "document symbols",
@@ -357,9 +374,10 @@ impl DaemonServer {
         let params: ReferencesParams =
             serde_json::from_value(params).context("Invalid references parameters")?;
 
-        let client = self.lsp_pool.get_or_create(params.workspace).await?;
+        let client = self.lsp_pool.get_or_create(params.workspace.clone()).await?;
 
-        let file_str = params.file.to_string_lossy().to_string();
+        let resolved = Self::resolve_file(&params.workspace, params.file);
+        let file_str = resolved.to_string_lossy().to_string();
         client.open_document(&file_str).await?;
         let locations = with_warmup(
             "references",
@@ -385,11 +403,12 @@ impl DaemonServer {
         let params: BatchReferencesParams =
             serde_json::from_value(params).context("Invalid batch references parameters")?;
 
-        let client = self.lsp_pool.get_or_create(params.workspace).await?;
+        let client = self.lsp_pool.get_or_create(params.workspace.clone()).await?;
 
         let mut entries = Vec::with_capacity(params.queries.len());
         for q in &params.queries {
-            let file_str = q.file.to_string_lossy().to_string();
+            let resolved = Self::resolve_file(&params.workspace, q.file.clone());
+            let file_str = resolved.to_string_lossy().to_string();
             client.open_document(&file_str).await?;
             let locations = with_warmup(
                 "batch references",
@@ -413,9 +432,10 @@ impl DaemonServer {
         let params: InspectParams =
             serde_json::from_value(params).context("Invalid inspect parameters")?;
 
-        let client = self.lsp_pool.get_or_create(params.workspace).await?;
+        let client = self.lsp_pool.get_or_create(params.workspace.clone()).await?;
 
-        let file_str = params.file.to_string_lossy().to_string();
+        let resolved = Self::resolve_file(&params.workspace, params.file);
+        let file_str = resolved.to_string_lossy().to_string();
         client.open_document(&file_str).await?;
 
         let hover = Self::hover_with_warmup(&client, &file_str, params.line, params.column).await?;
@@ -439,9 +459,10 @@ impl DaemonServer {
         let params: MembersParams =
             serde_json::from_value(params).context("Invalid members parameters")?;
 
-        let client = self.lsp_pool.get_or_create(params.workspace).await?;
+        let client = self.lsp_pool.get_or_create(params.workspace.clone()).await?;
 
-        let file_str = params.file.to_string_lossy().to_string();
+        let resolved = Self::resolve_file(&params.workspace, params.file);
+        let file_str = resolved.to_string_lossy().to_string();
         client.open_document(&file_str).await?;
 
         let doc_symbols = client.document_symbols(&file_str).await?;
@@ -667,14 +688,24 @@ impl DaemonServer {
     /// Handle a ping request.
     #[allow(clippy::unused_async)] // Matches async handler interface
     async fn handle_ping(&self, _params: Value) -> Result<Value> {
-        let active_workspaces = self.lsp_pool.len();
+        let workspace_paths: Vec<String> = self
+            .lsp_pool
+            .active_workspaces()
+            .into_iter()
+            .map(|p| p.to_string_lossy().to_string())
+            .collect();
+
+        let cwd = std::env::current_dir().ok().map(|p| p.to_string_lossy().to_string());
 
         let result = PingResult {
             status: "running".to_string(),
             version: env!("CARGO_PKG_VERSION").to_string(),
             uptime: self.start_time.elapsed().as_secs(),
-            active_workspaces,
+            active_workspaces: workspace_paths.len(),
             cache_size: 0, // Cache not yet implemented
+            workspace_paths,
+            pid: std::process::id(),
+            cwd,
         };
         Ok(serde_json::to_value(result)?)
     }

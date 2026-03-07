@@ -133,6 +133,62 @@ assert_output "pandas Index (warm 3)" "Found 1 definition(s)" "$output"
 output=$(cd "$DJANGO_DIR" && "$TYF" find HttpResponse 2>&1)
 assert_output "django HttpResponse (warm 3)" "Found 1 definition(s)" "$output"
 
+# --- test_project / test_project2 cross-workspace switching ---
+TP1="$PROJECT_DIR/test_project"
+TP2="$PROJECT_DIR/test_project2"
+
+# find
+output=$("$TYF" --workspace "$TP1" find Animal 2>&1)
+assert_output "test_project find Animal" "models.py" "$output"
+
+output=$("$TYF" --workspace "$TP2" find UserService 2>&1)
+assert_output "test_project2 find UserService" "services.py" "$output"
+
+output=$("$TYF" --workspace "$TP1" find create_dog 2>&1)
+assert_output "test_project find create_dog (back)" "models.py" "$output"
+
+# find --fuzzy
+output=$("$TYF" --workspace "$TP1" find Dog --fuzzy 2>&1)
+assert_output "test_project find fuzzy Dog" "Dog" "$output"
+
+output=$("$TYF" --workspace "$TP2" find User --fuzzy 2>&1)
+assert_output "test_project2 find fuzzy User" "User" "$output"
+
+# inspect
+output=$("$TYF" --workspace "$TP1" inspect Animal 2>&1)
+assert_output "test_project inspect Animal" "models.py" "$output"
+
+output=$("$TYF" --workspace "$TP2" inspect User 2>&1)
+assert_output "test_project2 inspect User" "services.py" "$output"
+
+# refs
+output=$("$TYF" --workspace "$TP1" refs Animal 2>&1)
+assert_output "test_project refs Animal" "reference(s) for: 'Animal'" "$output"
+
+output=$("$TYF" --workspace "$TP2" refs User 2>&1)
+assert_output "test_project2 refs User" "reference(s) for: 'User'" "$output"
+
+# members
+output=$("$TYF" --workspace "$TP1" members Animal --file "$TP1/models.py" 2>&1)
+assert_output "test_project members Animal" "speak" "$output"
+
+output=$("$TYF" --workspace "$TP2" members User --file "$TP2/services.py" 2>&1)
+assert_output "test_project2 members User" "display_name" "$output"
+
+# list
+output=$("$TYF" --workspace "$TP1" list "$TP1/models.py" 2>&1)
+assert_output "test_project list models.py" "Animal" "$output"
+
+output=$("$TYF" --workspace "$TP2" list "$TP2/services.py" 2>&1)
+assert_output "test_project2 list services.py" "UserService" "$output"
+
+# daemon status should show both workspaces
+output=$("$TYF" daemon status 2>&1)
+assert_output "daemon status shows test_project" "test_project" "$output"
+assert_output "daemon status shows test_project2" "test_project2" "$output"
+assert_output "daemon status shows PID" "PID:" "$output"
+assert_output "daemon status shows Working dir" "Working dir:" "$output"
+
 echo "  workspace switching: done"
 echo ""
 

@@ -36,17 +36,15 @@ If formatting fails, fix it with `cargo fmt` and re-run the checks.
 
 All features and bug fixes follow TDD (red-green-refactor). No implementation code without a failing test first. Bug fixes must include a regression test that fails without the fix.
 
-## CRITICAL: Test Integrity Rules
+## Test Changes Require Deliberation
 
-These rules are NON-NEGOTIABLE. Violating them is worse than not completing the task.
+When a test fails during implementation:
 
-1. **NEVER weaken a test to make it pass.** If a test fails, fix the implementation. If the test itself has a bug, explain what's wrong and get confirmation before changing it.
-2. **NEVER delete, skip, or comment out a failing test.** A failing test is a signal. Silencing the signal is not fixing the problem.
-3. **NEVER change test assertions to match broken behavior.** If `assert_eq!(result.len(), 5)` fails because result has 3 items, the bug is in the code, not the number 5.
-4. **NEVER make error handling more permissive to avoid test failures.** Do not add `.unwrap_or_default()`, catch-all error handlers, or silent fallbacks to make tests pass.
-5. **NEVER replace a specific assertion with a weaker one.** Going from `assert_eq!(x, 42)` to `assert!(x > 0)` is test corruption.
-6. **Smoke tests and integration tests are sacred.** They test real-world behavior on real repositories. If they fail, the tool is broken. Fix the root cause, never loosen pass criteria.
-7. **If you cannot fix a failing test, STOP and report.** Say what the test expects, what actually happens, and what you think is wrong. Do not silently work around it.
+1. **Stop and diagnose.** Understand WHY it fails before changing anything. Is the test wrong, or is the implementation wrong?
+2. **Default assumption: the test is right.** Fix the implementation first.
+3. **If the test genuinely needs updating** (requirements changed, API evolved), explain what changed and why the old assertion is no longer correct before modifying it.
+4. **Never weaken an assertion just to make it pass.** Making a test more permissive without understanding the failure is not a fix.
+5. **If uncertain, ask.** A 2-line question is cheaper than a silent wrong decision.
 
 ## Architecture
 
@@ -75,6 +73,7 @@ If hitting a wall (test won't pass, architecture doesn't fit, LSP returns unexpe
 2. Do not attempt more than 3 approaches without reporting what was tried and why each failed.
 3. Do not modify unrelated code hoping it fixes the issue.
 4. Revert to last known good state if changes made things worse.
+5. When in doubt, a 2-line question to the user is always better than a silent workaround.
 
 ## Review Before Completing Work
 
@@ -99,5 +98,4 @@ Before marking any task as complete, run the review process:
 - Prefer `&str`/`&[T]`/`&Path` over owned types in function parameters when ownership isn't needed
 - Tests must assert on values, not just "runs without panic"
 - Extract shared logic — don't duplicate LSP message patterns or error handling boilerplate
-- Test files are read-only during implementation tasks unless the test itself is the deliverable
-- If a smoke/integration test becomes flaky, the fix is in production code or test infra — never in assertions
+- Flaky tests need root-cause analysis, not looser assertions — if unclear, ask before changing

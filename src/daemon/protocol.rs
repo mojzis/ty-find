@@ -43,6 +43,15 @@ pub struct DaemonRequest {
 
     /// Method-specific parameters
     pub params: Value,
+
+    /// When true, the daemon includes raw LSP request/response in the response.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub debug: bool,
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_false(v: &bool) -> bool {
+    !v
 }
 
 impl DaemonRequest {
@@ -56,12 +65,13 @@ impl DaemonRequest {
             id: NEXT_ID.fetch_add(1, Ordering::SeqCst),
             method,
             params,
+            debug: false,
         }
     }
 
     /// Create a request with a specific ID.
     pub fn with_id(id: u64, method: Method, params: Value) -> Self {
-        Self { jsonrpc: "2.0".to_string(), id, method, params }
+        Self { jsonrpc: "2.0".to_string(), id, method, params, debug: false }
     }
 }
 
@@ -108,17 +118,50 @@ pub struct DaemonResponse {
     /// Error result (mutually exclusive with result)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<DaemonError>,
+
+    /// Raw LSP request/response trace (only when request had `debug: true`)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub debug_trace: Option<DebugTrace>,
+}
+
+/// Captured LSP exchange for debug logging.
+///
+/// When the CLI sends a daemon request with `debug: true`, the daemon captures
+/// the raw LSP request/response and returns it here so the CLI can log everything
+/// in one place.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct DebugTrace {
+    /// The LSP method called (e.g. "textDocument/definition", "workspace/symbol")
+    pub method: String,
+
+    /// The full LSP request params as JSON
+    pub params: Value,
+
+    /// The full LSP response as JSON
+    pub response: Value,
 }
 
 impl DaemonResponse {
     /// Create a successful response.
     pub fn success(id: u64, result: Value) -> Self {
-        Self { jsonrpc: "2.0".to_string(), id, result: Some(result), error: None }
+        Self {
+            jsonrpc: "2.0".to_string(),
+            id,
+            result: Some(result),
+            error: None,
+            debug_trace: None,
+        }
     }
 
     /// Create an error response.
     pub fn error(id: u64, error: DaemonError) -> Self {
-        Self { jsonrpc: "2.0".to_string(), id, result: None, error: Some(error) }
+        Self { jsonrpc: "2.0".to_string(), id, result: None, error: Some(error), debug_trace: None }
+    }
+
+    /// Attach a debug trace to the response.
+    pub fn with_debug_trace(mut self, trace: Option<DebugTrace>) -> Self {
+        self.debug_trace = trace;
+        self
     }
 
     /// Check if this response represents an error.
@@ -667,6 +710,18 @@ pub struct PingResult {
     /// TCP port on 127.0.0.1 the daemon is listening on
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tcp_port: Option<u16>,
+
+    /// Paths of loaded workspaces (empty if none)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub workspace_paths: Vec<String>,
+
+    /// Daemon process ID
+    #[serde(default)]
+    pub pid: u32,
+
+    /// Daemon process working directory
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
 }
 
 /// Result of a shutdown request.
@@ -777,6 +832,9 @@ mod tests {
             cache_size: 0,
             socket_path: Some("/tmp/ty-find-1000.sock".to_string()),
             tcp_port: Some(52341),
+            workspace_paths: vec!["/path/to/ws1".to_string(), "/path/to/ws2".to_string()],
+            pid: 12345,
+            cwd: Some("/home/user".to_string()),
         };
 
         let json = serde_json::to_value(&result).unwrap();

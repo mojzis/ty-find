@@ -310,4 +310,4 @@ sequenceDiagram
     Note over D: return result
 ```
 
-Retries use exponential backoff (100ms, 200ms, 400ms) and only apply to operations that can return null during warmup (like `hover` and `workspace/symbol`). Definition lookups don't need retries because they return empty results rather than null when the server isn't ready.
+Retries use exponential backoff (200ms, 400ms, 800ms, 1600ms) and apply to all operations that can return empty or null results during warmup, including `hover`, `workspace/symbol`, `definition`, `references`, and `documentSymbol`.

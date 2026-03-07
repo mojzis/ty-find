@@ -494,11 +494,9 @@ impl OutputFormatter {
                         writeln!(output, "... and {} more test ref(s)", test_refs.remaining_count);
                 }
             } else if test_refs.total_count > 0 {
-                let _ = writeln!(
-                    output,
-                    "({} test reference(s) hidden — use --tests to show)",
-                    test_refs.total_count
-                );
+                let heading =
+                    format!("Test references: {} (use --tests/-t to show)", test_refs.total_count);
+                let _ = writeln!(output, "\n{}", self.s.heading(&heading));
             }
         }
     }
@@ -870,11 +868,9 @@ impl OutputFormatter {
                         writeln!(output, "... and {} more test ref(s)", test_refs.remaining_count);
                 }
             } else if test_refs.total_count > 0 {
-                let _ = writeln!(
-                    output,
-                    "\n({} test reference(s) hidden — use --tests to show)",
-                    test_refs.total_count
-                );
+                let test_heading =
+                    format!("\n{h} Test Refs: {} (use --tests/-t to show)", test_refs.total_count);
+                let _ = writeln!(output, "{}", self.s.heading(&test_heading));
             }
         }
 
@@ -987,11 +983,9 @@ impl OutputFormatter {
                         writeln!(output, "... and {} more test ref(s)", test_refs.remaining_count);
                 }
             } else if test_refs.total_count > 0 {
-                let _ = writeln!(
-                    output,
-                    "\n({} test reference(s) hidden — use --tests to show)",
-                    test_refs.total_count
-                );
+                let test_heading =
+                    format!("\n{h2} Test Refs: {} (use --tests/-t to show)", test_refs.total_count);
+                let _ = writeln!(output, "{}", self.s.heading(&test_heading));
             }
         }
 
@@ -2397,12 +2391,8 @@ mod tests {
         };
         let output = formatter.format_enriched_references_results(&[result]);
         assert!(
-            output.contains("3 test reference(s) hidden"),
-            "should show hidden hint, got:\n{output}"
-        );
-        assert!(
-            !output.contains("Test references ("),
-            "should NOT show test references section, got:\n{output}"
+            output.contains("Test references: 3 (use --tests/-t to show)"),
+            "should show test refs heading with count, got:\n{output}"
         );
     }
 
@@ -2547,8 +2537,8 @@ mod tests {
         };
         let result = formatter.format_inspect(&entry);
         assert!(
-            result.contains("5 test reference(s) hidden"),
-            "should show hidden hint, got:\n{result}"
+            result.contains("Test Refs: 5 (use --tests/-t to show)"),
+            "should show test refs heading with count, got:\n{result}"
         );
     }
 

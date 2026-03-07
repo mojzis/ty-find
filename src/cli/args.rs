@@ -109,7 +109,7 @@ pub enum Commands {
         references_limit: usize,
 
         /// Show test references in a separate section (excluded by default)
-        #[arg(long, default_value_t = false)]
+        #[arg(short = 't', long, default_value_t = false)]
         tests: bool,
     },
 
@@ -178,7 +178,7 @@ pub enum Commands {
         references_limit: usize,
 
         /// Show test references in a separate section (excluded by default)
-        #[arg(long, default_value_t = false)]
+        #[arg(short = 't', long, default_value_t = false)]
         tests: bool,
     },
 
@@ -322,6 +322,15 @@ mod tests {
     #[test]
     fn refs_accepts_tests_flag() {
         let cli = Cli::try_parse_from(["tyf", "refs", "my_func", "--tests"]).unwrap();
+        match cli.command {
+            Commands::References { tests, .. } => assert!(tests),
+            _ => panic!("expected References"),
+        }
+    }
+
+    #[test]
+    fn refs_accepts_tests_short_flag() {
+        let cli = Cli::try_parse_from(["tyf", "refs", "my_func", "-t"]).unwrap();
         match cli.command {
             Commands::References { tests, .. } => assert!(tests),
             _ => panic!("expected References"),

@@ -399,6 +399,7 @@ impl DaemonServer {
             &WARMUP_DELAYS,
             |locs: &Vec<Location>| !locs.is_empty(),
             || client.goto_definition(&file_str, params.line, params.column),
+            None, // Definition lookups are position-based, rg check not applicable
         )
         .await?;
 
@@ -412,9 +413,11 @@ impl DaemonServer {
         let params: WorkspaceSymbolsParams =
             serde_json::from_value(params).context("Invalid workspace symbols parameters")?;
 
-        let client = self.lsp_pool.get_or_create(params.workspace).await?;
+        let workspace = params.workspace;
+        let client = self.lsp_pool.get_or_create(workspace.clone()).await?;
 
-        let mut symbols = Self::workspace_symbols_with_warmup(&client, &params.query).await?;
+        let mut symbols =
+            Self::workspace_symbols_with_warmup(&client, &params.query, &workspace).await?;
 
         // Filter by exact name if specified (avoids serializing thousands of fuzzy matches)
         if let Some(ref exact_name) = params.exact_name {
@@ -445,6 +448,7 @@ impl DaemonServer {
             &WARMUP_DELAYS,
             |syms: &Vec<DocumentSymbol>| !syms.is_empty(),
             || client.document_symbols(&file_str),
+            None, // Document symbols are file-based, rg check not applicable
         )
         .await?;
 
@@ -474,6 +478,7 @@ impl DaemonServer {
                     params.include_declaration,
                 )
             },
+            None, // References are position-based, rg check not applicable
         )
         .await?;
 
@@ -498,6 +503,7 @@ impl DaemonServer {
                 &WARMUP_DELAYS,
                 |locs: &Vec<Location>| !locs.is_empty(),
                 || client.find_references(&file_str, q.line, q.column, params.include_declaration),
+                None, // Batch references are position-based, rg check not applicable
             )
             .await?;
             entries.push(BatchReferencesEntry { label: q.label.clone(), locations });
@@ -810,6 +816,7 @@ impl DaemonServer {
             &WARMUP_DELAYS,
             |h: &Option<Hover>| h.is_some(),
             || client.hover(file, line, column),
+            None, // No symbol name available for position-based hover
         )
         .await
     }
@@ -818,15 +825,20 @@ impl DaemonServer {
     ///
     /// On cold start the ty LSP server may not have finished indexing the
     /// workspace yet, returning zero symbols. Retry with back-off.
+    ///
+    /// Uses ripgrep as a circuit-breaker: after the first empty result, if `rg`
+    /// confirms the symbol doesn't exist in any `.py` file, skips retries.
     async fn workspace_symbols_with_warmup(
         client: &TyLspClient,
         query: &str,
+        workspace_root: &std::path::Path,
     ) -> Result<Vec<crate::lsp::protocol::SymbolInformation>> {
         with_warmup(
             "workspace symbols",
             &WARMUP_DELAYS,
             |syms: &Vec<crate::lsp::protocol::SymbolInformation>| !syms.is_empty(),
             || client.workspace_symbols(query),
+            Some(RgCheck { symbol: query, workspace_root }),
         )
         .await
     }
@@ -883,16 +895,31 @@ impl DaemonServer {
     }
 }
 
+/// Context for the optional ripgrep-based early termination check.
+///
+/// When provided, `with_warmup` will run `rg` after the first empty result
+/// to check whether the symbol text exists in any `.py` file. If it doesn't,
+/// retries are skipped — the symbol provably does not exist.
+struct RgCheck<'a> {
+    symbol: &'a str,
+    workspace_root: &'a std::path::Path,
+}
+
 /// Retry an LSP operation with exponential back-off when it returns an "empty" result.
 ///
 /// On cold start the ty LSP server may not have finished indexing a document
 /// or the workspace, causing operations to return empty/null results. This
 /// helper retries with the given delays until `is_ready` returns `true`.
+///
+/// When `rg_check` is provided, uses ripgrep as a fast negative filter after the
+/// first empty result: if the symbol doesn't appear in any `.py` file, bail
+/// immediately instead of retrying.
 async fn with_warmup<T, F, Fut>(
     description: &str,
     delays: &[u64],
     is_ready: impl Fn(&T) -> bool,
     mut operation: F,
+    rg_check: Option<RgCheck<'_>>,
 ) -> Result<T>
 where
     F: FnMut() -> Fut,
@@ -901,6 +928,27 @@ where
     let result = operation().await?;
     if is_ready(&result) {
         return Ok(result);
+    }
+
+    // After the first empty result, check if the symbol exists in the workspace
+    // using ripgrep. If rg confirms it doesn't exist, skip all retries.
+    // Run in spawn_blocking to avoid blocking the tokio runtime.
+    if let Some(ref check) = rg_check {
+        let symbol = check.symbol.to_owned();
+        let workspace = check.workspace_root.to_owned();
+        let exists = tokio::task::spawn_blocking(move || {
+            crate::ripgrep::symbol_might_exist_in_workspace(&symbol, &workspace)
+        })
+        .await
+        .unwrap_or(true); // If spawn_blocking panics, conservatively continue retries
+
+        if !exists {
+            tracing::debug!(
+                "{description}: rg confirms symbol '{}' not found, skipping retries",
+                check.symbol
+            );
+            return Ok(result);
+        }
     }
 
     for delay_ms in delays {

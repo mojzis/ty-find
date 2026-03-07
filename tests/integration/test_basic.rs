@@ -804,3 +804,65 @@ async fn test_debug_flag_with_daemon_logs_rpc() {
     // Clean up debug log file
     let _ = std::fs::remove_file(log_path);
 }
+
+// ── Ripgrep early termination tests ────────────────────────────────
+
+#[tokio::test]
+async fn test_find_nonexistent_symbol_returns_quickly() {
+    common::require_ty();
+
+    // First, warm up the daemon with a known-good query so startup latency
+    // doesn't affect our timing measurement.
+    let mut warmup = cargo_bin_cmd!("tyf");
+    warmup
+        .arg("--workspace")
+        .arg(workspace_root())
+        .arg("find")
+        .arg("hello_world")
+        .arg("--file")
+        .arg(fixture_path());
+    let _ = warmup.output().expect("warmup failed");
+
+    // Now search for a symbol that definitely does not exist.
+    // With the rg circuit-breaker, this should be fast (<300ms on warm daemon).
+    let start = std::time::Instant::now();
+    let mut cmd = cargo_bin_cmd!("tyf");
+    cmd.arg("--workspace")
+        .arg(workspace_root())
+        .arg("find")
+        .arg("this_symbol_absolutely_does_not_exist_xyz_12345");
+
+    let output = cmd.output().expect("failed to run tyf");
+    let elapsed = start.elapsed();
+
+    // The command should succeed (exit 0) with no results
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "command failed: {stdout}");
+
+    // With rg early termination, this should complete well under 1 second.
+    // Without it, the retry chain would take ~3 seconds.
+    // Use a generous 2-second threshold to avoid flaky CI.
+    assert!(
+        elapsed.as_millis() < 2000,
+        "non-existent symbol lookup took {}ms, expected <2000ms with rg early termination",
+        elapsed.as_millis()
+    );
+}
+
+#[tokio::test]
+async fn test_find_existing_symbol_still_works_with_rg() {
+    common::require_ty();
+
+    // Ensure that the rg circuit-breaker does not interfere with finding
+    // symbols that actually exist.
+    let mut cmd = cargo_bin_cmd!("tyf");
+    cmd.arg("--workspace").arg(workspace_root()).arg("find").arg("hello_world");
+
+    let output = cmd.output().expect("failed to run tyf");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "command failed: {stdout}");
+    assert!(
+        predicate::str::contains("hello_world").eval(&stdout),
+        "should find hello_world, got:\n{stdout}"
+    );
+}

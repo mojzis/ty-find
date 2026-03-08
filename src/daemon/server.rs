@@ -33,8 +33,8 @@ use crate::lsp::client::TyLspClient;
 use crate::lsp::protocol::{DocumentSymbol, Hover, Location, SymbolKind};
 
 /// Default warmup delays (ms) for LSP operations that may return empty on cold start.
-/// Total: 200 + 400 + 800 + 1600 = 3000ms.
-const WARMUP_DELAYS: [u64; 4] = [200, 400, 800, 1600];
+/// Total: 100 + 200 + 400 + 800 = 1500ms.
+const WARMUP_DELAYS: [u64; 4] = [100, 200, 400, 800];
 
 /// The daemon server that handles client connections and LSP requests.
 pub struct DaemonServer {

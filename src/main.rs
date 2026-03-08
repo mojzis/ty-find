@@ -11,6 +11,7 @@ mod commands;
 mod daemon;
 mod debug;
 mod lsp;
+mod ripgrep;
 mod workspace;
 
 use cli::args::{Cli, Commands};

@@ -31,9 +31,25 @@ The project uses maturin to bridge Rust and Python ecosystems:
 - Users add `ty-find @ git+https://github.com/user/ty-find.git` to pyproject.toml
 - maturin automatically builds Rust binary during Python package installation
 
+## Ripgrep Circuit-Breaker in Retry Flow
+
+When an LSP operation returns empty/null results (e.g., workspace symbol lookup for a non-existent symbol), the daemon normally retries with exponential back-off (200ms, 400ms, 800ms, 1600ms) to allow the LSP server to finish indexing.
+
+To avoid wasting ~3 seconds on symbols that genuinely don't exist, the retry loop uses `rg` (ripgrep) as a fast negative filter after the first empty result:
+
+1. First LSP attempt returns empty → run `rg --count --word-regexp --fixed-strings --type py '{symbol}' {workspace_root}`
+2. If `rg` exit code 1 (no matches) → symbol provably doesn't exist, skip all retries
+3. If `rg` exit code 0 (matches found) → symbol might exist, continue retries as normal
+4. If `rg` not found or errors → graceful fallback, continue retries as normal
+
+This is a **one-directional optimization**: `rg` returning zero matches guarantees non-existence. `rg` returning matches does NOT guarantee the symbol exists (it could be in a comment or string), so retries continue in that case.
+
+The check is implemented in `src/ripgrep.rs` and integrated into the `with_warmup()` function in `src/daemon/server.rs`. Currently applied to workspace symbol lookups where a symbol name is available; position-based operations (hover, definition, references) pass `None` to skip the check.
+
 ## Dependencies
 
 - **ty LSP server** must be available in PATH or via `uvx` (users install via `uv add --dev ty`)
+- **ripgrep** (`rg`) — optional, used as a circuit-breaker to speed up non-existent symbol lookups
 - **Rust toolchain** required for building from source
 - **tokio** for async LSP communication and process management
 - **clap** for CLI parsing with subcommands and multiple output formats

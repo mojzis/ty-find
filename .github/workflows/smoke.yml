@@ -47,6 +47,9 @@ jobs:
       - name: Install ty
         run: pip install ty
 
+      - name: Install ripgrep
+        run: sudo apt-get update && sudo apt-get install -y ripgrep
+
       - name: Build release binary
         run: cargo build --release
 

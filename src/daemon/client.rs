@@ -686,4 +686,92 @@ mod tests {
 
         handle.await.expect("server task");
     }
+
+    /// Helper: spin up a TCP listener that responds to one ping with the given version.
+    async fn spawn_fake_daemon(version: &str) -> (tokio::task::JoinHandle<()>, PidfileData) {
+        let listener =
+            tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind should succeed");
+        let port = listener.local_addr().expect("addr").port();
+        let version = version.to_string();
+        let pidfile_version = version.clone();
+
+        let handle = tokio::spawn(async move {
+            use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
+
+            let (mut stream, _) = listener.accept().await.expect("accept");
+            let mut buf_reader = tokio::io::BufReader::new(&mut stream);
+
+            // Read request
+            let mut header = String::new();
+            buf_reader.read_line(&mut header).await.expect("read header");
+            let len: usize = header
+                .trim()
+                .strip_prefix("Content-Length: ")
+                .expect("header")
+                .parse()
+                .expect("parse");
+            let mut empty = String::new();
+            buf_reader.read_line(&mut empty).await.expect("read sep");
+            let mut body = vec![0u8; len];
+            buf_reader.read_exact(&mut body).await.expect("read body");
+
+            // Send a ping response with the specified version
+            let resp = serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {
+                    "status": "running",
+                    "version": version,
+                    "uptime": 100,
+                    "active_workspaces": 1,
+                    "cache_size": 0,
+                    "socket_path": "/tmp/nonexistent.sock",
+                    "tcp_port": port,
+                    "pid": 99999
+                }
+            });
+            let resp_str = serde_json::to_string(&resp).expect("serialize");
+            let framed = format!("Content-Length: {}\r\n\r\n{resp_str}", resp_str.len());
+            stream.write_all(framed.as_bytes()).await.expect("write");
+            stream.flush().await.expect("flush");
+        });
+
+        let data = PidfileData {
+            pid: std::process::id(),
+            socket: PathBuf::from("/tmp/nonexistent-ty-find-version-test.sock"),
+            tcp_port: port,
+            version: pidfile_version,
+        };
+
+        (handle, data)
+    }
+
+    #[tokio::test]
+    async fn test_version_mismatch_detected() {
+        let (handle, data) = spawn_fake_daemon("0.0.1-old").await;
+
+        let mut client = DaemonClient::connect_with_pidfile(&data, DEFAULT_TIMEOUT)
+            .await
+            .expect("should connect via TCP fallback");
+
+        let ping = client.ping().await.expect("ping should succeed");
+        assert_eq!(ping.version, "0.0.1-old");
+        assert_ne!(ping.version, CLIENT_VERSION, "versions should differ");
+
+        handle.await.expect("server task");
+    }
+
+    #[tokio::test]
+    async fn test_version_match_detected() {
+        let (handle, data) = spawn_fake_daemon(CLIENT_VERSION).await;
+
+        let mut client = DaemonClient::connect_with_pidfile(&data, DEFAULT_TIMEOUT)
+            .await
+            .expect("should connect");
+
+        let ping = client.ping().await.expect("ping should succeed");
+        assert_eq!(ping.version, CLIENT_VERSION, "versions should match");
+
+        handle.await.expect("server task");
+    }
 }

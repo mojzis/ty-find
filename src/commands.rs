@@ -11,7 +11,7 @@ use crate::cli::output::{
     OutputFormatter,
 };
 #[cfg(unix)]
-use crate::daemon::client::{ensure_daemon_running, spawn_daemon, DaemonClient};
+use crate::daemon::client::{ensure_daemon_running, spawn_daemon, DaemonClient, CLIENT_VERSION};
 #[cfg(unix)]
 use crate::daemon::protocol::BatchReferencesQuery;
 #[cfg(unix)]
@@ -1280,6 +1280,12 @@ pub async fn handle_daemon_command(command: DaemonCommands) -> Result<()> {
                     if mins > 0 { format!("{mins}m {secs}s") } else { format!("{secs}s") };
 
                 println!("Daemon running (v{})", status.version);
+                if status.version != CLIENT_VERSION {
+                    println!(
+                        "  ⚠ Version mismatch: daemon v{}, client v{} — run `tyf daemon restart` to update",
+                        status.version, CLIENT_VERSION,
+                    );
+                }
                 println!("PID: {}", status.pid);
                 if let Some(ref cwd) = status.cwd {
                     println!("  Working dir: {cwd}");

@@ -226,6 +226,9 @@ fn write_examples(out: &mut String, name: &str, cmd: &Command) {
             let _ = writeln!(out, "# Start the background daemon");
             let _ = writeln!(out, "tyf daemon start");
             let _ = writeln!(out);
+            let _ = writeln!(out, "# Restart the daemon (e.g. after upgrading tyf)");
+            let _ = writeln!(out, "tyf daemon restart");
+            let _ = writeln!(out);
             let _ = writeln!(out, "# Check daemon status");
             let _ = writeln!(out, "tyf daemon status");
             let _ = writeln!(out);

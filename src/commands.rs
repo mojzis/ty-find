@@ -1270,6 +1270,38 @@ pub async fn handle_daemon_command(command: DaemonCommands) -> Result<()> {
             }
         },
 
+        DaemonCommands::Restart => {
+            // Stop the running daemon (if any)
+            let socket_path = crate::daemon::client::get_socket_path()?;
+            let pidfile_path = crate::daemon::pidfile::get_pidfile_path()?;
+
+            match DaemonClient::connect().await {
+                Ok(mut client) => {
+                    let _ = client.shutdown().await;
+                    println!("Stopped existing daemon");
+                    // Give the old daemon a moment to release the socket
+                    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                }
+                Err(_) => {
+                    println!("No running daemon found");
+                }
+            }
+
+            // Clean up stale files
+            let _ = std::fs::remove_file(&socket_path);
+            let _ = std::fs::remove_file(&pidfile_path);
+
+            // Spawn a fresh daemon
+            spawn_daemon()?;
+            println!("Starting daemon...");
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+            match DaemonClient::connect().await {
+                Ok(_) => println!("Daemon restarted successfully"),
+                Err(e) => println!("Failed to start daemon: {e}"),
+            }
+        }
+
         DaemonCommands::Status => match DaemonClient::connect().await {
             Ok(mut client) => {
                 let status = client.ping().await?;

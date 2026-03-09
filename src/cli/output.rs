@@ -2775,4 +2775,483 @@ mod tests {
             "color=always should produce ANSI in members output, got:\n{output:?}"
         );
     }
+
+    // ========================================================================
+    // strip_code_fences tests
+    // ========================================================================
+
+    #[test]
+    fn test_strip_code_fences_no_fences() {
+        let input = "plain text\nno fences here";
+        assert_eq!(strip_code_fences(input), input);
+    }
+
+    #[test]
+    fn test_strip_code_fences_only_fences() {
+        let input = "```python\n```";
+        assert_eq!(strip_code_fences(input), "");
+    }
+
+    #[test]
+    fn test_strip_code_fences_mixed_content() {
+        let input = "```python\ndef foo():\n    pass\n```\nsome text";
+        let result = strip_code_fences(input);
+        assert!(result.contains("def foo():"));
+        assert!(result.contains("some text"));
+        assert!(!result.contains("```"));
+    }
+
+    // ========================================================================
+    // position_in_range tests
+    // ========================================================================
+
+    #[test]
+    fn test_position_in_range_inside() {
+        let range = Range {
+            start: Position { line: 5, character: 0 },
+            end: Position { line: 10, character: 20 },
+        };
+        assert!(position_in_range(&range, 7, 10));
+    }
+
+    #[test]
+    fn test_position_in_range_at_start_boundary() {
+        let range = Range {
+            start: Position { line: 5, character: 3 },
+            end: Position { line: 10, character: 20 },
+        };
+        assert!(position_in_range(&range, 5, 3));
+    }
+
+    #[test]
+    fn test_position_in_range_at_end_boundary() {
+        let range = Range {
+            start: Position { line: 5, character: 0 },
+            end: Position { line: 10, character: 20 },
+        };
+        assert!(position_in_range(&range, 10, 20));
+    }
+
+    #[test]
+    fn test_position_in_range_before_start() {
+        let range = Range {
+            start: Position { line: 5, character: 5 },
+            end: Position { line: 10, character: 20 },
+        };
+        assert!(!position_in_range(&range, 5, 2));
+    }
+
+    #[test]
+    fn test_position_in_range_after_end() {
+        let range = Range {
+            start: Position { line: 5, character: 0 },
+            end: Position { line: 10, character: 20 },
+        };
+        assert!(!position_in_range(&range, 10, 25));
+    }
+
+    #[test]
+    fn test_position_in_range_line_before() {
+        let range = Range {
+            start: Position { line: 5, character: 0 },
+            end: Position { line: 10, character: 20 },
+        };
+        assert!(!position_in_range(&range, 3, 10));
+    }
+
+    #[test]
+    fn test_position_in_range_line_after() {
+        let range = Range {
+            start: Position { line: 5, character: 0 },
+            end: Position { line: 10, character: 20 },
+        };
+        assert!(!position_in_range(&range, 12, 0));
+    }
+
+    #[test]
+    fn test_position_in_range_same_line_range() {
+        let range = Range {
+            start: Position { line: 5, character: 3 },
+            end: Position { line: 5, character: 10 },
+        };
+        assert!(position_in_range(&range, 5, 5));
+        assert!(!position_in_range(&range, 5, 2));
+        assert!(!position_in_range(&range, 5, 11));
+    }
+
+    // ========================================================================
+    // format_definitions Paths mode
+    // ========================================================================
+
+    #[test]
+    fn test_format_definitions_paths() {
+        let formatter = OutputFormatter::new(OutputFormat::Paths);
+        let locations = [make_location("file:///a.py", 1, 0), make_location("file:///b.py", 2, 0)];
+        let result = formatter.format_definitions(&locations, "test");
+        assert!(result.contains("a.py"));
+        assert!(result.contains("b.py"));
+    }
+
+    // ========================================================================
+    // format_find_results multi-symbol JSON/CSV/Paths
+    // ========================================================================
+
+    #[test]
+    fn test_format_find_results_multiple_json() {
+        let formatter = OutputFormatter::new(OutputFormat::Json);
+        let results = vec![
+            ("foo".to_string(), vec![make_location("file:///a.py", 0, 0)]),
+            ("bar".to_string(), vec![make_location("file:///b.py", 1, 0)]),
+        ];
+        let output = formatter.format_find_results(&results);
+        let parsed: serde_json::Value = serde_json::from_str(&output).unwrap();
+        assert!(parsed.is_array());
+        assert_eq!(parsed.as_array().unwrap().len(), 2);
+        assert_eq!(parsed[0]["symbol"], "foo");
+        assert_eq!(parsed[1]["symbol"], "bar");
+    }
+
+    #[test]
+    fn test_format_find_results_multiple_csv() {
+        let formatter = OutputFormatter::new(OutputFormat::Csv);
+        let results = vec![
+            ("foo".to_string(), vec![make_location("file:///a.py", 0, 0)]),
+            ("bar".to_string(), vec![make_location("file:///b.py", 1, 0)]),
+        ];
+        let output = formatter.format_find_results(&results);
+        assert!(output.starts_with("symbol,file,line,column\n"));
+        assert!(output.contains("foo,"));
+        assert!(output.contains("bar,"));
+    }
+
+    #[test]
+    fn test_format_find_results_multiple_paths() {
+        let formatter = OutputFormatter::new(OutputFormat::Paths);
+        let results = vec![
+            ("foo".to_string(), vec![make_location("file:///a.py", 0, 0)]),
+            (
+                "bar".to_string(),
+                vec![make_location("file:///a.py", 1, 0), make_location("file:///b.py", 2, 0)],
+            ),
+        ];
+        let output = formatter.format_find_results(&results);
+        // Should be sorted and deduped
+        let lines: Vec<&str> = output.lines().collect();
+        assert!(lines.len() >= 2);
+        // a.py should appear only once (deduped)
+        assert_eq!(lines.iter().filter(|l| l.contains("a.py")).count(), 1);
+    }
+
+    // ========================================================================
+    // format_enriched_references_results multi-result
+    // ========================================================================
+
+    fn make_enriched_result(label: &str, count: usize) -> EnrichedReferencesResult {
+        let displayed: Vec<EnrichedReference> = (0..count)
+            .map(|i| EnrichedReference {
+                location: make_location("file:///ref.py", u32::try_from(i).unwrap(), 0),
+                context: "module scope".to_string(),
+            })
+            .collect();
+        EnrichedReferencesResult {
+            label: label.to_string(),
+            total_count: count,
+            displayed,
+            remaining_count: 0,
+            test_references: None,
+        }
+    }
+
+    #[test]
+    fn test_format_enriched_references_multiple_human() {
+        let formatter = OutputFormatter::new(OutputFormat::Human);
+        let results = vec![make_enriched_result("foo", 1), make_enriched_result("bar", 2)];
+        let output = formatter.format_enriched_references_results(&results);
+        assert!(output.contains("=== foo ==="));
+        assert!(output.contains("=== bar ==="));
+    }
+
+    #[test]
+    fn test_format_enriched_references_multiple_json() {
+        let formatter = OutputFormatter::new(OutputFormat::Json);
+        let results = vec![make_enriched_result("foo", 1), make_enriched_result("bar", 1)];
+        let output = formatter.format_enriched_references_results(&results);
+        let parsed: serde_json::Value = serde_json::from_str(&output).unwrap();
+        assert!(parsed.is_array());
+        assert_eq!(parsed.as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn test_format_enriched_references_multiple_csv() {
+        let formatter = OutputFormatter::new(OutputFormat::Csv);
+        let results = vec![make_enriched_result("foo", 1), make_enriched_result("bar", 1)];
+        let output = formatter.format_enriched_references_results(&results);
+        assert!(output.starts_with("symbol,file,line,column,context,test\n"));
+        assert!(output.contains("foo,"));
+        assert!(output.contains("bar,"));
+    }
+
+    #[test]
+    fn test_format_enriched_references_multiple_paths() {
+        let formatter = OutputFormatter::new(OutputFormat::Paths);
+        let results = vec![make_enriched_result("foo", 1), make_enriched_result("bar", 1)];
+        let output = formatter.format_enriched_references_results(&results);
+        assert!(output.contains("ref.py"));
+    }
+
+    // ========================================================================
+    // format_inspect CSV/Paths single + multi-result
+    // ========================================================================
+
+    #[test]
+    fn test_format_inspect_csv_single() {
+        let formatter = OutputFormatter::new(OutputFormat::Csv);
+        let defs = [make_location("file:///test.py", 0, 0)];
+        let entry = make_entry("Animal", Some(&SymbolKind::Class), &defs, None);
+        let result = formatter.format_inspect(&entry);
+        assert!(result.starts_with("section,file,line,column,context\n"));
+        assert!(result.contains("definition,"));
+    }
+
+    #[test]
+    fn test_format_inspect_paths_single() {
+        let formatter = OutputFormatter::new(OutputFormat::Paths);
+        let defs = [make_location("file:///a.py", 0, 0), make_location("file:///b.py", 1, 0)];
+        let entry = make_entry("Animal", None, &defs, None);
+        let result = formatter.format_inspect(&entry);
+        assert!(result.contains("a.py"));
+        assert!(result.contains("b.py"));
+    }
+
+    #[test]
+    fn test_format_inspect_results_multiple_human() {
+        let formatter = OutputFormatter::new(OutputFormat::Human);
+        let defs1 = [make_location("file:///a.py", 0, 0)];
+        let defs2 = [make_location("file:///b.py", 1, 0)];
+        let entry1 = make_entry("Foo", Some(&SymbolKind::Class), &defs1, None);
+        let entry2 = make_entry("Bar", Some(&SymbolKind::Function), &defs2, None);
+        let result = formatter.format_inspect_results(&[entry1, entry2]);
+        assert!(result.contains("# Foo"));
+        assert!(result.contains("# Bar"));
+    }
+
+    #[test]
+    fn test_format_inspect_results_multiple_json() {
+        let formatter = OutputFormatter::new(OutputFormat::Json);
+        let defs1 = [make_location("file:///a.py", 0, 0)];
+        let defs2 = [make_location("file:///b.py", 1, 0)];
+        let entry1 = make_entry("Foo", Some(&SymbolKind::Class), &defs1, None);
+        let entry2 = make_entry("Bar", Some(&SymbolKind::Function), &defs2, None);
+        let result = formatter.format_inspect_results(&[entry1, entry2]);
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert!(parsed.is_array());
+        assert_eq!(parsed.as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn test_format_inspect_results_multiple_csv() {
+        let formatter = OutputFormatter::new(OutputFormat::Csv);
+        let defs1 = [make_location("file:///a.py", 0, 0)];
+        let defs2 = [make_location("file:///b.py", 1, 0)];
+        let entry1 = make_entry("Foo", Some(&SymbolKind::Class), &defs1, None);
+        let entry2 = make_entry("Bar", Some(&SymbolKind::Function), &defs2, None);
+        let result = formatter.format_inspect_results(&[entry1, entry2]);
+        assert!(result.starts_with("symbol,section,file,line,column,context\n"));
+        assert!(result.contains("Foo,"));
+        assert!(result.contains("Bar,"));
+    }
+
+    #[test]
+    fn test_format_inspect_results_multiple_paths() {
+        let formatter = OutputFormatter::new(OutputFormat::Paths);
+        let defs1 = [make_location("file:///a.py", 0, 0)];
+        let defs2 = [make_location("file:///b.py", 1, 0)];
+        let entry1 = make_entry("Foo", None, &defs1, None);
+        let entry2 = make_entry("Bar", None, &defs2, None);
+        let result = formatter.format_inspect_results(&[entry1, entry2]);
+        assert!(result.contains("a.py"));
+        assert!(result.contains("b.py"));
+    }
+
+    // ========================================================================
+    // format_document_symbols
+    // ========================================================================
+
+    #[test]
+    fn test_format_document_symbols_human() {
+        let formatter = OutputFormatter::new(OutputFormat::Human);
+        let child = make_doc_symbol("method", SymbolKind::Method, 2, 4, None);
+        let parent = make_doc_symbol("MyClass", SymbolKind::Class, 0, 5, Some(vec![child]));
+        let symbols = vec![parent];
+        let result = formatter.format_document_symbols(&symbols);
+        assert!(result.contains("MyClass"));
+        assert!(result.contains("method"));
+    }
+
+    #[test]
+    fn test_format_document_symbols_json() {
+        let formatter = OutputFormatter::new(OutputFormat::Json);
+        let symbols = vec![make_doc_symbol("MyClass", SymbolKind::Class, 0, 5, None)];
+        let result = formatter.format_document_symbols(&symbols);
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert!(parsed.is_array());
+    }
+
+    #[test]
+    fn test_format_document_symbols_csv() {
+        let formatter = OutputFormatter::new(OutputFormat::Csv);
+        let symbols = vec![make_doc_symbol("MyClass", SymbolKind::Class, 0, 5, None)];
+        let result = formatter.format_document_symbols(&symbols);
+        assert!(result.starts_with("name,kind,line,column\n"));
+        assert!(result.contains("MyClass"));
+    }
+
+    // ========================================================================
+    // format_workspace_symbols
+    // ========================================================================
+
+    fn make_symbol_info(name: &str, kind: SymbolKind, uri: &str, line: u32) -> SymbolInformation {
+        SymbolInformation {
+            name: name.to_string(),
+            kind,
+            tags: None,
+            deprecated: None,
+            location: make_location(uri, line, 0),
+            container_name: None,
+        }
+    }
+
+    #[test]
+    fn test_format_workspace_symbols_json() {
+        let formatter = OutputFormatter::new(OutputFormat::Json);
+        let symbols = vec![make_symbol_info("MyClass", SymbolKind::Class, "file:///a.py", 0)];
+        let result = formatter.format_workspace_symbols(&symbols);
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert!(parsed.is_array());
+        assert_eq!(parsed[0]["name"], "MyClass");
+    }
+
+    #[test]
+    fn test_format_workspace_symbols_csv() {
+        let formatter = OutputFormatter::new(OutputFormat::Csv);
+        let symbols = vec![make_symbol_info("MyClass", SymbolKind::Class, "file:///a.py", 0)];
+        let result = formatter.format_workspace_symbols(&symbols);
+        assert!(result.starts_with("name,kind,file,line,column\n"));
+        assert!(result.contains("MyClass"));
+    }
+
+    #[test]
+    fn test_format_workspace_symbols_paths() {
+        let formatter = OutputFormatter::new(OutputFormat::Paths);
+        let symbols = vec![
+            make_symbol_info("A", SymbolKind::Class, "file:///a.py", 0),
+            make_symbol_info("B", SymbolKind::Function, "file:///b.py", 0),
+        ];
+        let result = formatter.format_workspace_symbols(&symbols);
+        assert!(result.contains("a.py"));
+        assert!(result.contains("b.py"));
+    }
+
+    // ========================================================================
+    // kind_label
+    // ========================================================================
+
+    #[test]
+    fn test_kind_label_all_variants() {
+        assert_eq!(OutputFormatter::kind_label(&SymbolKind::Function), "func");
+        assert_eq!(OutputFormatter::kind_label(&SymbolKind::Method), "method");
+        assert_eq!(OutputFormatter::kind_label(&SymbolKind::Class), "class");
+        assert_eq!(OutputFormatter::kind_label(&SymbolKind::Variable), "var");
+        assert_eq!(OutputFormatter::kind_label(&SymbolKind::Constant), "const");
+        assert_eq!(OutputFormatter::kind_label(&SymbolKind::Module), "module");
+        assert_eq!(OutputFormatter::kind_label(&SymbolKind::Property), "prop");
+        assert_eq!(OutputFormatter::kind_label(&SymbolKind::Field), "field");
+        assert_eq!(OutputFormatter::kind_label(&SymbolKind::Constructor), "ctor");
+        assert_eq!(OutputFormatter::kind_label(&SymbolKind::Enum), "enum");
+        assert_eq!(OutputFormatter::kind_label(&SymbolKind::Interface), "iface");
+        assert_eq!(OutputFormatter::kind_label(&SymbolKind::Struct), "struct");
+        assert_eq!(OutputFormatter::kind_label(&SymbolKind::EnumMember), "member");
+        assert_eq!(OutputFormatter::kind_label(&SymbolKind::TypeParameter), "type");
+    }
+
+    // ========================================================================
+    // extract_hover_* helpers
+    // ========================================================================
+
+    #[test]
+    fn test_extract_hover_text_array() {
+        use crate::lsp::protocol::{MarkedString, MarkedStringOrString};
+
+        let contents = HoverContents::Array(vec![
+            MarkedStringOrString::String("first".to_string()),
+            MarkedStringOrString::MarkedString(MarkedString {
+                language: "python".to_string(),
+                value: "second".to_string(),
+            }),
+        ]);
+        let result = OutputFormatter::extract_hover_text(&contents);
+        assert!(result.contains("first"));
+        assert!(result.contains("second"));
+    }
+
+    #[test]
+    fn test_extract_hover_type_no_fences_no_doc() {
+        use crate::lsp::protocol::HoverContents;
+
+        let contents = HoverContents::Scalar("int".to_string());
+        let result = OutputFormatter::extract_hover_type(&contents);
+        assert_eq!(result, "int");
+    }
+
+    #[test]
+    fn test_extract_hover_doc_empty_after_separator() {
+        use crate::lsp::protocol::{HoverContents, MarkupContent, MarkupKind};
+
+        let contents = HoverContents::Markup(MarkupContent {
+            kind: MarkupKind::Markdown,
+            value: "```python\ndef foo()\n```\n---\n".to_string(),
+        });
+        let result = OutputFormatter::extract_hover_doc(&contents);
+        assert!(result.is_none(), "empty doc after separator should return None");
+    }
+
+    #[test]
+    fn test_extract_hover_doc_with_content() {
+        use crate::lsp::protocol::{HoverContents, MarkupContent, MarkupKind};
+
+        let contents = HoverContents::Markup(MarkupContent {
+            kind: MarkupKind::Markdown,
+            value: "```python\ndef foo()\n```\n---\nThis is the docstring.".to_string(),
+        });
+        let result = OutputFormatter::extract_hover_doc(&contents);
+        assert_eq!(result.unwrap(), "This is the docstring.");
+    }
+
+    // ========================================================================
+    // read_definition_context
+    // ========================================================================
+
+    #[test]
+    fn test_read_definition_context_start_at_keyword() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.py");
+        std::fs::write(&file, "@dataclass\n@frozen\nclass Config:\n    host: str\n").unwrap();
+
+        let ctx = read_definition_context(file.to_str().unwrap(), 0).unwrap();
+        assert_eq!(ctx.definition_line, "class Config:");
+        assert!(ctx.decorators.is_some());
+        let decorators = ctx.decorators.unwrap();
+        assert!(decorators.contains("@dataclass"));
+        assert!(decorators.contains("@frozen"));
+    }
+
+    #[test]
+    fn test_read_definition_context_no_def_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.py");
+        std::fs::write(&file, "@only_decorators\n@more\n").unwrap();
+
+        let ctx = read_definition_context(file.to_str().unwrap(), 0);
+        assert!(ctx.is_none(), "all decorator lines with nothing after should return None");
+    }
 }

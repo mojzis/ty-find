@@ -1191,4 +1191,130 @@ mod tests {
         let sig = DaemonServer::extract_member_signature(&contents, "is_certified");
         assert_eq!(sig, "is_certified: property");
     }
+
+    #[test]
+    fn test_extract_member_signature_xml_fence() {
+        use crate::lsp::protocol::{HoverContents, MarkupContent, MarkupKind};
+
+        let contents = HoverContents::Markup(MarkupContent {
+            kind: MarkupKind::Markdown,
+            value: "```xml\n<element>text</element>\n```".to_string(),
+        });
+        let sig = DaemonServer::extract_member_signature(&contents, "config");
+        // The XML content doesn't start with def/class, so it should be treated as bare type
+        assert!(sig.contains("config"));
+    }
+
+    #[test]
+    fn test_extract_member_signature_text_fence() {
+        use crate::lsp::protocol::{HoverContents, MarkupContent, MarkupKind};
+
+        let contents = HoverContents::Markup(MarkupContent {
+            kind: MarkupKind::Markdown,
+            value: "```text\nstr | None\n```".to_string(),
+        });
+        let sig = DaemonServer::extract_member_signature(&contents, "value");
+        assert_eq!(sig, "value: str | None");
+    }
+
+    #[test]
+    fn test_extract_member_signature_method_prefix() {
+        use crate::lsp::protocol::{HoverContents, MarkupContent, MarkupKind};
+
+        let contents = HoverContents::Markup(MarkupContent {
+            kind: MarkupKind::Markdown,
+            value: "```python\n(method) def foo(self) -> int\n```".to_string(),
+        });
+        let sig = DaemonServer::extract_member_signature(&contents, "foo");
+        assert_eq!(sig, "foo(self) -> int");
+    }
+
+    #[test]
+    fn test_extract_member_signature_array_hover() {
+        use crate::lsp::protocol::{HoverContents, MarkedString, MarkedStringOrString};
+
+        let contents = HoverContents::Array(vec![
+            MarkedStringOrString::MarkedString(MarkedString {
+                language: "python".to_string(),
+                value: "def greet(self) -> str".to_string(),
+            }),
+            MarkedStringOrString::String("A greeting method".to_string()),
+        ]);
+        let sig = DaemonServer::extract_member_signature(&contents, "greet");
+        // Array hover concatenates all entries; the function signature is extracted and
+        // the plain-text description is appended after it.
+        assert_eq!(sig, "greet(self) -> str A greeting method");
+    }
+
+    #[test]
+    fn test_collapse_signature_single_line() {
+        let sig = "def foo(self, x: int) -> str";
+        let result = DaemonServer::collapse_signature(sig);
+        assert_eq!(result, sig);
+    }
+
+    #[test]
+    fn test_collapse_signature_multiline_complex() {
+        let sig = "def process(\n    self,\n    data: list[dict[str, Any]],\n    timeout: int = 30,\n    retries: int = 3\n) -> Result[str, Error]";
+        let result = DaemonServer::collapse_signature(sig);
+        assert_eq!(
+            result,
+            "def process(self, data: list[dict[str, Any]], timeout: int = 30, retries: int = 3) -> Result[str, Error]"
+        );
+    }
+
+    #[test]
+    fn test_find_symbol_recursive_empty_tree() {
+        let symbols: Vec<crate::lsp::protocol::DocumentSymbol> = vec![];
+        let found = DaemonServer::find_symbol_recursive(&symbols, "anything");
+        assert!(found.is_none());
+    }
+
+    #[test]
+    fn test_find_symbol_recursive_deeply_nested() {
+        use crate::lsp::protocol::{DocumentSymbol, Position, Range, SymbolKind};
+
+        let range = Range {
+            start: Position { line: 0, character: 0 },
+            end: Position { line: 30, character: 0 },
+        };
+
+        let deepest = DocumentSymbol {
+            name: "deep_method".to_string(),
+            detail: None,
+            kind: SymbolKind::Method,
+            tags: None,
+            deprecated: None,
+            range: range.clone(),
+            selection_range: range.clone(),
+            children: None,
+        };
+
+        let middle = DocumentSymbol {
+            name: "InnerClass".to_string(),
+            detail: None,
+            kind: SymbolKind::Class,
+            tags: None,
+            deprecated: None,
+            range: range.clone(),
+            selection_range: range.clone(),
+            children: Some(vec![deepest]),
+        };
+
+        let outer = DocumentSymbol {
+            name: "OuterClass".to_string(),
+            detail: None,
+            kind: SymbolKind::Class,
+            tags: None,
+            deprecated: None,
+            range: range.clone(),
+            selection_range: range,
+            children: Some(vec![middle]),
+        };
+
+        let symbols = vec![outer];
+        let found = DaemonServer::find_symbol_recursive(&symbols, "deep_method");
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().name, "deep_method");
+    }
 }

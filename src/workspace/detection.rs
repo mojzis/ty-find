@@ -125,4 +125,21 @@ mod tests {
 
         assert!(!WorkspaceDetector::has_python_markers(dir.path()));
     }
+
+    #[test]
+    fn test_describe_detection_with_marker() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("pyproject.toml"), "").unwrap();
+
+        let desc = WorkspaceDetector::describe_detection(dir.path());
+        assert!(desc.contains("pyproject.toml"), "should mention the marker found: {desc}");
+    }
+
+    #[test]
+    fn test_describe_detection_no_marker() {
+        let dir = tempfile::tempdir().unwrap();
+        // No markers at all
+        let desc = WorkspaceDetector::describe_detection(dir.path());
+        assert!(desc.contains("no specific marker"), "should say no marker found: {desc}");
+    }
 }

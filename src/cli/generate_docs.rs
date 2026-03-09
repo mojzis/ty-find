@@ -243,3 +243,87 @@ fn write_examples(out: &mut String, name: &str, cmd: &Command) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::{Arg, Command};
+
+    fn test_cmd() -> Command {
+        Command::new("tyf")
+            .about("Test CLI tool")
+            .subcommand(
+                Command::new("find")
+                    .about("Find symbols")
+                    .arg(Arg::new("symbol").required(true).help("Symbol to find"))
+                    .arg(Arg::new("file").long("file").help("Narrow search to file")),
+            )
+            .subcommand(Command::new("inspect").about("Inspect a symbol"))
+    }
+
+    #[test]
+    fn test_render_overview_contains_sections() {
+        let cmd = test_cmd();
+        let output = render_overview(&cmd);
+
+        assert!(output.contains("# Commands Overview"));
+        assert!(output.contains("## Usage"));
+        assert!(output.contains("## Commands"));
+        assert!(output.contains("Test CLI tool"));
+        assert!(output.contains("find"));
+        assert!(output.contains("inspect"));
+    }
+
+    #[test]
+    fn test_render_subcommand_with_args_and_options() {
+        let cmd = test_cmd();
+        let find_cmd = cmd.find_subcommand("find").unwrap();
+        let output = render_subcommand(find_cmd, "find");
+
+        assert!(output.contains("# find"));
+        assert!(output.contains("## Usage"));
+        assert!(output.contains("## Arguments"));
+        assert!(output.contains("<symbol>"));
+        assert!(output.contains("## Options"));
+        assert!(output.contains("--file"));
+        assert!(output.contains("## Examples"));
+    }
+
+    #[test]
+    fn test_write_examples_known_commands() {
+        let cmd = test_cmd();
+        for name in &["find", "inspect", "refs", "list", "members", "daemon"] {
+            let mut out = String::new();
+            write_examples(&mut out, name, &cmd);
+            assert!(!out.is_empty(), "examples for '{name}' should not be empty");
+            assert!(out.contains("tyf"), "examples for '{name}' should contain 'tyf'");
+        }
+    }
+
+    #[test]
+    fn test_write_examples_unknown_command() {
+        let cmd = Command::new("custom").arg(Arg::new("args"));
+        let mut out = String::new();
+        write_examples(&mut out, "custom", &cmd);
+        assert!(out.contains("tyf custom"));
+    }
+
+    #[test]
+    fn test_generate_docs_creates_files() {
+        let cmd = test_cmd();
+        let dir = tempfile::tempdir().unwrap();
+
+        generate_docs(&cmd, dir.path()).unwrap();
+
+        assert!(dir.path().join("overview.md").exists());
+        assert!(dir.path().join("find.md").exists());
+        assert!(dir.path().join("inspect.md").exists());
+    }
+
+    #[test]
+    fn test_help_text_extracts_string() {
+        let styled = clap::builder::StyledStr::from("hello world");
+        let text = help_text(&styled);
+        assert_eq!(text, "hello world");
+    }
+}

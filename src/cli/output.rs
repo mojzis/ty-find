@@ -6,8 +6,55 @@ use crate::lsp::protocol::{
     DocumentSymbol, Hover, HoverContents, Location, MarkedStringOrString, SymbolInformation,
     SymbolKind,
 };
+use std::collections::HashMap;
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
+
+/// Pre-read file contents for non-blocking source line lookups during formatting.
+///
+/// Built asynchronously (via `tokio::fs`) in command handlers, then passed into
+/// synchronous formatters so they never block the async runtime on file I/O.
+pub struct SourceCache {
+    files: HashMap<String, String>,
+}
+
+impl SourceCache {
+    /// Create an empty cache (for tests that don't need source).
+    #[cfg(test)]
+    pub fn new() -> Self {
+        Self { files: HashMap::new() }
+    }
+
+    /// Asynchronously read all files referenced by the given `file://` URIs.
+    ///
+    /// Deduplicates paths and silently skips files that cannot be read.
+    pub async fn from_uris<'a>(uris: impl IntoIterator<Item = &'a str>) -> Self {
+        let mut paths: Vec<String> = uris
+            .into_iter()
+            .filter_map(|uri| uri.strip_prefix("file://").map(String::from))
+            .collect();
+        paths.sort();
+        paths.dedup();
+
+        let mut files = HashMap::with_capacity(paths.len());
+        for path in paths {
+            if let Ok(content) = tokio::fs::read_to_string(&path).await {
+                files.insert(path, content);
+            }
+        }
+        Self { files }
+    }
+
+    /// Get the full content of a cached file by absolute path.
+    fn get_content(&self, file_path: &str) -> Option<&str> {
+        self.files.get(file_path).map(String::as_str)
+    }
+
+    #[cfg(test)]
+    fn from_entries(entries: impl IntoIterator<Item = (String, String)>) -> Self {
+        Self { files: entries.into_iter().collect() }
+    }
+}
 
 /// A reference location enriched with enclosing symbol context.
 #[derive(Clone, Debug)]
@@ -52,9 +99,9 @@ pub struct OutputFormatter {
     s: Styler,
 }
 
-/// Read a single line of source code from a file (1-based line number).
-fn read_source_line(file_path: &str, line: u32) -> Option<String> {
-    let content = std::fs::read_to_string(file_path).ok()?;
+/// Read a single line of source code from the cache (1-based line number).
+fn read_source_line(cache: &SourceCache, file_path: &str, line: u32) -> Option<String> {
+    let content = cache.get_content(file_path)?;
     content.lines().nth((line - 1) as usize).map(|s| s.trim().to_string())
 }
 
@@ -74,8 +121,12 @@ struct DefinitionContext {
 ///   decorators above it.
 /// - Start line is at the `class`/`def` keyword (`execute_definition`): scans
 ///   backwards to find decorators above.
-fn read_definition_context(file_path: &str, start_line_0: u32) -> Option<DefinitionContext> {
-    let content = std::fs::read_to_string(file_path).ok()?;
+fn read_definition_context(
+    cache: &SourceCache,
+    file_path: &str,
+    start_line_0: u32,
+) -> Option<DefinitionContext> {
+    let content = cache.get_content(file_path)?;
     let lines: Vec<&str> = content.lines().collect();
     let start = start_line_0 as usize;
 
@@ -114,13 +165,13 @@ fn read_definition_context(file_path: &str, start_line_0: u32) -> Option<Definit
 }
 
 #[cfg(test)]
-fn read_decorators(file_path: &str, start_line_0: u32) -> Option<String> {
-    read_definition_context(file_path, start_line_0).and_then(|ctx| ctx.decorators)
+fn read_decorators(cache: &SourceCache, file_path: &str, start_line_0: u32) -> Option<String> {
+    read_definition_context(cache, file_path, start_line_0).and_then(|ctx| ctx.decorators)
 }
 
 #[cfg(test)]
-fn read_definition_line(file_path: &str, start_line_0: u32) -> Option<String> {
-    read_definition_context(file_path, start_line_0).map(|ctx| ctx.definition_line)
+fn read_definition_line(cache: &SourceCache, file_path: &str, start_line_0: u32) -> Option<String> {
+    read_definition_context(cache, file_path, start_line_0).map(|ctx| ctx.definition_line)
 }
 
 /// Test references that were separated from the main results.
@@ -238,16 +289,26 @@ impl OutputFormatter {
         self.s
     }
 
-    pub fn format_definitions(&self, locations: &[Location], query_info: &str) -> String {
+    pub fn format_definitions(
+        &self,
+        locations: &[Location],
+        query_info: &str,
+        cache: &SourceCache,
+    ) -> String {
         match self.format {
-            OutputFormat::Human => self.format_human(locations, query_info),
+            OutputFormat::Human => self.format_human(locations, query_info, cache),
             OutputFormat::Json => Self::format_json(locations),
             OutputFormat::Csv => self.format_csv(locations),
             OutputFormat::Paths => self.format_paths(locations),
         }
     }
 
-    fn format_human(&self, locations: &[Location], query_info: &str) -> String {
+    fn format_human(
+        &self,
+        locations: &[Location],
+        query_info: &str,
+        cache: &SourceCache,
+    ) -> String {
         if locations.is_empty() {
             return self.s.error(&format!("No results found for: {query_info}"));
         }
@@ -262,7 +323,7 @@ impl OutputFormatter {
             let _ =
                 writeln!(output, "{}. {}", i + 1, self.s.file_location(&file_path, line, column));
 
-            if let Some(src) = read_source_line(&file_path, line) {
+            if let Some(src) = read_source_line(cache, &file_path, line) {
                 let _ = writeln!(output, "   {src}");
             }
             output.push('\n');
@@ -306,14 +367,18 @@ impl OutputFormatter {
     }
 
     /// Format results for one or more symbol find queries, grouped by symbol.
-    pub fn format_find_results(&self, results: &[(String, Vec<Location>)]) -> String {
+    pub fn format_find_results(
+        &self,
+        results: &[(String, Vec<Location>)],
+        cache: &SourceCache,
+    ) -> String {
         if results.len() == 1 {
             let (symbol, locations) = &results[0];
             if locations.is_empty() {
                 return self.s.error(&format!("No results found for: '{symbol}'"));
             }
             let query_info = format!("'{symbol}'");
-            return self.format_definitions(locations, &query_info);
+            return self.format_definitions(locations, &query_info, cache);
         }
 
         match self.format {
@@ -330,7 +395,11 @@ impl OutputFormatter {
                     }
                     let _ = writeln!(output, "=== {} ===", self.s.symbol(symbol));
                     {
-                        output.push_str(&self.format_human(locations, &format!("'{symbol}'")));
+                        output.push_str(&self.format_human(
+                            locations,
+                            &format!("'{symbol}'"),
+                            cache,
+                        ));
                     }
                     output.push('\n');
                 }
@@ -378,9 +447,10 @@ impl OutputFormatter {
     pub fn format_enriched_references_results(
         &self,
         results: &[EnrichedReferencesResult],
+        cache: &SourceCache,
     ) -> String {
         if results.len() == 1 {
-            return self.format_enriched_references_single(&results[0]);
+            return self.format_enriched_references_single(&results[0], cache);
         }
 
         match self.format {
@@ -388,7 +458,7 @@ impl OutputFormatter {
                 let mut output = String::new();
                 for result in results {
                     let _ = writeln!(output, "=== {} ===", self.s.symbol(&result.label));
-                    output.push_str(&self.format_enriched_references_single(result));
+                    output.push_str(&self.format_enriched_references_single(result, cache));
                     output.push('\n');
                 }
                 output.trim_end().to_string()
@@ -444,7 +514,11 @@ impl OutputFormatter {
         }
     }
 
-    fn format_enriched_references_human(&self, result: &EnrichedReferencesResult) -> String {
+    fn format_enriched_references_human(
+        &self,
+        result: &EnrichedReferencesResult,
+        cache: &SourceCache,
+    ) -> String {
         if result.total_count == 0
             && result.test_references.as_ref().is_none_or(|t| t.total_count == 0)
         {
@@ -454,7 +528,7 @@ impl OutputFormatter {
         let mut output =
             format!("Found {} reference(s) for: '{}'\n\n", result.total_count, result.label);
 
-        self.write_enriched_ref_list(&mut output, &result.displayed);
+        self.write_enriched_ref_list(&mut output, &result.displayed, cache);
 
         if result.remaining_count > 0 {
             let _ = writeln!(
@@ -464,13 +538,18 @@ impl OutputFormatter {
             );
         }
 
-        self.write_test_references_section(&mut output, result.test_references.as_ref());
+        self.write_test_references_section(&mut output, result.test_references.as_ref(), cache);
 
         output
     }
 
     /// Append numbered enriched reference lines (with source) to `output`.
-    fn write_enriched_ref_list(&self, output: &mut String, refs: &[EnrichedReference]) {
+    fn write_enriched_ref_list(
+        &self,
+        output: &mut String,
+        refs: &[EnrichedReference],
+        cache: &SourceCache,
+    ) {
         for (i, enriched) in refs.iter().enumerate() {
             let file_path = self.uri_to_path(&enriched.location.uri);
             let line = enriched.location.range.start.line + 1;
@@ -484,7 +563,7 @@ impl OutputFormatter {
                 self.s.dim(&enriched.context),
             );
 
-            if let Some(src) = read_source_line(&file_path, line) {
+            if let Some(src) = read_source_line(cache, &file_path, line) {
                 let _ = writeln!(output, "   {src}");
             }
             output.push('\n');
@@ -496,12 +575,13 @@ impl OutputFormatter {
         &self,
         output: &mut String,
         test_references: Option<&TestReferencesSection>,
+        cache: &SourceCache,
     ) {
         if let Some(test_refs) = test_references {
             if !test_refs.displayed.is_empty() {
                 let heading = format!("Test references ({}):", test_refs.total_count);
                 let _ = writeln!(output, "\n{}\n", self.s.heading(&heading));
-                self.write_enriched_ref_list(output, &test_refs.displayed);
+                self.write_enriched_ref_list(output, &test_refs.displayed, cache);
                 if test_refs.remaining_count > 0 {
                     let _ =
                         writeln!(output, "... and {} more test ref(s)", test_refs.remaining_count);
@@ -514,9 +594,13 @@ impl OutputFormatter {
         }
     }
 
-    fn format_enriched_references_single(&self, result: &EnrichedReferencesResult) -> String {
+    fn format_enriched_references_single(
+        &self,
+        result: &EnrichedReferencesResult,
+        cache: &SourceCache,
+    ) -> String {
         match self.format {
-            OutputFormat::Human => self.format_enriched_references_human(result),
+            OutputFormat::Human => self.format_enriched_references_human(result, cache),
             OutputFormat::Json => {
                 let val = Self::enriched_refs_to_json(result);
                 serde_json::to_string_pretty(&val).unwrap_or_else(|_| "{}".to_string())
@@ -747,10 +831,12 @@ impl OutputFormatter {
         location: Option<&Location>,
         hover: Option<&Hover>,
         empty_label: &str,
+        cache: &SourceCache,
     ) {
         if let Some(location) = location {
             let file_path = self.uri_to_path(&location.uri);
-            if let Some(ctx) = read_definition_context(&file_path, location.range.start.line) {
+            if let Some(ctx) = read_definition_context(cache, &file_path, location.range.start.line)
+            {
                 // Show decorators
                 if let Some(decs) = &ctx.decorators {
                     output.push_str(decs);
@@ -777,14 +863,24 @@ impl OutputFormatter {
 
     /// Format a single symbol inspect, using the header level appropriate for context.
     /// `h_level` controls markdown heading depth (1 = `#`, 2 = `##`).
-    fn format_inspect_human(&self, entry: &InspectEntry<'_>, h_level: u8) -> String {
+    fn format_inspect_human(
+        &self,
+        entry: &InspectEntry<'_>,
+        h_level: u8,
+        cache: &SourceCache,
+    ) -> String {
         match self.detail {
-            OutputDetail::Condensed => self.format_inspect_condensed(entry, h_level),
-            OutputDetail::Full => self.format_inspect_full(entry, h_level),
+            OutputDetail::Condensed => self.format_inspect_condensed(entry, h_level, cache),
+            OutputDetail::Full => self.format_inspect_full(entry, h_level, cache),
         }
     }
 
-    fn format_inspect_condensed(&self, entry: &InspectEntry<'_>, h_level: u8) -> String {
+    fn format_inspect_condensed(
+        &self,
+        entry: &InspectEntry<'_>,
+        h_level: u8,
+        cache: &SourceCache,
+    ) -> String {
         let h = "#".repeat(h_level as usize);
         let mut output = String::new();
 
@@ -810,7 +906,13 @@ impl OutputFormatter {
         // Type section — always shown, compact placeholder when empty
         let type_heading = format!("\n{h} Type");
         let _ = writeln!(output, "{}", self.s.heading(&type_heading));
-        self.write_type_section(&mut output, entry.definitions.first(), entry.hover, "(none)\n");
+        self.write_type_section(
+            &mut output,
+            entry.definitions.first(),
+            entry.hover,
+            "(none)\n",
+            cache,
+        );
 
         // Doc section — only shown when a docstring is present
         if let Some(hover) = entry.hover {
@@ -891,7 +993,12 @@ impl OutputFormatter {
     }
 
     #[allow(clippy::too_many_lines)]
-    fn format_inspect_full(&self, entry: &InspectEntry<'_>, h_level: u8) -> String {
+    fn format_inspect_full(
+        &self,
+        entry: &InspectEntry<'_>,
+        h_level: u8,
+        cache: &SourceCache,
+    ) -> String {
         let h = "#".repeat(h_level as usize);
         let h2 = "#".repeat(h_level as usize + 1);
 
@@ -915,7 +1022,7 @@ impl OutputFormatter {
                     self.s.file_location(&file_path, line, column)
                 );
 
-                if let Some(src) = read_source_line(&file_path, line) {
+                if let Some(src) = read_source_line(cache, &file_path, line) {
                     let _ = writeln!(output, "   {src}");
                 }
             }
@@ -930,6 +1037,7 @@ impl OutputFormatter {
             entry.definitions.first(),
             entry.hover,
             "No hover information available.\n",
+            cache,
         );
         output.push('\n');
 
@@ -957,7 +1065,7 @@ impl OutputFormatter {
                         self.s.dim(&enriched.context),
                     );
 
-                    if let Some(src) = read_source_line(&file_path, line) {
+                    if let Some(src) = read_source_line(cache, &file_path, line) {
                         let _ = writeln!(output, "   {src}");
                     }
                 }
@@ -987,7 +1095,7 @@ impl OutputFormatter {
                         i + 1,
                         enriched.context
                     );
-                    if let Some(src) = read_source_line(&file_path, line) {
+                    if let Some(src) = read_source_line(cache, &file_path, line) {
                         let _ = writeln!(output, "   {src}");
                     }
                 }
@@ -1005,12 +1113,12 @@ impl OutputFormatter {
         output
     }
 
-    pub fn format_inspect(&self, entry: &InspectEntry<'_>) -> String {
+    pub fn format_inspect(&self, entry: &InspectEntry<'_>, cache: &SourceCache) -> String {
         if entry.is_empty() && self.format == OutputFormat::Human {
             return self.s.error(&format!("No results found for: '{}'", entry.symbol));
         }
         match self.format {
-            OutputFormat::Human => self.format_inspect_human(entry, 1),
+            OutputFormat::Human => self.format_inspect_human(entry, 1, cache),
             OutputFormat::Json => Self::format_inspect_json_single(entry),
             OutputFormat::Csv => self.format_inspect_csv_single(entry, false),
             OutputFormat::Paths => self.format_inspect_paths_single(entry),
@@ -1100,9 +1208,13 @@ impl OutputFormatter {
     }
 
     /// Format results for one or more symbol inspect queries, grouped by symbol.
-    pub fn format_inspect_results(&self, results: &[InspectEntry<'_>]) -> String {
+    pub fn format_inspect_results(
+        &self,
+        results: &[InspectEntry<'_>],
+        cache: &SourceCache,
+    ) -> String {
         if results.len() == 1 {
-            return self.format_inspect(&results[0]);
+            return self.format_inspect(&results[0], cache);
         }
 
         match self.format {
@@ -1119,7 +1231,7 @@ impl OutputFormatter {
                         // Multi-symbol: symbol name gets top-level heading, sections get sub-headings
                         let symbol_heading = format!("# {}", entry.symbol);
                         let _ = writeln!(output, "{}", self.s.symbol(&symbol_heading));
-                        output.push_str(&self.format_inspect_human(entry, 2));
+                        output.push_str(&self.format_inspect_human(entry, 2, cache));
                         output.push('\n');
                     }
                 }
@@ -1392,7 +1504,7 @@ mod tests {
     #[test]
     fn test_format_definitions_empty() {
         let formatter = OutputFormatter::new(OutputFormat::Human);
-        let result = formatter.format_definitions(&[], "test:1:1");
+        let result = formatter.format_definitions(&[], "test:1:1", &SourceCache::new());
         assert_eq!(result, "No results found for: test:1:1");
     }
 
@@ -1400,7 +1512,7 @@ mod tests {
     fn test_format_definitions_single() {
         let formatter = OutputFormatter::new(OutputFormat::Human);
         let locations = [make_location("file:///nonexistent.py", 5, 10)];
-        let result = formatter.format_definitions(&locations, "test:6:11");
+        let result = formatter.format_definitions(&locations, "test:6:11", &SourceCache::new());
 
         assert!(result.contains("Found 1 definition(s)"));
         assert!(result.contains("nonexistent.py:6:11"));
@@ -1410,7 +1522,7 @@ mod tests {
     fn test_format_definitions_json() {
         let formatter = OutputFormatter::new(OutputFormat::Json);
         let locations = [make_location("file:///test.py", 0, 0)];
-        let result = formatter.format_definitions(&locations, "test");
+        let result = formatter.format_definitions(&locations, "test", &SourceCache::new());
 
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert!(parsed.is_array());
@@ -1421,7 +1533,7 @@ mod tests {
     fn test_format_definitions_csv() {
         let formatter = OutputFormatter::new(OutputFormat::Csv);
         let locations = [make_location("file:///test.py", 4, 2)];
-        let result = formatter.format_definitions(&locations, "test");
+        let result = formatter.format_definitions(&locations, "test", &SourceCache::new());
 
         assert!(result.starts_with("file,line,column\n"));
         assert!(result.contains("5,3")); // 0-based -> 1-based
@@ -1432,7 +1544,7 @@ mod tests {
         let formatter = OutputFormatter::new(OutputFormat::Human);
         let locations = vec![make_location("file:///test.py", 0, 0)];
         let results = vec![("foo".to_string(), locations)];
-        let result = formatter.format_find_results(&results);
+        let result = formatter.format_find_results(&results, &SourceCache::new());
 
         assert!(result.contains("Found 1 definition(s) for: 'foo'"));
     }
@@ -1441,7 +1553,7 @@ mod tests {
     fn test_format_find_results_symbol_not_found() {
         let formatter = OutputFormatter::new(OutputFormat::Human);
         let results = vec![("missing".to_string(), vec![])];
-        let result = formatter.format_find_results(&results);
+        let result = formatter.format_find_results(&results, &SourceCache::new());
 
         assert_eq!(result, "No results found for: 'missing'");
     }
@@ -1453,7 +1565,7 @@ mod tests {
             ("foo".to_string(), vec![make_location("file:///test.py", 0, 0)]),
             ("bar".to_string(), vec![]),
         ];
-        let result = formatter.format_find_results(&results);
+        let result = formatter.format_find_results(&results, &SourceCache::new());
 
         assert!(result.contains("=== foo ==="));
         assert!(!result.contains("=== bar ==="), "empty symbol should not get a heading");
@@ -1470,7 +1582,7 @@ mod tests {
             remaining_count: 0,
             test_references: None,
         };
-        let output = formatter.format_enriched_references_results(&[result]);
+        let output = formatter.format_enriched_references_results(&[result], &SourceCache::new());
         assert_eq!(output, "No results found for: 'test:1:1'");
     }
 
@@ -1531,7 +1643,7 @@ mod tests {
     fn test_format_inspect_condensed_empty() {
         let formatter = OutputFormatter::new(OutputFormat::Human);
         let entry = make_entry("missing", None, &[], None);
-        let result = formatter.format_inspect(&entry);
+        let result = formatter.format_inspect(&entry, &SourceCache::new());
 
         // When all sections are empty, should show a single "no results" line
         assert_eq!(result, "No results found for: 'missing'");
@@ -1553,7 +1665,7 @@ mod tests {
             show_individual_refs: false,
             test_references: None,
         };
-        let result = formatter.format_inspect(&entry);
+        let result = formatter.format_inspect(&entry, &SourceCache::new());
 
         // Zero refs should show "Refs: none"
         assert!(
@@ -1582,7 +1694,7 @@ mod tests {
             show_individual_refs: false,
             test_references: None,
         };
-        let result = formatter.format_inspect(&entry);
+        let result = formatter.format_inspect(&entry, &SourceCache::new());
 
         // Should show count summary but no individual refs
         assert!(
@@ -1596,7 +1708,7 @@ mod tests {
         let formatter = OutputFormatter::new(OutputFormat::Human);
         let defs = [make_location("file:///test.py", 0, 0)];
         let entry = make_entry("foo", Some(&SymbolKind::Function), &defs, None);
-        let result = formatter.format_inspect(&entry);
+        let result = formatter.format_inspect(&entry, &SourceCache::new());
 
         assert!(result.contains("# Def (func)"));
         assert!(result.contains("test.py:1:1"));
@@ -1610,7 +1722,7 @@ mod tests {
             Styler::no_color(),
         );
         let entry = make_entry("missing", None, &[], None);
-        let result = formatter.format_inspect(&entry);
+        let result = formatter.format_inspect(&entry, &SourceCache::new());
 
         // When all sections are empty, should show a single "no results" line
         assert_eq!(result, "No results found for: 'missing'");
@@ -1621,7 +1733,7 @@ mod tests {
         let formatter = OutputFormatter::new(OutputFormat::Human);
         let defs = [make_location("file:///test.py", 0, 0)];
         let entry = make_entry("foo", None, &defs, None);
-        let result = formatter.format_inspect(&entry);
+        let result = formatter.format_inspect(&entry, &SourceCache::new());
 
         // Should show path:line:col on one line (no numbering)
         assert!(result.contains("test.py:1:1"));
@@ -1635,7 +1747,7 @@ mod tests {
         let formatter = OutputFormatter::new(OutputFormat::Json);
         let defs = [make_location("file:///test.py", 0, 0)];
         let entry = make_entry("foo", Some(&SymbolKind::Function), &defs, None);
-        let result = formatter.format_inspect(&entry);
+        let result = formatter.format_inspect(&entry, &SourceCache::new());
 
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(parsed["symbol"], "foo");
@@ -1645,19 +1757,20 @@ mod tests {
 
     #[test]
     fn test_read_source_line_valid() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("test.py");
-        std::fs::write(&file, "line 1\n  line 2\nline 3\n").unwrap();
+        let path = "/tmp/test_source_line.py";
+        let content = "line 1\n  line 2\nline 3\n";
+        let cache = SourceCache::from_entries([(path.to_string(), content.to_string())]);
 
-        assert_eq!(read_source_line(file.to_str().unwrap(), 1), Some("line 1".to_string()));
-        assert_eq!(read_source_line(file.to_str().unwrap(), 2), Some("line 2".to_string()));
-        assert_eq!(read_source_line(file.to_str().unwrap(), 3), Some("line 3".to_string()));
-        assert_eq!(read_source_line(file.to_str().unwrap(), 4), None);
+        assert_eq!(read_source_line(&cache, path, 1), Some("line 1".to_string()));
+        assert_eq!(read_source_line(&cache, path, 2), Some("line 2".to_string()));
+        assert_eq!(read_source_line(&cache, path, 3), Some("line 3".to_string()));
+        assert_eq!(read_source_line(&cache, path, 4), None);
     }
 
     #[test]
     fn test_read_source_line_nonexistent_file() {
-        assert_eq!(read_source_line("/nonexistent/file.py", 1), None);
+        let cache = SourceCache::new();
+        assert_eq!(read_source_line(&cache, "/nonexistent/file.py", 1), None);
     }
 
     #[test]
@@ -1730,7 +1843,7 @@ mod tests {
             }),
         };
         let entry = make_entry("Animal", Some(&SymbolKind::Class), &defs, Some(&hover));
-        let result = formatter.format_inspect(&entry);
+        let result = formatter.format_inspect(&entry, &SourceCache::new());
 
         // Type section should have the class type without code fences or docstring
         assert!(
@@ -1775,49 +1888,49 @@ mod tests {
 
     #[test]
     fn test_read_decorators_single() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("test.py");
-        std::fs::write(&file, "@dataclass\nclass Config:\n    host: str\n").unwrap();
+        let content = "@dataclass\nclass Config:\n    host: str\n";
+        let path = "/tmp/test_decorators_single.py";
+        let cache = SourceCache::from_entries([(path.to_string(), content.to_string())]);
 
-        let result = read_decorators(file.to_str().unwrap(), 0);
+        let result = read_decorators(&cache, path, 0);
         assert_eq!(result, Some("@dataclass".to_string()));
     }
 
     #[test]
     fn test_read_decorators_multiple() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("test.py");
-        std::fs::write(&file, "@some_decorator\n@another_decorator\ndef my_func():\n    pass\n")
-            .unwrap();
+        let content = "@some_decorator\n@another_decorator\ndef my_func():\n    pass\n";
+        let path = "/tmp/test_decorators_multiple.py";
+        let cache = SourceCache::from_entries([(path.to_string(), content.to_string())]);
 
-        let result = read_decorators(file.to_str().unwrap(), 0);
+        let result = read_decorators(&cache, path, 0);
         assert_eq!(result, Some("@some_decorator\n@another_decorator".to_string()));
     }
 
     #[test]
     fn test_read_decorators_none() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("test.py");
-        std::fs::write(&file, "class Config:\n    host: str\n").unwrap();
+        let content = "class Config:\n    host: str\n";
+        let path = "/tmp/test_decorators_none.py";
+        let cache = SourceCache::from_entries([(path.to_string(), content.to_string())]);
 
-        let result = read_decorators(file.to_str().unwrap(), 0);
+        let result = read_decorators(&cache, path, 0);
         assert_eq!(result, None);
     }
 
     #[test]
     fn test_read_decorators_nonexistent_file() {
-        assert_eq!(read_decorators("/nonexistent/file.py", 0), None);
+        let cache = SourceCache::new();
+        assert_eq!(read_decorators(&cache, "/nonexistent/file.py", 0), None);
     }
 
     #[test]
     fn test_condensed_inspect_shows_decorators() {
         use crate::lsp::protocol::{Hover, HoverContents, MarkupContent, Range};
 
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("test.py");
-        std::fs::write(&file, "@dataclass\nclass Config:\n    host: str\n").unwrap();
+        let content = "@dataclass\nclass Config:\n    host: str\n";
+        let file_path = "/tmp/test_condensed_decorators.py";
+        let file_uri = format!("file://{file_path}");
+        let cache = SourceCache::from_entries([(file_path.to_string(), content.to_string())]);
 
-        let file_uri = format!("file://{}", file.to_str().unwrap());
         let formatter = OutputFormatter::new(OutputFormat::Human);
         // Definition starts at the decorator line (line 0)
         let defs = [make_location(&file_uri, 0, 0)];
@@ -1832,7 +1945,7 @@ mod tests {
             }),
         };
         let entry = make_entry("Config", Some(&SymbolKind::Class), &defs, Some(&hover));
-        let result = formatter.format_inspect(&entry);
+        let result = formatter.format_inspect(&entry, &cache);
 
         // Type section should show decorator + source class definition
         assert!(
@@ -1847,11 +1960,11 @@ mod tests {
     fn test_condensed_inspect_no_decorator_no_crash() {
         use crate::lsp::protocol::{Hover, HoverContents, MarkupContent, Range};
 
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("test.py");
-        std::fs::write(&file, "class Animal:\n    pass\n").unwrap();
+        let content = "class Animal:\n    pass\n";
+        let file_path = "/tmp/test_condensed_no_decorator.py";
+        let file_uri = format!("file://{file_path}");
+        let cache = SourceCache::from_entries([(file_path.to_string(), content.to_string())]);
 
-        let file_uri = format!("file://{}", file.to_str().unwrap());
         let formatter = OutputFormatter::new(OutputFormat::Human);
         let defs = [make_location(&file_uri, 0, 0)];
         let hover = Hover {
@@ -1865,7 +1978,7 @@ mod tests {
             }),
         };
         let entry = make_entry("Animal", Some(&SymbolKind::Class), &defs, Some(&hover));
-        let result = formatter.format_inspect(&entry);
+        let result = formatter.format_inspect(&entry, &cache);
 
         // Should show source class line (no decorator, no inheritance)
         assert!(
@@ -1876,32 +1989,32 @@ mod tests {
 
     #[test]
     fn test_read_definition_line_class() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("test.py");
-        std::fs::write(&file, "class Dog(Animal):\n    pass\n").unwrap();
+        let path = "/tmp/test_def_line_class.py";
+        let content = "class Dog(Animal):\n    pass\n";
+        let cache = SourceCache::from_entries([(path.to_string(), content.to_string())]);
 
-        let result = read_definition_line(file.to_str().unwrap(), 0);
+        let result = read_definition_line(&cache, path, 0);
         assert_eq!(result, Some("class Dog(Animal):".to_string()));
     }
 
     #[test]
     fn test_read_definition_line_with_decorators() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("test.py");
-        std::fs::write(&file, "@dataclass\nclass Config(Base):\n    host: str\n").unwrap();
+        let path = "/tmp/test_def_line_decorators.py";
+        let content = "@dataclass\nclass Config(Base):\n    host: str\n";
+        let cache = SourceCache::from_entries([(path.to_string(), content.to_string())]);
 
         // Starting at decorator line, should skip decorators and return class line
-        let result = read_definition_line(file.to_str().unwrap(), 0);
+        let result = read_definition_line(&cache, path, 0);
         assert_eq!(result, Some("class Config(Base):".to_string()));
     }
 
     #[test]
     fn test_read_definition_line_no_inheritance() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("test.py");
-        std::fs::write(&file, "class Animal:\n    pass\n").unwrap();
+        let path = "/tmp/test_def_line_no_inherit.py";
+        let content = "class Animal:\n    pass\n";
+        let cache = SourceCache::from_entries([(path.to_string(), content.to_string())]);
 
-        let result = read_definition_line(file.to_str().unwrap(), 0);
+        let result = read_definition_line(&cache, path, 0);
         assert_eq!(result, Some("class Animal:".to_string()));
     }
 
@@ -1909,11 +2022,11 @@ mod tests {
     fn test_condensed_inspect_class_shows_source_definition() {
         use crate::lsp::protocol::{Hover, HoverContents, MarkupContent, Range};
 
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("test.py");
-        std::fs::write(&file, "class Dog(Animal):\n    pass\n").unwrap();
+        let content = "class Dog(Animal):\n    pass\n";
+        let file_path = "/tmp/test_class_source_def.py";
+        let file_uri = format!("file://{file_path}");
+        let cache = SourceCache::from_entries([(file_path.to_string(), content.to_string())]);
 
-        let file_uri = format!("file://{}", file.to_str().unwrap());
         let formatter = OutputFormatter::new(OutputFormat::Human);
         let defs = [make_location(&file_uri, 0, 6)];
         let hover = Hover {
@@ -1927,7 +2040,7 @@ mod tests {
             }),
         };
         let entry = make_entry("Dog", Some(&SymbolKind::Class), &defs, Some(&hover));
-        let result = formatter.format_inspect(&entry);
+        let result = formatter.format_inspect(&entry, &cache);
 
         // Type section should show source class line with inheritance, not <class 'Dog'>
         assert!(
@@ -1944,11 +2057,11 @@ mod tests {
     fn test_condensed_inspect_decorated_class_with_inheritance() {
         use crate::lsp::protocol::{Hover, HoverContents, MarkupContent, Range};
 
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("test.py");
-        std::fs::write(&file, "@dataclass\nclass AppConfig(Config):\n    debug: bool\n").unwrap();
+        let content = "@dataclass\nclass AppConfig(Config):\n    debug: bool\n";
+        let file_path = "/tmp/test_decorated_class_inherit.py";
+        let file_uri = format!("file://{file_path}");
+        let cache = SourceCache::from_entries([(file_path.to_string(), content.to_string())]);
 
-        let file_uri = format!("file://{}", file.to_str().unwrap());
         let formatter = OutputFormatter::new(OutputFormat::Human);
         // Definition starts at the decorator line (line 0)
         let defs = [make_location(&file_uri, 0, 0)];
@@ -1963,7 +2076,7 @@ mod tests {
             }),
         };
         let entry = make_entry("AppConfig", Some(&SymbolKind::Class), &defs, Some(&hover));
-        let result = formatter.format_inspect(&entry);
+        let result = formatter.format_inspect(&entry, &cache);
 
         // Should show decorator + source class line with inheritance
         assert!(
@@ -1976,11 +2089,11 @@ mod tests {
     fn test_condensed_inspect_function_keeps_hover_type() {
         use crate::lsp::protocol::{Hover, HoverContents, MarkupContent, Range};
 
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("test.py");
-        std::fs::write(&file, "def hello_world():\n    return 'hi'\n").unwrap();
+        let content = "def hello_world():\n    return 'hi'\n";
+        let file_path = "/tmp/test_func_hover_type.py";
+        let file_uri = format!("file://{file_path}");
+        let cache = SourceCache::from_entries([(file_path.to_string(), content.to_string())]);
 
-        let file_uri = format!("file://{}", file.to_str().unwrap());
         let formatter = OutputFormatter::new(OutputFormat::Human);
         let defs = [make_location(&file_uri, 0, 4)];
         let hover = Hover {
@@ -1994,7 +2107,7 @@ mod tests {
             }),
         };
         let entry = make_entry("hello_world", Some(&SymbolKind::Function), &defs, Some(&hover));
-        let result = formatter.format_inspect(&entry);
+        let result = formatter.format_inspect(&entry, &cache);
 
         // Functions should still show the hover type (has inferred return type)
         assert!(
@@ -2238,7 +2351,7 @@ mod tests {
             show_individual_refs: false,
             test_references: None,
         };
-        let result = formatter.format_inspect(&entry);
+        let result = formatter.format_inspect(&entry, &SourceCache::new());
 
         assert!(
             result.contains("# Refs: 47 across 12 file(s)"),
@@ -2272,7 +2385,7 @@ mod tests {
             show_individual_refs: true,
             test_references: None,
         };
-        let result = formatter.format_inspect(&entry);
+        let result = formatter.format_inspect(&entry, &SourceCache::new());
 
         assert!(result.contains("# Refs: 5 across 2 file(s)"), "should show count, got:\n{result}");
         assert!(result.contains("(RequestHandler.process)"), "should show context, got:\n{result}");
@@ -2303,7 +2416,7 @@ mod tests {
             show_individual_refs: true,
             test_references: None,
         };
-        let result = formatter.format_inspect(&entry);
+        let result = formatter.format_inspect(&entry, &SourceCache::new());
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
 
         assert_eq!(parsed["reference_count"], 1);
@@ -2324,7 +2437,7 @@ mod tests {
             remaining_count: 49,
             test_references: None,
         };
-        let output = formatter.format_enriched_references_results(&[result]);
+        let output = formatter.format_enriched_references_results(&[result], &SourceCache::new());
 
         assert!(
             output.contains("Found 50 reference(s)"),
@@ -2347,7 +2460,7 @@ mod tests {
             remaining_count: 1,
             test_references: None,
         };
-        let output = formatter.format_enriched_references_results(&[result]);
+        let output = formatter.format_enriched_references_results(&[result], &SourceCache::new());
         let parsed: serde_json::Value = serde_json::from_str(&output).unwrap();
 
         assert_eq!(parsed["reference_count"], 2);
@@ -2378,7 +2491,7 @@ mod tests {
             remaining_count: 0,
             test_references: None,
         };
-        let output = formatter.format_enriched_references_results(&[result]);
+        let output = formatter.format_enriched_references_results(&[result], &SourceCache::new());
 
         assert!(
             !output.contains("... and"),
@@ -2406,7 +2519,7 @@ mod tests {
                 remaining_count: 0,
             }),
         };
-        let output = formatter.format_enriched_references_results(&[result]);
+        let output = formatter.format_enriched_references_results(&[result], &SourceCache::new());
         assert!(
             output.contains("Test references: 3 (use --tests/-t to show)"),
             "should show test refs heading with count, got:\n{output}"
@@ -2433,7 +2546,7 @@ mod tests {
                 remaining_count: 0,
             }),
         };
-        let output = formatter.format_enriched_references_results(&[result]);
+        let output = formatter.format_enriched_references_results(&[result], &SourceCache::new());
         assert!(
             output.contains("Test references (1):"),
             "should show test references section, got:\n{output}"
@@ -2454,7 +2567,7 @@ mod tests {
             remaining_count: 0,
             test_references: None,
         };
-        let output = formatter.format_enriched_references_results(&[result]);
+        let output = formatter.format_enriched_references_results(&[result], &SourceCache::new());
         let parsed: serde_json::Value = serde_json::from_str(&output).unwrap();
         assert_eq!(parsed["test_reference_count"], 0);
         assert!(parsed["test_references"].is_array());
@@ -2480,7 +2593,7 @@ mod tests {
                 remaining_count: 1,
             }),
         };
-        let output = formatter.format_enriched_references_results(&[result]);
+        let output = formatter.format_enriched_references_results(&[result], &SourceCache::new());
         let parsed: serde_json::Value = serde_json::from_str(&output).unwrap();
         assert_eq!(parsed["test_reference_count"], 2);
         assert_eq!(parsed["test_references"][0]["context"], "test_my_func");
@@ -2506,7 +2619,7 @@ mod tests {
                 remaining_count: 0,
             }),
         };
-        let output = formatter.format_enriched_references_results(&[result]);
+        let output = formatter.format_enriched_references_results(&[result], &SourceCache::new());
         assert!(output.contains(",test\n"), "should have test column header, got:\n{output}");
         assert!(output.contains(",false\n"), "should have false for non-test, got:\n{output}");
         assert!(output.contains(",true\n"), "should have true for test, got:\n{output}");
@@ -2525,7 +2638,7 @@ mod tests {
             remaining_count: 0,
             test_references: None,
         };
-        let output = formatter.format_enriched_references_results(&[result]);
+        let output = formatter.format_enriched_references_results(&[result], &SourceCache::new());
         assert!(
             !output.contains("test reference"),
             "should not mention test refs when none exist, got:\n{output}"
@@ -2552,7 +2665,7 @@ mod tests {
                 remaining_count: 0,
             }),
         };
-        let result = formatter.format_inspect(&entry);
+        let result = formatter.format_inspect(&entry, &SourceCache::new());
         assert!(
             result.contains("Test Refs: 5 (use --tests/-t to show)"),
             "should show test refs heading with count, got:\n{result}"
@@ -2583,7 +2696,7 @@ mod tests {
                 remaining_count: 0,
             }),
         };
-        let result = formatter.format_inspect(&entry);
+        let result = formatter.format_inspect(&entry, &SourceCache::new());
         assert!(
             result.contains("Test Refs: 4 (use --tests/-t to show)"),
             "full inspect should show test refs heading with count, got:\n{result}"
@@ -2613,7 +2726,7 @@ mod tests {
                 remaining_count: 0,
             }),
         };
-        let result = formatter.format_inspect(&entry);
+        let result = formatter.format_inspect(&entry, &SourceCache::new());
         assert!(result.contains("# Test Refs:"), "should show test refs section, got:\n{result}");
         assert!(result.contains("test_main.py"), "should show test file, got:\n{result}");
     }
@@ -2651,7 +2764,7 @@ mod tests {
             show_individual_refs: false,
             test_references: None,
         };
-        let result = formatter.format_inspect(&entry);
+        let result = formatter.format_inspect(&entry, &SourceCache::new());
 
         assert!(
             !has_ansi(&result),
@@ -2675,7 +2788,7 @@ mod tests {
             show_individual_refs: false,
             test_references: None,
         };
-        let result = formatter.format_inspect(&entry);
+        let result = formatter.format_inspect(&entry, &SourceCache::new());
 
         assert!(
             has_ansi(&result),
@@ -2691,7 +2804,7 @@ mod tests {
             ("foo".to_string(), vec![make_location("file:///test.py", 0, 0)]),
             ("bar".to_string(), vec![]),
         ];
-        let result = formatter.format_find_results(&results);
+        let result = formatter.format_find_results(&results, &SourceCache::new());
 
         assert!(
             !has_ansi(&result),
@@ -2706,7 +2819,7 @@ mod tests {
             ("foo".to_string(), vec![make_location("file:///test.py", 0, 0)]),
             ("bar".to_string(), vec![]),
         ];
-        let result = formatter.format_find_results(&results);
+        let result = formatter.format_find_results(&results, &SourceCache::new());
 
         assert!(
             has_ansi(&result),
@@ -2724,7 +2837,7 @@ mod tests {
         );
         let defs = [make_location("file:///test.py", 0, 0)];
         let entry = make_entry("foo", Some(&SymbolKind::Function), &defs, None);
-        let result = formatter.format_inspect(&entry);
+        let result = formatter.format_inspect(&entry, &SourceCache::new());
 
         assert!(
             !has_ansi(&result),
@@ -2742,7 +2855,7 @@ mod tests {
         );
         let defs = [make_location("file:///test.py", 0, 0)];
         let entry = make_entry("foo", Some(&SymbolKind::Function), &defs, None);
-        let result = formatter.format_inspect(&entry);
+        let result = formatter.format_inspect(&entry, &SourceCache::new());
 
         assert!(
             !has_ansi(&result),
@@ -2887,7 +3000,7 @@ mod tests {
     fn test_format_definitions_paths() {
         let formatter = OutputFormatter::new(OutputFormat::Paths);
         let locations = [make_location("file:///a.py", 1, 0), make_location("file:///b.py", 2, 0)];
-        let result = formatter.format_definitions(&locations, "test");
+        let result = formatter.format_definitions(&locations, "test", &SourceCache::new());
         assert!(result.contains("a.py"));
         assert!(result.contains("b.py"));
     }
@@ -2903,7 +3016,7 @@ mod tests {
             ("foo".to_string(), vec![make_location("file:///a.py", 0, 0)]),
             ("bar".to_string(), vec![make_location("file:///b.py", 1, 0)]),
         ];
-        let output = formatter.format_find_results(&results);
+        let output = formatter.format_find_results(&results, &SourceCache::new());
         let parsed: serde_json::Value = serde_json::from_str(&output).unwrap();
         assert!(parsed.is_array());
         assert_eq!(parsed.as_array().unwrap().len(), 2);
@@ -2918,7 +3031,7 @@ mod tests {
             ("foo".to_string(), vec![make_location("file:///a.py", 0, 0)]),
             ("bar".to_string(), vec![make_location("file:///b.py", 1, 0)]),
         ];
-        let output = formatter.format_find_results(&results);
+        let output = formatter.format_find_results(&results, &SourceCache::new());
         assert!(output.starts_with("symbol,file,line,column\n"));
         assert!(output.contains("foo,"));
         assert!(output.contains("bar,"));
@@ -2934,7 +3047,7 @@ mod tests {
                 vec![make_location("file:///a.py", 1, 0), make_location("file:///b.py", 2, 0)],
             ),
         ];
-        let output = formatter.format_find_results(&results);
+        let output = formatter.format_find_results(&results, &SourceCache::new());
         // Should be sorted and deduped
         let lines: Vec<&str> = output.lines().collect();
         assert!(lines.len() >= 2);
@@ -2966,7 +3079,7 @@ mod tests {
     fn test_format_enriched_references_multiple_human() {
         let formatter = OutputFormatter::new(OutputFormat::Human);
         let results = vec![make_enriched_result("foo", 1), make_enriched_result("bar", 2)];
-        let output = formatter.format_enriched_references_results(&results);
+        let output = formatter.format_enriched_references_results(&results, &SourceCache::new());
         assert!(output.contains("=== foo ==="));
         assert!(output.contains("=== bar ==="));
     }
@@ -2975,7 +3088,7 @@ mod tests {
     fn test_format_enriched_references_multiple_json() {
         let formatter = OutputFormatter::new(OutputFormat::Json);
         let results = vec![make_enriched_result("foo", 1), make_enriched_result("bar", 1)];
-        let output = formatter.format_enriched_references_results(&results);
+        let output = formatter.format_enriched_references_results(&results, &SourceCache::new());
         let parsed: serde_json::Value = serde_json::from_str(&output).unwrap();
         assert!(parsed.is_array());
         assert_eq!(parsed.as_array().unwrap().len(), 2);
@@ -2985,7 +3098,7 @@ mod tests {
     fn test_format_enriched_references_multiple_csv() {
         let formatter = OutputFormatter::new(OutputFormat::Csv);
         let results = vec![make_enriched_result("foo", 1), make_enriched_result("bar", 1)];
-        let output = formatter.format_enriched_references_results(&results);
+        let output = formatter.format_enriched_references_results(&results, &SourceCache::new());
         assert!(output.starts_with("symbol,file,line,column,context,test\n"));
         assert!(output.contains("foo,"));
         assert!(output.contains("bar,"));
@@ -2995,7 +3108,7 @@ mod tests {
     fn test_format_enriched_references_multiple_paths() {
         let formatter = OutputFormatter::new(OutputFormat::Paths);
         let results = vec![make_enriched_result("foo", 1), make_enriched_result("bar", 1)];
-        let output = formatter.format_enriched_references_results(&results);
+        let output = formatter.format_enriched_references_results(&results, &SourceCache::new());
         assert!(output.contains("ref.py"));
     }
 
@@ -3008,7 +3121,7 @@ mod tests {
         let formatter = OutputFormatter::new(OutputFormat::Csv);
         let defs = [make_location("file:///test.py", 0, 0)];
         let entry = make_entry("Animal", Some(&SymbolKind::Class), &defs, None);
-        let result = formatter.format_inspect(&entry);
+        let result = formatter.format_inspect(&entry, &SourceCache::new());
         assert!(result.starts_with("section,file,line,column,context\n"));
         assert!(result.contains("definition,"));
     }
@@ -3018,7 +3131,7 @@ mod tests {
         let formatter = OutputFormatter::new(OutputFormat::Paths);
         let defs = [make_location("file:///a.py", 0, 0), make_location("file:///b.py", 1, 0)];
         let entry = make_entry("Animal", None, &defs, None);
-        let result = formatter.format_inspect(&entry);
+        let result = formatter.format_inspect(&entry, &SourceCache::new());
         assert!(result.contains("a.py"));
         assert!(result.contains("b.py"));
     }
@@ -3030,7 +3143,7 @@ mod tests {
         let defs2 = [make_location("file:///b.py", 1, 0)];
         let entry1 = make_entry("Foo", Some(&SymbolKind::Class), &defs1, None);
         let entry2 = make_entry("Bar", Some(&SymbolKind::Function), &defs2, None);
-        let result = formatter.format_inspect_results(&[entry1, entry2]);
+        let result = formatter.format_inspect_results(&[entry1, entry2], &SourceCache::new());
         assert!(result.contains("# Foo"));
         assert!(result.contains("# Bar"));
     }
@@ -3042,7 +3155,7 @@ mod tests {
         let defs2 = [make_location("file:///b.py", 1, 0)];
         let entry1 = make_entry("Foo", Some(&SymbolKind::Class), &defs1, None);
         let entry2 = make_entry("Bar", Some(&SymbolKind::Function), &defs2, None);
-        let result = formatter.format_inspect_results(&[entry1, entry2]);
+        let result = formatter.format_inspect_results(&[entry1, entry2], &SourceCache::new());
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert!(parsed.is_array());
         assert_eq!(parsed.as_array().unwrap().len(), 2);
@@ -3055,7 +3168,7 @@ mod tests {
         let defs2 = [make_location("file:///b.py", 1, 0)];
         let entry1 = make_entry("Foo", Some(&SymbolKind::Class), &defs1, None);
         let entry2 = make_entry("Bar", Some(&SymbolKind::Function), &defs2, None);
-        let result = formatter.format_inspect_results(&[entry1, entry2]);
+        let result = formatter.format_inspect_results(&[entry1, entry2], &SourceCache::new());
         assert!(result.starts_with("symbol,section,file,line,column,context\n"));
         assert!(result.contains("Foo,"));
         assert!(result.contains("Bar,"));
@@ -3068,7 +3181,7 @@ mod tests {
         let defs2 = [make_location("file:///b.py", 1, 0)];
         let entry1 = make_entry("Foo", None, &defs1, None);
         let entry2 = make_entry("Bar", None, &defs2, None);
-        let result = formatter.format_inspect_results(&[entry1, entry2]);
+        let result = formatter.format_inspect_results(&[entry1, entry2], &SourceCache::new());
         assert!(result.contains("a.py"));
         assert!(result.contains("b.py"));
     }
@@ -3233,11 +3346,11 @@ mod tests {
 
     #[test]
     fn test_read_definition_context_start_at_keyword() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("test.py");
-        std::fs::write(&file, "@dataclass\n@frozen\nclass Config:\n    host: str\n").unwrap();
+        let path = "/tmp/test_def_ctx_keyword.py";
+        let content = "@dataclass\n@frozen\nclass Config:\n    host: str\n";
+        let cache = SourceCache::from_entries([(path.to_string(), content.to_string())]);
 
-        let ctx = read_definition_context(file.to_str().unwrap(), 0).unwrap();
+        let ctx = read_definition_context(&cache, path, 0).unwrap();
         assert_eq!(ctx.definition_line, "class Config:");
         assert!(ctx.decorators.is_some());
         let decorators = ctx.decorators.unwrap();
@@ -3247,11 +3360,11 @@ mod tests {
 
     #[test]
     fn test_read_definition_context_no_def_found() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("test.py");
-        std::fs::write(&file, "@only_decorators\n@more\n").unwrap();
+        let path = "/tmp/test_def_ctx_no_def.py";
+        let content = "@only_decorators\n@more\n";
+        let cache = SourceCache::from_entries([(path.to_string(), content.to_string())]);
 
-        let ctx = read_definition_context(file.to_str().unwrap(), 0);
+        let ctx = read_definition_context(&cache, path, 0);
         assert!(ctx.is_none(), "all decorator lines with nothing after should return None");
     }
 }

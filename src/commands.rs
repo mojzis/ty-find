@@ -1488,4 +1488,153 @@ mod tests {
             .unwrap();
         assert_eq!(find_name_column(file.to_str().unwrap(), 0, "my_func").await, Some((2, 4)));
     }
+
+    #[test]
+    fn test_dedup_locations_removes_same_uri_and_line() {
+        use crate::lsp::protocol::{Position, Range};
+
+        let mut locations = vec![
+            Location {
+                uri: "file:///a.py".to_string(),
+                range: Range {
+                    start: Position { line: 5, character: 0 },
+                    end: Position { line: 5, character: 10 },
+                },
+            },
+            Location {
+                uri: "file:///a.py".to_string(),
+                range: Range {
+                    start: Position { line: 5, character: 3 },
+                    end: Position { line: 5, character: 8 },
+                },
+            },
+        ];
+        dedup_locations(&mut locations);
+        assert_eq!(locations.len(), 1);
+    }
+
+    #[test]
+    fn test_dedup_locations_keeps_different_lines() {
+        use crate::lsp::protocol::{Position, Range};
+
+        let mut locations = vec![
+            Location {
+                uri: "file:///a.py".to_string(),
+                range: Range {
+                    start: Position { line: 1, character: 0 },
+                    end: Position { line: 1, character: 5 },
+                },
+            },
+            Location {
+                uri: "file:///a.py".to_string(),
+                range: Range {
+                    start: Position { line: 2, character: 0 },
+                    end: Position { line: 2, character: 5 },
+                },
+            },
+        ];
+        dedup_locations(&mut locations);
+        assert_eq!(locations.len(), 2);
+    }
+
+    #[test]
+    fn test_dedup_locations_keeps_different_uris() {
+        use crate::lsp::protocol::{Position, Range};
+
+        let mut locations = vec![
+            Location {
+                uri: "file:///a.py".to_string(),
+                range: Range {
+                    start: Position { line: 5, character: 0 },
+                    end: Position { line: 5, character: 10 },
+                },
+            },
+            Location {
+                uri: "file:///b.py".to_string(),
+                range: Range {
+                    start: Position { line: 5, character: 0 },
+                    end: Position { line: 5, character: 10 },
+                },
+            },
+        ];
+        dedup_locations(&mut locations);
+        assert_eq!(locations.len(), 2);
+    }
+
+    #[test]
+    fn test_dedup_locations_empty() {
+        let mut locations: Vec<Location> = vec![];
+        dedup_locations(&mut locations);
+        assert!(locations.is_empty());
+    }
+
+    #[test]
+    fn test_dedup_locations_preserves_first_occurrence() {
+        use crate::lsp::protocol::{Position, Range};
+
+        let mut locations = vec![
+            Location {
+                uri: "file:///a.py".to_string(),
+                range: Range {
+                    start: Position { line: 5, character: 0 },
+                    end: Position { line: 5, character: 10 },
+                },
+            },
+            Location {
+                uri: "file:///a.py".to_string(),
+                range: Range {
+                    start: Position { line: 5, character: 99 },
+                    end: Position { line: 5, character: 100 },
+                },
+            },
+        ];
+        dedup_locations(&mut locations);
+        assert_eq!(locations.len(), 1);
+        assert_eq!(locations[0].range.start.character, 0, "first occurrence should be preserved");
+    }
+
+    #[test]
+    fn test_count_unique_files_distinct() {
+        use crate::lsp::protocol::{Position, Range};
+
+        let r = Range {
+            start: Position { line: 0, character: 0 },
+            end: Position { line: 0, character: 5 },
+        };
+        let locations = vec![
+            Location { uri: "file:///a.py".to_string(), range: r.clone() },
+            Location { uri: "file:///b.py".to_string(), range: r.clone() },
+            Location { uri: "file:///a.py".to_string(), range: r },
+        ];
+        assert_eq!(count_unique_files(&locations), 2);
+    }
+
+    #[test]
+    fn test_count_unique_files_all_same() {
+        use crate::lsp::protocol::{Position, Range};
+
+        let r = Range {
+            start: Position { line: 0, character: 0 },
+            end: Position { line: 0, character: 5 },
+        };
+        let locations = vec![
+            Location { uri: "file:///a.py".to_string(), range: r.clone() },
+            Location { uri: "file:///a.py".to_string(), range: r.clone() },
+            Location { uri: "file:///a.py".to_string(), range: r },
+        ];
+        assert_eq!(count_unique_files(&locations), 1);
+    }
+
+    #[test]
+    fn test_count_unique_files_empty() {
+        let locations: Vec<Location> = vec![];
+        assert_eq!(count_unique_files(&locations), 0);
+    }
+
+    #[test]
+    fn test_collect_queries_args_only() {
+        let args = vec!["foo".to_string(), "bar".to_string()];
+        let result = collect_queries(&args, false).unwrap();
+        assert_eq!(result, vec!["foo", "bar"]);
+    }
 }

@@ -412,3 +412,88 @@ impl TyLspClient {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lsp::protocol::LSPResponse;
+    use serde_json::{json, Value};
+
+    #[test]
+    fn test_parse_response_array_with_locations() {
+        let response = LSPResponse {
+            jsonrpc: "2.0".to_string(),
+            id: Value::Number(1.into()),
+            result: Some(json!([
+                {
+                    "uri": "file:///test.py",
+                    "range": {
+                        "start": {"line": 0, "character": 0},
+                        "end": {"line": 0, "character": 5}
+                    }
+                }
+            ])),
+            error: None,
+        };
+        let locations: Vec<crate::lsp::protocol::Location> =
+            parse_response_array(response).unwrap();
+        assert_eq!(locations.len(), 1);
+        assert_eq!(locations[0].uri, "file:///test.py");
+    }
+
+    #[test]
+    fn test_parse_response_array_null_result() {
+        let response = LSPResponse {
+            jsonrpc: "2.0".to_string(),
+            id: Value::Number(1.into()),
+            result: None,
+            error: None,
+        };
+        let locations: Vec<crate::lsp::protocol::Location> =
+            parse_response_array(response).unwrap();
+        assert!(locations.is_empty());
+    }
+
+    #[test]
+    fn test_parse_response_array_non_array_result() {
+        let response = LSPResponse {
+            jsonrpc: "2.0".to_string(),
+            id: Value::Number(1.into()),
+            result: Some(json!({"key": "value"})),
+            error: None,
+        };
+        let locations: Vec<crate::lsp::protocol::Location> =
+            parse_response_array(response).unwrap();
+        assert!(locations.is_empty());
+    }
+
+    #[test]
+    fn test_parse_response_array_empty_array() {
+        let response = LSPResponse {
+            jsonrpc: "2.0".to_string(),
+            id: Value::Number(1.into()),
+            result: Some(json!([])),
+            error: None,
+        };
+        let locations: Vec<crate::lsp::protocol::Location> =
+            parse_response_array(response).unwrap();
+        assert!(locations.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_file_uri_valid_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.py");
+        std::fs::write(&file, "x = 1").unwrap();
+
+        let uri = file_uri(file.to_str().unwrap()).await.unwrap();
+        assert!(uri.starts_with("file://"));
+        assert!(uri.contains("test.py"));
+    }
+
+    #[tokio::test]
+    async fn test_file_uri_nonexistent_path() {
+        let result = file_uri("/nonexistent/path/to/file.py").await;
+        assert!(result.is_err());
+    }
+}

@@ -56,20 +56,21 @@ sequenceDiagram
     participant LSP as ty LSP server
 
     CLI->>D: 1. Connect (Unix socket)
-    CLI->>D: 2. JSON-RPC "Definition" request
+    CLI->>D: 2. JSON-RPC "workspace_symbols" request
 
     Note over D: 3. Look up workspace<br/>in client pool (hit → reuse)
 
-    D->>LSP: 4. textDocument/didOpen (if file not yet open)
-    D->>LSP: 5. textDocument/definition
-    LSP-->>D: 6. Location[]
+    D->>LSP: 4. workspace/symbol
+    LSP-->>D: 5. SymbolInformation[]
 
-    D-->>CLI: 7. JSON-RPC response
+    D-->>CLI: 6. JSON-RPC response
 
-    Note over CLI: 8. Format & print results
+    Note over CLI: 7. Format & print results
 ```
 
-Steps 1–8 take **50–100 ms** on a warm daemon. Without the daemon, every call would pay the full LSP startup cost (several seconds).
+> **Note:** The diagram above shows the default project-wide search path. When using `tyf find --file <path>`, the CLI sends a `definition` request instead, and the daemon uses `textDocument/definition` to resolve the symbol at a specific file position.
+
+Steps 1–7 take **50–100 ms** on a warm daemon. Without the daemon, every call would pay the full LSP startup cost (several seconds).
 
 ## The daemon
 
@@ -195,24 +196,24 @@ The CLI and daemon communicate using JSON-RPC 2.0 with LSP-style message framing
 ```
 Content-Length: 128\r\n
 \r\n
-{"jsonrpc":"2.0","id":1,"method":"Definition","params":{...}}
+{"jsonrpc":"2.0","id":1,"method":"definition","params":{...}}
 ```
 
 Available RPC methods:
 
 | Method | Description |
 |--------|-------------|
-| `Ping` | Health check (returns version and uptime) |
-| `Shutdown` | Gracefully stop the daemon |
-| `Definition` | Go to definition of a symbol at a position |
-| `Hover` | Get type information for a symbol at a position |
-| `References` | Find all references to a symbol |
-| `BatchReferences` | Find references for multiple symbols in one call |
-| `WorkspaceSymbols` | Search for symbols by name across the workspace |
-| `DocumentSymbols` | List all symbols in a file |
-| `Inspect` | Combined definition + hover + references |
-| `Members` | Public interface of a class |
-| `Diagnostics` | Type errors in a file |
+| `ping` | Health check (returns version and uptime) |
+| `shutdown` | Gracefully stop the daemon |
+| `definition` | Go to definition of a symbol at a position |
+| `hover` | Get type information for a symbol at a position |
+| `references` | Find all references to a symbol |
+| `batch_references` | Find references for multiple symbols in one call |
+| `workspace_symbols` | Search for symbols by name across the workspace |
+| `document_symbols` | List all symbols in a file |
+| `inspect` | Combined hover + references (definitions resolved client-side via workspace symbols) |
+| `members` | Public interface of a class |
+| `diagnostics` | Type errors in a file |
 
 ### Daemon ↔ ty LSP: LSP protocol over stdin/stdout
 
@@ -310,4 +311,4 @@ sequenceDiagram
     Note over D: return result
 ```
 
-Retries use exponential backoff (200ms, 400ms, 800ms, 1600ms) and apply to all operations that can return empty or null results during warmup, including `hover`, `workspace/symbol`, `definition`, `references`, and `documentSymbol`.
+Retries use exponential backoff (100ms, 200ms, 400ms, 800ms) and apply to all operations that can return empty or null results during warmup, including `hover`, `workspace/symbol`, `definition`, `references`, and `documentSymbol`.

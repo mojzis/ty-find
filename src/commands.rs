@@ -8,7 +8,7 @@ use std::time::Duration;
 use crate::cli::args::DaemonCommands;
 use crate::cli::output::{
     find_enclosing_symbol, EnrichedReference, EnrichedReferencesResult, InspectEntry,
-    OutputFormatter,
+    OutputFormatter, SourceCache,
 };
 #[cfg(unix)]
 use crate::daemon::client::{ensure_daemon_running, spawn_daemon, DaemonClient, CLIENT_VERSION};
@@ -452,7 +452,16 @@ pub async fn handle_references_command(
             show_tests,
         )
         .await?;
-        println!("{}", formatter.format_enriched_references_results(&[enriched]));
+        let cache = SourceCache::from_uris(
+            enriched.displayed.iter().map(|e| e.location.uri.as_str()).chain(
+                enriched
+                    .test_references
+                    .iter()
+                    .flat_map(|t| t.displayed.iter().map(|e| e.location.uri.as_str())),
+            ),
+        )
+        .await;
+        println!("{}", formatter.format_enriched_references_results(&[enriched], &cache));
         return Ok(());
     }
 
@@ -494,7 +503,16 @@ pub async fn handle_references_command(
         log.log_reproduction_commands(workspace_root, &all_queries, &cmd);
     }
 
-    println!("{}", formatter.format_enriched_references_results(&enriched_results));
+    let cache = SourceCache::from_uris(enriched_results.iter().flat_map(|r| {
+        let main = r.displayed.iter().map(|e| e.location.uri.as_str());
+        let test = r
+            .test_references
+            .iter()
+            .flat_map(|t| t.displayed.iter().map(|e| e.location.uri.as_str()));
+        main.chain(test)
+    }))
+    .await;
+    println!("{}", formatter.format_enriched_references_results(&enriched_results, &cache));
 
     Ok(())
 }
@@ -718,7 +736,10 @@ pub async fn handle_find_command(
         }
     }
 
-    println!("{}", formatter.format_find_results(&results));
+    let cache =
+        SourceCache::from_uris(results.iter().flat_map(|(_, locs)| locs).map(|l| l.uri.as_str()))
+            .await;
+    println!("{}", formatter.format_find_results(&results, &cache));
 
     Ok(())
 }
@@ -875,7 +896,17 @@ pub async fn handle_inspect_command(
         });
     }
 
-    println!("{}", formatter.format_inspect_results(&entries));
+    let cache = SourceCache::from_uris(entries.iter().flat_map(|e| {
+        let defs = e.definitions.iter().map(|l| l.uri.as_str());
+        let refs = e.displayed_references.iter().map(|r| r.location.uri.as_str());
+        let test = e
+            .test_references
+            .iter()
+            .flat_map(|t| t.displayed.iter().map(|r| r.location.uri.as_str()));
+        defs.chain(refs).chain(test)
+    }))
+    .await;
+    println!("{}", formatter.format_inspect_results(&entries, &cache));
 
     Ok(())
 }

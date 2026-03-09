@@ -35,6 +35,25 @@ fn run_tyf(args: &[&str]) -> String {
     stdout
 }
 
+/// Verify that tyf overrides `src.include` from `pyproject.toml`.
+///
+/// `test_project/pyproject.toml` contains `[tool.ty.src] include = ["nonexistent_subdir/"]`
+/// which would make ty ignore all Python files in the project root. tyf sends
+/// `initializationOptions.configuration.src.include = ["**"]` to override this,
+/// so workspace-symbol lookups must still find symbols in root-level files.
+#[tokio::test]
+async fn test_src_include_override_ignores_pyproject_restriction() {
+    common::require_ty();
+
+    // Animal lives in models.py at the project root — outside the restrictive
+    // src.include = ["nonexistent_subdir/"] from pyproject.toml.
+    let out = run_tyf(&["find", "Animal"]);
+    assert!(
+        predicate::str::contains("models.py").eval(&out),
+        "tyf should find Animal despite restrictive src.include in pyproject.toml, got:\n{out}"
+    );
+}
+
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn test_project_inspect_and_references() {

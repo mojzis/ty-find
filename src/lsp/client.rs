@@ -44,6 +44,50 @@ fn parse_response_array<T: DeserializeOwned>(response: LSPResponse) -> Result<Ve
     }
 }
 
+/// Build the `InitializeParams` JSON for the ty LSP server.
+///
+/// Includes `initializationOptions.configuration.src.include = ["**"]` to
+/// override any restrictive `[tool.ty.src]` settings in `pyproject.toml`,
+/// ensuring tyf can search the entire workspace.
+fn build_init_params(workspace_root: &str) -> serde_json::Value {
+    serde_json::json!({
+        "processId": std::process::id(),
+        "rootPath": workspace_root,
+        "rootUri": format!("file://{workspace_root}"),
+        "capabilities": {
+            "textDocument": {
+                "definition": {
+                    "dynamicRegistration": false,
+                    "linkSupport": false
+                },
+                "hover": {
+                    "dynamicRegistration": false,
+                    "contentFormat": ["markdown", "plaintext"]
+                },
+                "references": {
+                    "dynamicRegistration": false
+                },
+                "documentSymbol": {
+                    "dynamicRegistration": false,
+                    "hierarchicalDocumentSymbolSupport": true
+                }
+            },
+            "workspace": {
+                "symbol": {
+                    "dynamicRegistration": false
+                }
+            }
+        },
+        "initializationOptions": {
+            "configuration": {
+                "src": {
+                    "include": ["**"]
+                }
+            }
+        }
+    })
+}
+
 impl TyLspClient {
     pub async fn new(workspace_root: &str) -> Result<Self> {
         let mut server =
@@ -64,41 +108,16 @@ impl TyLspClient {
         // otherwise the initialize response is never consumed and we deadlock.
         client.start_response_handler(stdout);
         tracing::debug!("Sending LSP initialize request...");
+        tracing::debug!(
+            "overriding ty src.include to [\"**\"] (ignoring pyproject.toml restrictions)"
+        );
         client.initialize(workspace_root).await.context("Failed to initialize LSP session")?;
         tracing::debug!("LSP client initialized successfully");
         Ok(client)
     }
 
     async fn initialize(&self, workspace_root: &str) -> Result<()> {
-        let init_params = serde_json::json!({
-            "processId": std::process::id(),
-            "rootPath": workspace_root,
-            "rootUri": format!("file://{workspace_root}"),
-            "capabilities": {
-                "textDocument": {
-                    "definition": {
-                        "dynamicRegistration": false,
-                        "linkSupport": false
-                    },
-                    "hover": {
-                        "dynamicRegistration": false,
-                        "contentFormat": ["markdown", "plaintext"]
-                    },
-                    "references": {
-                        "dynamicRegistration": false
-                    },
-                    "documentSymbol": {
-                        "dynamicRegistration": false,
-                        "hierarchicalDocumentSymbolSupport": true
-                    }
-                },
-                "workspace": {
-                    "symbol": {
-                        "dynamicRegistration": false
-                    }
-                }
-            }
-        });
+        let init_params = build_init_params(workspace_root);
 
         let _response = self.send_request("initialize", init_params).await?;
 
@@ -410,5 +429,27 @@ impl TyLspClient {
                 }
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn initialize_params_include_src_override() {
+        let params = build_init_params("/tmp/test");
+        let include = &params["initializationOptions"]["configuration"]["src"]["include"];
+        assert_eq!(include, &serde_json::json!(["**"]));
+    }
+
+    #[test]
+    fn initialize_params_no_other_overrides() {
+        let params = build_init_params("/tmp/test");
+        let config = &params["initializationOptions"]["configuration"];
+        // Only src should be present — no environment, rules, or other overrides
+        let obj = config.as_object().expect("configuration should be an object");
+        assert_eq!(obj.len(), 1, "only src should be overridden");
+        assert!(obj.contains_key("src"));
     }
 }

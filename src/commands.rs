@@ -1300,7 +1300,7 @@ pub async fn handle_daemon_command(command: DaemonCommands) -> Result<()> {
                 println!("  Active workspaces: {}", status.active_workspaces);
                 if !status.workspace_paths.is_empty() {
                     for ws in &status.workspace_paths {
-                        println!("    - {ws}");
+                        println!("    - {ws}  (src.include: [\"**\"] overridden)");
                     }
                 }
             }

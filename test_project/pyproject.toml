@@ -2,3 +2,9 @@
 name = "test-project"
 version = "0.1.0"
 requires-python = ">=3.10"
+
+[tool.ty.src]
+# Restrictive include: only a nonexistent subdirectory.
+# tyf overrides this to ["**"] via initializationOptions so it can
+# search the entire workspace regardless of this setting.
+include = ["nonexistent_subdir/"]

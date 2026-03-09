@@ -899,4 +899,190 @@ mod tests {
         assert_eq!(parsed.members[0].name, "speak");
         assert!(matches!(parsed.members[0].kind, SymbolKind::Method));
     }
+
+    #[test]
+    fn test_batch_references_query_roundtrip() {
+        let query = BatchReferencesQuery {
+            label: "my_func".to_string(),
+            file: PathBuf::from("src/main.py"),
+            line: 10,
+            column: 4,
+        };
+        let json = serde_json::to_string(&query).unwrap();
+        let parsed: BatchReferencesQuery = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.label, "my_func");
+        assert_eq!(parsed.line, 10);
+        assert_eq!(parsed.column, 4);
+    }
+
+    #[test]
+    fn test_batch_references_params_roundtrip() {
+        let params = BatchReferencesParams {
+            workspace: PathBuf::from("/workspace"),
+            queries: vec![
+                BatchReferencesQuery {
+                    label: "foo".to_string(),
+                    file: PathBuf::from("a.py"),
+                    line: 1,
+                    column: 0,
+                },
+                BatchReferencesQuery {
+                    label: "bar".to_string(),
+                    file: PathBuf::from("b.py"),
+                    line: 5,
+                    column: 3,
+                },
+            ],
+            include_declaration: true,
+        };
+        let json = serde_json::to_string(&params).unwrap();
+        let parsed: BatchReferencesParams = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.queries.len(), 2);
+        assert!(parsed.include_declaration);
+    }
+
+    #[test]
+    fn test_batch_references_result_roundtrip() {
+        use crate::lsp::protocol::{Position, Range};
+
+        let result = BatchReferencesResult {
+            entries: vec![BatchReferencesEntry {
+                label: "foo".to_string(),
+                locations: vec![Location {
+                    uri: "file:///test.py".to_string(),
+                    range: Range {
+                        start: Position { line: 0, character: 0 },
+                        end: Position { line: 0, character: 3 },
+                    },
+                }],
+            }],
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        let parsed: BatchReferencesResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.entries.len(), 1);
+        assert_eq!(parsed.entries[0].locations.len(), 1);
+    }
+
+    #[test]
+    fn test_inspect_result_roundtrip() {
+        let result = InspectResult { hover: None, references: vec![] };
+        let json = serde_json::to_string(&result).unwrap();
+        let parsed: InspectResult = serde_json::from_str(&json).unwrap();
+        assert!(parsed.hover.is_none());
+        assert!(parsed.references.is_empty());
+    }
+
+    #[test]
+    fn test_diagnostics_result_roundtrip() {
+        use crate::lsp::protocol::{Position, Range};
+
+        let result = DiagnosticsResult {
+            diagnostics: vec![Diagnostic {
+                range: Range {
+                    start: Position { line: 1, character: 0 },
+                    end: Position { line: 1, character: 10 },
+                },
+                severity: DiagnosticSeverity::Warning,
+                code: Some("E001".to_string()),
+                source: Some("ty".to_string()),
+                message: "unused variable".to_string(),
+                related_information: None,
+            }],
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        let parsed: DiagnosticsResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.diagnostics.len(), 1);
+        assert_eq!(parsed.diagnostics[0].severity, DiagnosticSeverity::Warning);
+    }
+
+    #[test]
+    fn test_daemon_request_debug_flag_serialization() {
+        let mut request = DaemonRequest::with_id(1, Method::Hover, json!({}));
+
+        // debug=false should be omitted (skip_serializing_if)
+        let json_str = serde_json::to_string(&request).unwrap();
+        assert!(!json_str.contains("\"debug\""));
+
+        // debug=true should be included
+        request.debug = true;
+        let json_str = serde_json::to_string(&request).unwrap();
+        assert!(json_str.contains("\"debug\":true"));
+    }
+
+    #[test]
+    fn test_daemon_response_with_debug_trace() {
+        let trace = DebugTrace {
+            method: "textDocument/definition".to_string(),
+            params: json!({"uri": "file:///test.py"}),
+            response: json!({"result": []}),
+        };
+        let response = DaemonResponse::success(1, json!({})).with_debug_trace(Some(trace));
+
+        let json_str = serde_json::to_string(&response).unwrap();
+        assert!(json_str.contains("debug_trace"));
+        assert!(json_str.contains("textDocument/definition"));
+    }
+
+    #[test]
+    fn test_method_as_str_all_variants() {
+        assert_eq!(Method::Hover.as_str(), "hover");
+        assert_eq!(Method::Definition.as_str(), "definition");
+        assert_eq!(Method::WorkspaceSymbols.as_str(), "workspace_symbols");
+        assert_eq!(Method::DocumentSymbols.as_str(), "document_symbols");
+        assert_eq!(Method::References.as_str(), "references");
+        assert_eq!(Method::BatchReferences.as_str(), "batch_references");
+        assert_eq!(Method::Inspect.as_str(), "inspect");
+        assert_eq!(Method::Members.as_str(), "members");
+        assert_eq!(Method::Diagnostics.as_str(), "diagnostics");
+        assert_eq!(Method::Ping.as_str(), "ping");
+        assert_eq!(Method::Shutdown.as_str(), "shutdown");
+    }
+
+    #[test]
+    fn test_all_method_variants_deserialize() {
+        let variants = [
+            "hover",
+            "definition",
+            "workspace_symbols",
+            "document_symbols",
+            "references",
+            "batch_references",
+            "inspect",
+            "members",
+            "diagnostics",
+            "ping",
+            "shutdown",
+        ];
+        for name in &variants {
+            let json_str = format!("\"{name}\"");
+            let method: Method = serde_json::from_str(&json_str)
+                .unwrap_or_else(|e| panic!("Failed to deserialize {name}: {e}"));
+            assert_eq!(method.as_str(), *name);
+        }
+    }
+
+    #[test]
+    fn test_daemon_error_helpers() {
+        let err = DaemonError::lsp_error("connection refused");
+        assert_eq!(err.code, -32002);
+        assert!(err.message.contains("connection refused"));
+
+        let err = DaemonError::timeout("hover");
+        assert_eq!(err.code, -32003);
+        assert!(err.data.is_some());
+
+        let err = DaemonError::symbol_not_found("MyClass");
+        assert_eq!(err.code, -32004);
+        assert!(err.data.is_some());
+
+        let err = DaemonError::invalid_params("missing field");
+        assert_eq!(err.code, -32602);
+
+        let err = DaemonError::internal_error("unexpected");
+        assert_eq!(err.code, -32603);
+
+        let err = DaemonError::with_data(-1, "custom", json!({"key": "val"}));
+        assert_eq!(err.code, -1);
+        assert!(err.data.is_some());
+    }
 }

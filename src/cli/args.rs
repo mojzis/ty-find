@@ -250,7 +250,7 @@ pub enum DaemonCommands {
     Status,
 }
 
-#[derive(Clone, ValueEnum)]
+#[derive(Clone, PartialEq, Eq, ValueEnum)]
 pub enum OutputFormat {
     Human,
     Json,

@@ -219,6 +219,83 @@ assert_output "daemon status shows Working dir" "Working dir:" "$output"
 echo "  workspace switching: done"
 echo ""
 
+# --- Nonexistent symbol (rg early termination) ---
+# Verifies that looking up a symbol that doesn't exist completes quickly
+# (rg circuit-breaker skips the 3-second retry chain) across all commands
+# and all 4 workspaces.
+echo "=== Nonexistent symbol (rg early termination) ==="
+BOGUS="this_symbol_absolutely_does_not_exist_xyz_98765"
+
+assert_fast() {
+    local label="$1" max_ms="$2" cmd="$3"
+    TOTAL=$((TOTAL + 1))
+    local start end elapsed_ms
+    start=$(date +%s%N 2>/dev/null || python3 -c 'import time; print(int(time.time()*1e9))')
+    eval "$cmd" >/dev/null 2>&1 || true
+    end=$(date +%s%N 2>/dev/null || python3 -c 'import time; print(int(time.time()*1e9))')
+    elapsed_ms=$(( (end - start) / 1000000 ))
+    if [ "$elapsed_ms" -le "$max_ms" ]; then
+        PASS=$((PASS + 1))
+    else
+        FAIL=$((FAIL + 1))
+        echo "  FAIL: $label"
+        echo "    expected <= ${max_ms}ms, took ${elapsed_ms}ms"
+    fi
+}
+
+# -- find nonexistent across all 4 workspaces --
+
+output=$(cd "$PANDAS_DIR" && "$TYF" find "$BOGUS" 2>&1) || true
+assert_output "pandas find nonexistent" "No results found" "$output"
+
+output=$(cd "$DJANGO_DIR" && "$TYF" find "$BOGUS" 2>&1) || true
+assert_output "django find nonexistent" "No results found" "$output"
+
+output=$("$TYF" --workspace "$TP1" find "$BOGUS" 2>&1) || true
+assert_output "test_project find nonexistent" "No results found" "$output"
+
+output=$("$TYF" --workspace "$TP2" find "$BOGUS" 2>&1) || true
+assert_output "test_project2 find nonexistent" "No results found" "$output"
+
+# -- inspect nonexistent across all 4 workspaces --
+
+output=$(cd "$PANDAS_DIR" && "$TYF" inspect "$BOGUS" 2>&1) || true
+assert_output "pandas inspect nonexistent" "No results found" "$output"
+
+output=$(cd "$DJANGO_DIR" && "$TYF" inspect "$BOGUS" 2>&1) || true
+assert_output "django inspect nonexistent" "No results found" "$output"
+
+output=$("$TYF" --workspace "$TP1" inspect "$BOGUS" 2>&1) || true
+assert_output "test_project inspect nonexistent" "No results found" "$output"
+
+output=$("$TYF" --workspace "$TP2" inspect "$BOGUS" 2>&1) || true
+assert_output "test_project2 inspect nonexistent" "No results found" "$output"
+
+# -- refs nonexistent across all 4 workspaces --
+
+output=$(cd "$PANDAS_DIR" && "$TYF" refs "$BOGUS" 2>&1) || true
+assert_output "pandas refs nonexistent" "No results found" "$output"
+
+output=$(cd "$DJANGO_DIR" && "$TYF" refs "$BOGUS" 2>&1) || true
+assert_output "django refs nonexistent" "No results found" "$output"
+
+output=$("$TYF" --workspace "$TP1" refs "$BOGUS" 2>&1) || true
+assert_output "test_project refs nonexistent" "No results found" "$output"
+
+output=$("$TYF" --workspace "$TP2" refs "$BOGUS" 2>&1) || true
+assert_output "test_project2 refs nonexistent" "No results found" "$output"
+
+# -- timing: large repos should be fast with rg early termination --
+# Generous 3000ms threshold (without rg it would take ~6+ seconds per call
+# due to the full retry chain)
+assert_fast "pandas find nonexistent (timing)" 3000 \
+    "cd '$PANDAS_DIR' && '$TYF' find '$BOGUS'"
+assert_fast "django find nonexistent (timing)" 3000 \
+    "cd '$DJANGO_DIR' && '$TYF' find '$BOGUS'"
+
+echo "  nonexistent symbol: done"
+echo ""
+
 # --- All commands (pandas) ---
 echo "=== All commands: pandas ==="
 stop_daemon

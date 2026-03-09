@@ -63,4 +63,6 @@ jobs:
           python-version: "3.11"
       - name: Install ty
         run: pip install ty
+      - name: Install ripgrep
+        run: sudo apt-get update && sudo apt-get install -y ripgrep
       - run: cargo test --all-features

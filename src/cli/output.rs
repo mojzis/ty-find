@@ -38,6 +38,13 @@ pub struct InspectEntry<'a> {
     pub test_references: Option<TestReferencesSection>,
 }
 
+impl InspectEntry<'_> {
+    /// Returns true when all sections (definitions, type/hover, references) are empty.
+    pub fn is_empty(&self) -> bool {
+        self.definitions.is_empty() && self.hover.is_none() && self.total_reference_count == 0
+    }
+}
+
 pub struct OutputFormatter {
     format: OutputFormat,
     detail: OutputDetail,
@@ -242,7 +249,7 @@ impl OutputFormatter {
 
     fn format_human(&self, locations: &[Location], query_info: &str) -> String {
         if locations.is_empty() {
-            return format!("No definitions found for: {query_info}");
+            return self.s.error(&format!("No results found for: {query_info}"));
         }
 
         let mut output = format!("Found {} definition(s) for: {query_info}\n\n", locations.len());
@@ -303,7 +310,7 @@ impl OutputFormatter {
         if results.len() == 1 {
             let (symbol, locations) = &results[0];
             if locations.is_empty() {
-                return format!("No definitions found for: '{symbol}'");
+                return self.s.error(&format!("No results found for: '{symbol}'"));
             }
             let query_info = format!("'{symbol}'");
             return self.format_definitions(locations, &query_info);
@@ -313,10 +320,16 @@ impl OutputFormatter {
             OutputFormat::Human => {
                 let mut output = String::new();
                 for (symbol, locations) in results {
-                    let _ = writeln!(output, "=== {} ===", self.s.symbol(symbol));
                     if locations.is_empty() {
-                        output.push_str("No definitions found.\n");
-                    } else {
+                        let _ = writeln!(
+                            output,
+                            "{}",
+                            self.s.error(&format!("No results found for: '{symbol}'"))
+                        );
+                        continue;
+                    }
+                    let _ = writeln!(output, "=== {} ===", self.s.symbol(symbol));
+                    {
                         output.push_str(&self.format_human(locations, &format!("'{symbol}'")));
                     }
                     output.push('\n');
@@ -435,7 +448,7 @@ impl OutputFormatter {
         if result.total_count == 0
             && result.test_references.as_ref().is_none_or(|t| t.total_count == 0)
         {
-            return format!("No references found for: '{}'", result.label);
+            return self.s.error(&format!("No results found for: '{}'", result.label));
         }
 
         let mut output =
@@ -993,6 +1006,9 @@ impl OutputFormatter {
     }
 
     pub fn format_inspect(&self, entry: &InspectEntry<'_>) -> String {
+        if entry.is_empty() && self.format == OutputFormat::Human {
+            return self.s.error(&format!("No results found for: '{}'", entry.symbol));
+        }
         match self.format {
             OutputFormat::Human => self.format_inspect_human(entry, 1),
             OutputFormat::Json => Self::format_inspect_json_single(entry),
@@ -1093,11 +1109,19 @@ impl OutputFormatter {
             OutputFormat::Human => {
                 let mut output = String::new();
                 for entry in results {
-                    // Multi-symbol: symbol name gets top-level heading, sections get sub-headings
-                    let symbol_heading = format!("# {}", entry.symbol);
-                    let _ = writeln!(output, "{}", self.s.symbol(&symbol_heading));
-                    output.push_str(&self.format_inspect_human(entry, 2));
-                    output.push('\n');
+                    if entry.is_empty() {
+                        let _ = writeln!(
+                            output,
+                            "{}",
+                            self.s.error(&format!("No results found for: '{}'", entry.symbol))
+                        );
+                    } else {
+                        // Multi-symbol: symbol name gets top-level heading, sections get sub-headings
+                        let symbol_heading = format!("# {}", entry.symbol);
+                        let _ = writeln!(output, "{}", self.s.symbol(&symbol_heading));
+                        output.push_str(&self.format_inspect_human(entry, 2));
+                        output.push('\n');
+                    }
                 }
                 output.trim_end().to_string()
             }
@@ -1369,7 +1393,7 @@ mod tests {
     fn test_format_definitions_empty() {
         let formatter = OutputFormatter::new(OutputFormat::Human);
         let result = formatter.format_definitions(&[], "test:1:1");
-        assert_eq!(result, "No definitions found for: test:1:1");
+        assert_eq!(result, "No results found for: test:1:1");
     }
 
     #[test]
@@ -1419,7 +1443,7 @@ mod tests {
         let results = vec![("missing".to_string(), vec![])];
         let result = formatter.format_find_results(&results);
 
-        assert_eq!(result, "No definitions found for: 'missing'");
+        assert_eq!(result, "No results found for: 'missing'");
     }
 
     #[test]
@@ -1432,8 +1456,8 @@ mod tests {
         let result = formatter.format_find_results(&results);
 
         assert!(result.contains("=== foo ==="));
-        assert!(result.contains("=== bar ==="));
-        assert!(result.contains("No definitions found."));
+        assert!(!result.contains("=== bar ==="), "empty symbol should not get a heading");
+        assert!(result.contains("No results found for: 'bar'"));
     }
 
     #[test]
@@ -1447,7 +1471,7 @@ mod tests {
             test_references: None,
         };
         let output = formatter.format_enriched_references_results(&[result]);
-        assert_eq!(output, "No references found for: 'test:1:1'");
+        assert_eq!(output, "No results found for: 'test:1:1'");
     }
 
     #[test]
@@ -1509,12 +1533,8 @@ mod tests {
         let entry = make_entry("missing", None, &[], None);
         let result = formatter.format_inspect(&entry);
 
-        // Condensed: no symbol header for single symbol, short section names
-        assert!(result.contains("# Def"));
-        assert!(result.contains("(none)"));
-        // Type and Refs sections always shown, even when empty (with "(none)" placeholder)
-        assert!(result.contains("# Type"));
-        assert!(result.contains("# Refs"));
+        // When all sections are empty, should show a single "no results" line
+        assert_eq!(result, "No results found for: 'missing'");
     }
 
     #[test]
@@ -1592,11 +1612,8 @@ mod tests {
         let entry = make_entry("missing", None, &[], None);
         let result = formatter.format_inspect(&entry);
 
-        assert!(result.contains("# Inspect: missing"));
-        assert!(result.contains("## Definition"));
-        assert!(result.contains("No definitions found."));
-        assert!(result.contains("No hover information available."));
-        assert!(result.contains("No references found."));
+        // When all sections are empty, should show a single "no results" line
+        assert_eq!(result, "No results found for: 'missing'");
     }
 
     #[test]

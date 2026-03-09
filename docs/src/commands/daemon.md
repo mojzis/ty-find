@@ -16,6 +16,9 @@ tyf daemon
 **`stop`**
 : Stop the background LSP server
 
+**`restart`**
+: Stop and restart the background LSP server
+
 **`status`**
 : Show the daemon's running status
 
@@ -24,6 +27,9 @@ tyf daemon
 ```bash
 # Start the background daemon
 tyf daemon start
+
+# Restart the daemon (e.g. after upgrading tyf)
+tyf daemon restart
 
 # Check daemon status
 tyf daemon status

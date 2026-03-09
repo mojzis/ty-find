@@ -246,6 +246,8 @@ pub enum DaemonCommands {
     },
     /// Stop the background LSP server
     Stop,
+    /// Stop and restart the background LSP server
+    Restart,
     /// Show the daemon's running status
     Status,
 }

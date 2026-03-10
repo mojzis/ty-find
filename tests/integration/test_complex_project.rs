@@ -3,7 +3,7 @@
 //! Strategy:
 //! 1. `list` every file and verify expected symbols appear.
 //! 2. `find` each symbol and verify its file is reported.
-//! 3. `inspect` each symbol and verify hover info is present.
+//! 3. `show` each symbol and verify hover info is present.
 //! 4. `members` each class and verify expected members.
 //! 5. `refs` for symbols used across files.
 //!
@@ -95,19 +95,19 @@ fn assert_find_in_file(symbol: &str, file: &str) {
     assert_contains(&out, file, &format!("find {symbol} --file {file}"));
 }
 
-/// Verify `inspect` returns hover info (not "(none)" / "No hover").
-fn assert_inspect(symbol: &str) {
-    let out = run_tyf(&["inspect", symbol]);
-    assert_not_contains(&out, "No hover information", &format!("inspect {symbol}"));
+/// Verify `show` returns hover info (not "(none)" / "No hover").
+fn assert_show(symbol: &str) {
+    let out = run_tyf(&["show", symbol]);
+    assert_not_contains(&out, "No hover information", &format!("show {symbol}"));
     // At minimum the symbol name or its file should appear
-    assert!(out.len() > 20, "inspect {symbol} returned suspiciously short output:\n{out}");
+    assert!(out.len() > 20, "show {symbol} returned suspiciously short output:\n{out}");
 }
 
-/// Verify `inspect --file` returns hover info.
-fn assert_inspect_in_file(symbol: &str, file: &str) {
+/// Verify `show --file` returns hover info.
+fn assert_show_in_file(symbol: &str, file: &str) {
     let fpath = file_path(file);
-    let out = run_tyf(&["inspect", symbol, "--file", &fpath]);
-    assert_not_contains(&out, "No hover information", &format!("inspect {symbol} --file {file}"));
+    let out = run_tyf(&["show", symbol, "--file", &fpath]);
+    assert_not_contains(&out, "No hover information", &format!("show {symbol} --file {file}"));
 }
 
 /// Verify `members` for a class shows expected member names.
@@ -431,95 +431,95 @@ async fn test_complex_project_comprehensive() {
     assert_find_in_file("list_animals", "main.py");
 
     // ================================================================
-    // 4. INSPECT — hover info for every kind of symbol
+    // 4. SHOW — hover info for every kind of symbol
     // ================================================================
 
     // Plain classes
-    assert_inspect("Animal");
-    assert_inspect("Dog");
-    assert_inspect("Cat");
-    assert_inspect("ServiceDog");
+    assert_show("Animal");
+    assert_show("Dog");
+    assert_show("Cat");
+    assert_show("ServiceDog");
 
     // Dataclass
-    assert_inspect_in_file("Config", "models.py");
-    assert_inspect_in_file("AppConfig", "models.py");
+    assert_show_in_file("Config", "models.py");
+    assert_show_in_file("AppConfig", "models.py");
 
     // Decorated function
-    assert_inspect("greet");
+    assert_show("greet");
 
     // Decorator factory
-    assert_inspect("retry");
+    assert_show("retry");
 
     // Singleton class via decorator
-    assert_inspect("DatabaseConnection");
+    assert_show("DatabaseConnection");
 
     // ABC and Protocol
-    assert_inspect("Shape");
-    assert_inspect("Circle");
-    assert_inspect("Rectangle");
+    assert_show("Shape");
+    assert_show("Circle");
+    assert_show("Rectangle");
 
     // Widget hierarchy
-    assert_inspect("Widget");
-    assert_inspect("Button");
-    assert_inspect("TextInput");
+    assert_show("Widget");
+    assert_show("Button");
+    assert_show("TextInput");
 
     // Enums
-    assert_inspect("Color");
-    assert_inspect("Priority");
-    assert_inspect("HttpMethod");
-    assert_inspect("TaskStatus");
+    assert_show("Color");
+    assert_show("Priority");
+    assert_show("HttpMethod");
+    assert_show("TaskStatus");
 
     // Generics
-    assert_inspect("Stack");
-    assert_inspect("TreeNode");
-    assert_inspect("Registry");
-    assert_inspect("Page");
+    assert_show("Stack");
+    assert_show("TreeNode");
+    assert_show("Registry");
+    assert_show("Page");
 
     // Patterns
-    assert_inspect("Outer");
-    assert_inspect("Timer");
-    assert_inspect("Point");
-    assert_inspect("Point3D");
-    assert_inspect("SingletonMeta");
+    assert_show("Outer");
+    assert_show("Timer");
+    assert_show("Point");
+    assert_show("Point3D");
+    assert_show("SingletonMeta");
 
     // Async
-    assert_inspect("AsyncResource");
-    assert_inspect("AsyncPool");
-    assert_inspect("AsyncIterableRange");
+    assert_show("AsyncResource");
+    assert_show("AsyncPool");
+    assert_show("AsyncIterableRange");
 
     // Exceptions
-    assert_inspect("AppError");
-    assert_inspect("ValidationError");
-    assert_inspect("NotFoundError");
-    assert_inspect("DatabaseError");
+    assert_show("AppError");
+    assert_show("ValidationError");
+    assert_show("NotFoundError");
+    assert_show("DatabaseError");
 
     // Typing extras
-    assert_inspect("Coordinate");
-    assert_inspect("RGB");
+    assert_show("Coordinate");
+    assert_show("RGB");
 
     // Functions
-    assert_inspect("create_dog");
-    assert_inspect("create_cat");
-    assert_inspect("calculate_total_area");
-    assert_inspect("format_task");
-    assert_inspect("paginate");
-    assert_inspect("fibonacci");
-    assert_inspect("validate_email");
-    assert_inspect("transpose");
+    assert_show("create_dog");
+    assert_show("create_cat");
+    assert_show("calculate_total_area");
+    assert_show("format_task");
+    assert_show("paginate");
+    assert_show("fibonacci");
+    assert_show("validate_email");
+    assert_show("transpose");
 
     // ================================================================
-    // 5. INSPECT --file (file-scoped inspect)
+    // 5. SHOW --file (file-scoped show)
     // ================================================================
 
-    assert_inspect_in_file("Animal", "models.py");
-    assert_inspect_in_file("greet", "decorators.py");
-    assert_inspect_in_file("Shape", "protocols.py");
-    assert_inspect_in_file("Color", "enums.py");
-    assert_inspect_in_file("Stack", "generics.py");
-    assert_inspect_in_file("Outer", "patterns.py");
-    assert_inspect_in_file("AsyncPool", "async_code.py");
-    assert_inspect_in_file("AppError", "exceptions.py");
-    assert_inspect_in_file("Coordinate", "typing_extras.py");
+    assert_show_in_file("Animal", "models.py");
+    assert_show_in_file("greet", "decorators.py");
+    assert_show_in_file("Shape", "protocols.py");
+    assert_show_in_file("Color", "enums.py");
+    assert_show_in_file("Stack", "generics.py");
+    assert_show_in_file("Outer", "patterns.py");
+    assert_show_in_file("AsyncPool", "async_code.py");
+    assert_show_in_file("AppError", "exceptions.py");
+    assert_show_in_file("Coordinate", "typing_extras.py");
 
     // ================================================================
     // 6. MEMBERS — class public interfaces
@@ -673,10 +673,10 @@ async fn test_complex_project_comprehensive() {
     assert_contains(&out, "protocols.py", "multi find Circle");
     assert_contains(&out, "generics.py", "multi find Stack");
 
-    // inspect multiple symbols in one call
-    let out = run_tyf(&["inspect", "Animal", "Circle"]);
-    assert_contains(&out, "Animal", "multi inspect");
-    assert_contains(&out, "Circle", "multi inspect");
+    // show multiple symbols in one call
+    let out = run_tyf(&["show", "Animal", "Circle"]);
+    assert_contains(&out, "Animal", "multi show");
+    assert_contains(&out, "Circle", "multi show");
 
     // members multiple classes in one call
     let out = run_tyf(&["members", "Animal", "Dog"]);
@@ -696,9 +696,9 @@ async fn test_complex_project_comprehensive() {
     let out = run_tyf(&["--format", "json", "find", "Animal"]);
     assert_contains(&out, "\"uri\"", "json find");
 
-    // JSON inspect
-    let out = run_tyf(&["--format", "json", "inspect", "Animal"]);
-    assert_contains(&out, "\"symbol\"", "json inspect");
+    // JSON show
+    let out = run_tyf(&["--format", "json", "show", "Animal"]);
+    assert_contains(&out, "\"symbol\"", "json show");
 
     // JSON members
     let out =

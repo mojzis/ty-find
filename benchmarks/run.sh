@@ -125,11 +125,11 @@ tyf daemon stop >/dev/null 2>&1 || true
 sleep 1
 
 echo "Measuring cold start..."
-COLD_START="$(measure_single_run "tyf --workspace $PANDAS_DIR inspect DataFrame")"
+COLD_START="$(measure_single_run "tyf --workspace $PANDAS_DIR show DataFrame")"
 echo "  Cold start: ${COLD_START}s"
 
 echo "Measuring warm start..."
-WARM_START="$(measure_single_run "tyf --workspace $PANDAS_DIR inspect DataFrame")"
+WARM_START="$(measure_single_run "tyf --workspace $PANDAS_DIR show DataFrame")"
 echo "  Warm start: ${WARM_START}s"
 echo ""
 
@@ -139,8 +139,8 @@ BENCHMARKS=(
     "find-DataFrame|tyf --workspace $PANDAS_DIR find DataFrame|grep -rn 'class DataFrame' --include='*.py' $PANDAS_DIR"
     "find-Series|tyf --workspace $PANDAS_DIR find Series|grep -rn 'class Series' --include='*.py' $PANDAS_DIR"
     "find-multi|tyf --workspace $PANDAS_DIR find DataFrame Series Index|"
-    "inspect-DataFrame|tyf --workspace $PANDAS_DIR inspect DataFrame|"
-    "inspect-multi|tyf --workspace $PANDAS_DIR inspect DataFrame Series|"
+    "show-DataFrame|tyf --workspace $PANDAS_DIR show DataFrame|"
+    "show-multi|tyf --workspace $PANDAS_DIR show DataFrame Series|"
     "find-fuzzy|tyf --workspace $PANDAS_DIR find DataFrame --fuzzy|grep -rn 'DataFrame' --include='*.py' $PANDAS_DIR"
     "refs-single|tyf --workspace $PANDAS_DIR refs DataFrame|"
     "refs-multi|tyf --workspace $PANDAS_DIR refs DataFrame Series Index|"

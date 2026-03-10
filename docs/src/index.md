@@ -32,11 +32,11 @@ pip install ty-find
 
 ```bash
 # Get a full overview of a symbol: definition, type, and references
-$ tyf inspect MyClass
+$ tyf show MyClass
 
 MyClass
   Definition: src/models.py:15:1
-  Type: type[MyClass]
+  Signature: type[MyClass]
   References:
     src/main.py:3:1
     src/main.py:45:12

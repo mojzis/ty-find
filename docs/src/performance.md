@@ -8,7 +8,7 @@ Benchmarks are run as part of CI. See `tests/bench_*` for the test code.
 
 | Operation | First call (cold daemon) | Subsequent calls (warm) |
 |-----------|-------------------------|------------------------|
-| inspect   | TBD                     | TBD                    |
+| show      | TBD                     | TBD                    |
 | find      | TBD                     | TBD                    |
 | refs      | TBD                     | TBD                    |
 

@@ -186,16 +186,20 @@ async fn dispatch_command(
             )
             .await?;
         }
-        Commands::Inspect { file, symbols, references, references_limit, tests } => {
-            commands::handle_inspect_command(
+        Commands::Show { file, symbols, doc, references, references_limit, tests, all } => {
+            let show_doc = doc || all;
+            let show_refs = references || all;
+            let show_tests = tests || all;
+            commands::handle_show_command(
                 workspace_root,
                 file.as_deref(),
                 &symbols,
                 formatter,
                 timeout,
-                references,
+                show_refs,
                 references_limit,
-                tests,
+                show_tests,
+                show_doc,
                 debug_log.cloned(),
             )
             .await?;

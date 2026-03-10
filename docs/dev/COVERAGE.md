@@ -65,7 +65,7 @@ Generated: 2026-03-09 | Tool: cargo-tarpaulin | Overall: **32.8%** (849/2588 lin
 #### `src/commands.rs` (8%)
 All main command handlers are untested:
 - `handle_find_command()` — core find logic
-- `handle_inspect_command()` — hover + definition + refs
+- `handle_show_command()` — hover + definition + refs
 - `handle_references_command()` — reference search
 - `handle_members_command()` — class member listing
 - `handle_document_symbols_command()` — file symbol listing

@@ -21,7 +21,7 @@ tyf members <SYMBOLS> [OPTIONS]
 ## Arguments
 
 **`<symbols>`** *(required)*
-: Class name(s) to inspect (supports multiple classes)
+: Class name(s) to show (supports multiple classes)
 
 ## Options
 
@@ -73,5 +73,5 @@ Line/col references on the right allow jumping to the source.
 ## See also
 
 - [Commands Overview](overview.md)
-- [inspect](inspect.md) -- for definition, type, and usages of any symbol
+- [show](show.md) -- for definition, type, and usages of any symbol
 - [list](list.md) -- for all symbols in a file

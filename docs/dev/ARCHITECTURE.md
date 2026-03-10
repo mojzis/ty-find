@@ -12,14 +12,14 @@
 - `pyproject.toml` uses maturin backend (`bindings = "bin"`) to package the Rust binary as a Python wheel
 
 **Command Processing**:
-- Main commands: `inspect` (all-in-one), `find` (definitions), `refs` (references), `members` (class interface), `list` (file outline)
+- Main commands: `show` (all-in-one), `find` (definitions), `refs` (references), `members` (class interface), `list` (file outline)
 - `find` supports `--fuzzy` for partial/prefix matching via workspace symbols
-- `find`, `inspect`, `refs`, and `members` accept multiple symbols in one call to reduce tool invocations (results grouped by symbol)
+- `find`, `show`, `refs`, and `members` accept multiple symbols in one call to reduce tool invocations (results grouped by symbol)
 - `SymbolFinder` does text-based symbol matching with whole-word detection
 - `OutputFormatter` supports multiple formats: human, JSON, CSV, paths-only
 
 **Concurrency rule — daemon handles all parallelism**:
-- All multi-query operations (batch references, multi-symbol inspect, etc.) must be batched into a single RPC call and processed by the daemon, **not** parallelized on the CLI client side.
+- All multi-query operations (batch references, multi-symbol show, etc.) must be batched into a single RPC call and processed by the daemon, **not** parallelized on the CLI client side.
 - The ty LSP server communicates through a single stdin/stdout pipe, so LSP requests are inherently sequential. Spawning parallel client connections only adds connection overhead without concurrency benefit.
 - Use `BatchReferences` (or similar batch RPC methods) to send multiple queries in one call. The daemon processes them sequentially on the shared LSP client and returns merged results.
 

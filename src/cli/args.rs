@@ -26,7 +26,7 @@ const HELP_TEMPLATE: &str = "\
 {usage-heading} {usage}
 
 Symbol Lookup:
-  inspect      Definition, type signature, and usages of a symbol by name
+  show         Definition, signature, and usages of a symbol by name
   find         Find where a symbol is defined by name (--fuzzy for partial matching)
   refs         All usages of a symbol across the codebase (by name or file:line:col)
   members      Public interface of a class: methods, properties, and class variables
@@ -80,25 +80,33 @@ pub struct Cli {
 #[derive(Subcommand)]
 pub enum Commands {
     // -- Symbol Lookup --
-    /// Definition, type signature, and usages of a symbol by name
+    /// Definition, signature, and usages of a symbol by name
     #[command(
-        long_about = "Definition, type signature, and usages of a symbol \u{2014} where it's defined, \
+        name = "show",
+        alias = "inspect",
+        long_about = "Definition, signature, and usages of a symbol \u{2014} where it's defined, \
         its type signature, and optionally all usages. Searches the whole project by name, \
         no file path needed.\n\n\
         Examples:\n  \
-        tyf inspect MyClass\n  \
-        tyf inspect calculate_sum UserService    # multiple symbols at once\n  \
-        tyf inspect MyClass --references         # also show all usages\n  \
-        tyf inspect MyClass --file src/models.py # narrow to one file"
+        tyf show MyClass\n  \
+        tyf show calculate_sum UserService    # multiple symbols at once\n  \
+        tyf show MyClass --doc                # include docstring\n  \
+        tyf show MyClass --references         # also show all usages\n  \
+        tyf show MyClass --all                # show everything\n  \
+        tyf show MyClass --file src/models.py # narrow to one file"
     )]
-    Inspect {
-        /// Symbol name(s) to inspect (supports multiple symbols)
+    Show {
+        /// Symbol name(s) to show (supports multiple symbols)
         #[arg(required = true, num_args = 1..)]
         symbols: Vec<String>,
 
         /// Narrow the search to a specific file (searches whole project if omitted)
         #[arg(short, long)]
         file: Option<PathBuf>,
+
+        /// Include docstring in output (omitted by default)
+        #[arg(short = 'd', long, default_value_t = false)]
+        doc: bool,
 
         /// Show individual reference locations (capped by --references-limit)
         #[arg(short, long, default_value_t = false)]
@@ -111,6 +119,10 @@ pub enum Commands {
         /// Show test references in a separate section (excluded by default)
         #[arg(short = 't', long, default_value_t = false)]
         tests: bool,
+
+        /// Show everything: doc + references + test references
+        #[arg(short = 'a', long, default_value_t = false)]
+        all: bool,
     },
 
     /// Find where a symbol is defined by name (--fuzzy for partial matching)
@@ -196,7 +208,7 @@ pub enum Commands {
         tyf members MyClass -f src/models.py   # narrow to one file"
     )]
     Members {
-        /// Class name(s) to inspect (supports multiple classes)
+        /// Class name(s) to query (supports multiple classes)
         #[arg(required = true, num_args = 1..)]
         symbols: Vec<String>,
 
@@ -349,12 +361,57 @@ mod tests {
     }
 
     #[test]
-    fn inspect_accepts_tests_flag() {
+    fn show_accepts_tests_flag() {
         let cli =
-            Cli::try_parse_from(["tyf", "inspect", "MyClass", "--references", "--tests"]).unwrap();
+            Cli::try_parse_from(["tyf", "show", "MyClass", "--references", "--tests"]).unwrap();
         match cli.command {
-            Commands::Inspect { tests, .. } => assert!(tests),
-            _ => panic!("expected Inspect"),
+            Commands::Show { tests, .. } => assert!(tests),
+            _ => panic!("expected Show"),
+        }
+    }
+
+    #[test]
+    fn show_alias_inspect_works() {
+        let cli = Cli::try_parse_from(["tyf", "inspect", "MyClass"]).unwrap();
+        match cli.command {
+            Commands::Show { symbols, .. } => assert_eq!(symbols, vec!["MyClass"]),
+            _ => panic!("expected Show via inspect alias"),
+        }
+    }
+
+    #[test]
+    fn show_doc_flag_works() {
+        let cli = Cli::try_parse_from(["tyf", "show", "MyClass", "--doc"]).unwrap();
+        match cli.command {
+            Commands::Show { doc, .. } => assert!(doc),
+            _ => panic!("expected Show"),
+        }
+    }
+
+    #[test]
+    fn show_doc_short_flag_works() {
+        let cli = Cli::try_parse_from(["tyf", "show", "MyClass", "-d"]).unwrap();
+        match cli.command {
+            Commands::Show { doc, .. } => assert!(doc),
+            _ => panic!("expected Show"),
+        }
+    }
+
+    #[test]
+    fn show_all_flag_works() {
+        let cli = Cli::try_parse_from(["tyf", "show", "MyClass", "--all"]).unwrap();
+        match cli.command {
+            Commands::Show { all, .. } => assert!(all),
+            _ => panic!("expected Show"),
+        }
+    }
+
+    #[test]
+    fn show_all_short_flag_works() {
+        let cli = Cli::try_parse_from(["tyf", "show", "MyClass", "-a"]).unwrap();
+        match cli.command {
+            Commands::Show { all, .. } => assert!(all),
+            _ => panic!("expected Show"),
         }
     }
 
@@ -366,7 +423,7 @@ mod tests {
         cmd.write_help(&mut buf).unwrap();
         let help = String::from_utf8(buf).unwrap();
 
-        let expected_subcommands = &["inspect", "find", "refs", "members", "list", "daemon"];
+        let expected_subcommands = &["show", "find", "refs", "members", "list", "daemon"];
 
         for subcmd in expected_subcommands {
             assert!(
@@ -379,6 +436,12 @@ mod tests {
         assert!(
             !help.contains("generate-docs"),
             "Hidden subcommand 'generate-docs' should not appear in help.\nHelp text:\n{help}"
+        );
+
+        // inspect alias should NOT appear in help
+        assert!(
+            !help.contains("inspect"),
+            "Hidden alias 'inspect' should not appear in help.\nHelp text:\n{help}"
         );
     }
 }

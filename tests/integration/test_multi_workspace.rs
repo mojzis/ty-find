@@ -33,7 +33,7 @@ fn run_tyf(workspace: &std::path::Path, args: &[&str]) -> std::process::Output {
 }
 
 #[tokio::test]
-async fn test_cross_workspace_find_and_inspect() {
+async fn test_cross_workspace_find_and_show() {
     common::require_ty();
 
     // ── 1. find in test_project (workspace A) ───────────────────────
@@ -62,12 +62,12 @@ async fn test_cross_workspace_find_and_inspect() {
         "expected UserService in services.py, got:\n{stdout}"
     );
 
-    // ── 3. inspect in test_project2 (exercises file path resolution) ─
-    let out = run_tyf(&test_project2_root(), &["inspect", "User"]);
+    // ── 3. show in test_project2 (exercises file path resolution) ─
+    let out = run_tyf(&test_project2_root(), &["show", "User"]);
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
         out.status.success(),
-        "inspect User in test_project2 should succeed, stderr: {}",
+        "show User in test_project2 should succeed, stderr: {}",
         String::from_utf8_lossy(&out.stderr),
     );
     assert!(
@@ -88,16 +88,16 @@ async fn test_cross_workspace_find_and_inspect() {
         "expected create_dog in models.py, got:\n{stdout}"
     );
 
-    // ── 5. inspect with --file in test_project2 (daemon path resolution) ─
+    // ── 5. show with --file in test_project2 (daemon path resolution) ─
     let file_path = test_project2_root().join("services.py");
     let out = run_tyf(
         &test_project2_root(),
-        &["inspect", "--file", &file_path.to_string_lossy(), "UserService"],
+        &["show", "--file", &file_path.to_string_lossy(), "UserService"],
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
         out.status.success(),
-        "inspect --file services.py UserService should succeed, stderr: {}",
+        "show --file services.py UserService should succeed, stderr: {}",
         String::from_utf8_lossy(&out.stderr),
     );
     assert!(

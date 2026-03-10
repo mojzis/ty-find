@@ -10,7 +10,7 @@
 # Commands
 
 - [Overview](commands/overview.md)
-- [inspect](commands/inspect.md)
+- [show](commands/show.md)
 - [find](commands/find.md)
 - [refs](commands/refs.md)
 - [members](commands/members.md)

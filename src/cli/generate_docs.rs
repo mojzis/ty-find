@@ -7,7 +7,7 @@ use std::path::Path;
 ///
 /// Produces:
 /// - `overview.md` — the top-level help formatted as markdown
-/// - One file per subcommand (e.g., `find.md`, `inspect.md`)
+/// - One file per subcommand (e.g., `find.md`, `show.md`)
 pub fn generate_docs(cmd: &Command, output_dir: &Path) -> Result<()> {
     std::fs::create_dir_all(output_dir)
         .with_context(|| format!("Failed to create output directory: {}", output_dir.display()))?;
@@ -204,15 +204,21 @@ fn write_examples(out: &mut String, name: &str, cmd: &Command) {
             let _ = writeln!(out, "# Narrow to a specific file");
             let _ = writeln!(out, "tyf members MyClass --file src/models.py");
         }
-        "inspect" => {
-            let _ = writeln!(out, "# Inspect a single symbol");
-            let _ = writeln!(out, "tyf inspect MyClass");
+        "show" => {
+            let _ = writeln!(out, "# Show a single symbol");
+            let _ = writeln!(out, "tyf show MyClass");
             let _ = writeln!(out);
-            let _ = writeln!(out, "# Inspect multiple symbols at once");
-            let _ = writeln!(out, "tyf inspect MyClass my_function");
+            let _ = writeln!(out, "# Show multiple symbols at once");
+            let _ = writeln!(out, "tyf show MyClass my_function");
             let _ = writeln!(out);
-            let _ = writeln!(out, "# Inspect a symbol in a specific file");
-            let _ = writeln!(out, "tyf inspect MyClass --file src/module.py");
+            let _ = writeln!(out, "# Include docstring");
+            let _ = writeln!(out, "tyf show MyClass --doc");
+            let _ = writeln!(out);
+            let _ = writeln!(out, "# Show everything (doc + refs + test refs)");
+            let _ = writeln!(out, "tyf show MyClass --all");
+            let _ = writeln!(out);
+            let _ = writeln!(out, "# Show a symbol in a specific file");
+            let _ = writeln!(out, "tyf show MyClass --file src/module.py");
         }
         "refs" => {
             let _ = writeln!(out, "# Find all references to a symbol");
@@ -261,7 +267,7 @@ mod tests {
                     .arg(Arg::new("symbol").required(true).help("Symbol to find"))
                     .arg(Arg::new("file").long("file").help("Narrow search to file")),
             )
-            .subcommand(Command::new("inspect").about("Inspect a symbol"))
+            .subcommand(Command::new("show").about("Show a symbol"))
     }
 
     #[test]
@@ -274,7 +280,7 @@ mod tests {
         assert!(output.contains("## Commands"));
         assert!(output.contains("Test CLI tool"));
         assert!(output.contains("find"));
-        assert!(output.contains("inspect"));
+        assert!(output.contains("show"));
     }
 
     #[test]
@@ -295,7 +301,7 @@ mod tests {
     #[test]
     fn test_write_examples_known_commands() {
         let cmd = test_cmd();
-        for name in &["find", "inspect", "refs", "list", "members", "daemon"] {
+        for name in &["find", "show", "refs", "list", "members", "daemon"] {
             let mut out = String::new();
             write_examples(&mut out, name, &cmd);
             assert!(!out.is_empty(), "examples for '{name}' should not be empty");
@@ -320,7 +326,7 @@ mod tests {
 
         assert!(dir.path().join("overview.md").exists());
         assert!(dir.path().join("find.md").exists());
-        assert!(dir.path().join("inspect.md").exists());
+        assert!(dir.path().join("show.md").exists());
     }
 
     #[test]

@@ -13,21 +13,25 @@ a daemon that keeps connections warm.
 
 ## Commands
 
-### inspect — Definition, type signature, and usages of a symbol by name
+### show — Definition, type signature, and usages of a symbol by name
 
 The most useful command. Given a symbol name, it shows:
 - Where it's defined (file + line)
-- Its type signature and documentation
-- Optionally, every place it's used
+- Its type signature
+- Optionally, docstring (`--doc`) and every place it's used (`--references`)
+- Or everything at once with `--all` (doc + refs + test refs)
 
 No file path needed — it searches the whole project by name.
+`inspect` still works as a hidden alias for backward compatibility.
 
 ```
-tyf inspect MyClass
-tyf inspect calculate_sum UserService       # multiple symbols at once
-tyf inspect MyClass --references            # also list all usages
-tyf inspect MyClass --file src/models.py    # narrow to one file
-tyf --format json inspect MyClass           # JSON output for scripting
+tyf show MyClass
+tyf show calculate_sum UserService       # multiple symbols at once
+tyf show MyClass --references            # also list all usages
+tyf show MyClass --doc                   # include docstring
+tyf show MyClass --all                   # show everything: doc + refs + test refs
+tyf show MyClass --file src/models.py    # narrow to one file
+tyf --format json show MyClass           # JSON output for scripting
 ```
 
 ### find — Find where a symbol is defined by name
@@ -99,7 +103,7 @@ All commands support `--format` (placed before the subcommand):
 - `paths` — just file paths, one per line (for xargs, editors, etc.)
 
 ```
-tyf --format json inspect MyClass
+tyf --format json show MyClass
 tyf --format paths find calculate_sum | head -1 | xargs code
 ```
 

@@ -30,7 +30,7 @@ tyf [OPTIONS] <COMMAND>
 
 ## Commands
 
-**[inspect](inspect.md)**
+**[show](show.md)**
 : Definition, type signature, and usages of a symbol by name
 
 **[find](find.md)**

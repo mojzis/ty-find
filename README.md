@@ -14,7 +14,7 @@ IMPORTANT: Use `tyf` instead of Grep for Python symbol lookups.
 Grep matches in comments, strings, and docs — tyf is type-aware and precise.
 Run `tyf --help` to see all commands. Run `tyf <cmd> --help` for details.
 
-- Symbol overview (definition + type + refs): `tyf inspect my_function`
+- Symbol overview (definition + signature + refs): `tyf show my_function`
 - Find definition: `tyf find MyClass`
 - Class public interface: `tyf members TheirClass`
 - All usages before refactoring: `tyf refs my_function` or `tyf refs -f file.py -l LINE -c COL`
@@ -88,7 +88,7 @@ ty-find builds and installs on all platforms, but the background daemon requires
 | `find --file` | Yes | Yes |
 | `find` (no file) | Yes | No |
 | `find --fuzzy` | Yes | No |
-| `inspect` | Yes | No |
+| `show` | Yes | No |
 | `refs` | Yes | No |
 | `list` | Yes | No |
 | `daemon` | Yes | No |
@@ -97,21 +97,27 @@ On Windows, daemon-dependent commands exit with a clear error message. Adding th
 
 ## Usage
 
-### Inspect (Definition + Type Info + References)
+### Show (Definition + Signature + References)
 
 All-in-one command — searches the workspace by symbol name, no file needed. Supports multiple symbols in a single call:
 
 ```bash
-tyf inspect calculate_sum
+tyf show calculate_sum
 
-# Inspect multiple symbols at once (results grouped by symbol)
-tyf inspect calculate_sum UserService Config
+# Show multiple symbols at once (results grouped by symbol)
+tyf show calculate_sum UserService Config
+
+# Include docstring
+tyf show calculate_sum --doc
+
+# Show everything (doc + refs + test refs)
+tyf show calculate_sum --all
 
 # Narrow to a specific file
-tyf inspect calculate_sum --file src/math.py
+tyf show calculate_sum --file src/math.py
 
 # JSON output for scripting
-tyf --format json inspect UserService
+tyf --format json show UserService
 ```
 
 ### Find Symbol by Name
@@ -166,7 +172,7 @@ tyf daemon stop     # Stop
 All commands support `--format` (placed before the subcommand): `human` (default), `json`, `csv`, `paths`.
 
 ```bash
-tyf --format json inspect MyClass
+tyf --format json show MyClass
 tyf --format csv find User --fuzzy
 ```
 

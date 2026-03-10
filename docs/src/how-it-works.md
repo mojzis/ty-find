@@ -253,7 +253,7 @@ sequenceDiagram
 All parallelism is handled by the daemon, not the CLI:
 
 - The LSP protocol runs over a single stdin/stdout pipe per server, so requests are inherently sequential.
-- Multi-symbol operations (like `tyf inspect A B C`) are sent as a single batch RPC call. The daemon processes them sequentially on its LSP client and returns merged results.
+- Multi-symbol operations (like `tyf show A B C`) are sent as a single batch RPC call. The daemon processes them sequentially on its LSP client and returns merged results.
 - The CLI never spawns multiple connections or concurrent requests. This keeps the architecture simple and avoids race conditions.
 
 ```mermaid
@@ -262,7 +262,7 @@ sequenceDiagram
     participant D as Daemon
     participant LSP as ty LSP
 
-    CLI->>D: inspect [A, B, C]
+    CLI->>D: show [A, B, C]
     D->>LSP: hover(A)
     LSP-->>D: result A
     D->>LSP: hover(B)

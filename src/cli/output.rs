@@ -65,8 +65,8 @@ pub struct EnrichedReference {
     pub context: String,
 }
 
-/// A single inspect result with optional symbol kind.
-pub struct InspectEntry<'a> {
+/// A single show result with optional symbol kind.
+pub struct ShowEntry<'a> {
     pub symbol: &'a str,
     pub kind: Option<&'a SymbolKind>,
     pub definitions: &'a [Location],
@@ -81,11 +81,13 @@ pub struct InspectEntry<'a> {
     pub remaining_reference_count: usize,
     /// Whether individual references should be shown (true = -r was passed).
     pub show_individual_refs: bool,
+    /// Whether the docstring section should be shown (true = --doc or --all was passed).
+    pub show_doc: bool,
     /// Test references separated from the main refs (None = no test refs exist).
     pub test_references: Option<TestReferencesSection>,
 }
 
-impl InspectEntry<'_> {
+impl ShowEntry<'_> {
     /// Returns true when all sections (definitions, type/hover, references) are empty.
     pub fn is_empty(&self) -> bool {
         self.definitions.is_empty() && self.hover.is_none() && self.total_reference_count == 0
@@ -861,35 +863,30 @@ impl OutputFormatter {
         }
     }
 
-    /// Format a single symbol inspect, using the header level appropriate for context.
+    /// Format a single symbol show, using the header level appropriate for context.
     /// `h_level` controls markdown heading depth (1 = `#`, 2 = `##`).
-    fn format_inspect_human(
-        &self,
-        entry: &InspectEntry<'_>,
-        h_level: u8,
-        cache: &SourceCache,
-    ) -> String {
+    fn format_show_human(&self, entry: &ShowEntry<'_>, h_level: u8, cache: &SourceCache) -> String {
         match self.detail {
-            OutputDetail::Condensed => self.format_inspect_condensed(entry, h_level, cache),
-            OutputDetail::Full => self.format_inspect_full(entry, h_level, cache),
+            OutputDetail::Condensed => self.format_show_condensed(entry, h_level, cache),
+            OutputDetail::Full => self.format_show_full(entry, h_level, cache),
         }
     }
 
-    fn format_inspect_condensed(
+    fn format_show_condensed(
         &self,
-        entry: &InspectEntry<'_>,
+        entry: &ShowEntry<'_>,
         h_level: u8,
         cache: &SourceCache,
     ) -> String {
         let h = "#".repeat(h_level as usize);
         let mut output = String::new();
 
-        // Def section — paths only, no source snippets (symbol name is already known)
+        // Definition section — paths only, no source snippets (symbol name is already known)
         if let Some(kind) = entry.kind {
-            let heading = format!("{h} Def ({})", Self::kind_label(kind));
+            let heading = format!("{h} Definition ({})", Self::kind_label(kind));
             let _ = writeln!(output, "{}", self.s.heading(&heading));
         } else {
-            let heading = format!("{h} Def");
+            let heading = format!("{h} Definition");
             let _ = writeln!(output, "{}", self.s.heading(&heading));
         }
         if entry.definitions.is_empty() {
@@ -903,9 +900,9 @@ impl OutputFormatter {
             }
         }
 
-        // Type section — always shown, compact placeholder when empty
-        let type_heading = format!("\n{h} Type");
-        let _ = writeln!(output, "{}", self.s.heading(&type_heading));
+        // Signature section — always shown, compact placeholder when empty
+        let sig_heading = format!("\n{h} Signature");
+        let _ = writeln!(output, "{}", self.s.heading(&sig_heading));
         self.write_type_section(
             &mut output,
             entry.definitions.first(),
@@ -914,13 +911,15 @@ impl OutputFormatter {
             cache,
         );
 
-        // Doc section — only shown when a docstring is present
-        if let Some(hover) = entry.hover {
-            if let Some(doc) = Self::extract_hover_doc(&hover.contents) {
-                let doc_heading = format!("\n{h} Doc");
-                let _ = writeln!(output, "{}", self.s.heading(&doc_heading));
-                output.push_str(&doc);
-                output.push('\n');
+        // Doc section — only shown when --doc or --all is passed and a docstring is present
+        if entry.show_doc {
+            if let Some(hover) = entry.hover {
+                if let Some(doc) = Self::extract_hover_doc(&hover.contents) {
+                    let doc_heading = format!("\n{h} Doc");
+                    let _ = writeln!(output, "{}", self.s.heading(&doc_heading));
+                    output.push_str(&doc);
+                    output.push('\n');
+                }
             }
         }
 
@@ -993,17 +992,12 @@ impl OutputFormatter {
     }
 
     #[allow(clippy::too_many_lines)]
-    fn format_inspect_full(
-        &self,
-        entry: &InspectEntry<'_>,
-        h_level: u8,
-        cache: &SourceCache,
-    ) -> String {
+    fn format_show_full(&self, entry: &ShowEntry<'_>, h_level: u8, cache: &SourceCache) -> String {
         let h = "#".repeat(h_level as usize);
         let h2 = "#".repeat(h_level as usize + 1);
 
-        let inspect_heading = format!("{h} Inspect: {}", entry.symbol);
-        let mut output = format!("{}\n\n", self.s.heading(&inspect_heading));
+        let show_heading = format!("{h} Show: {}", entry.symbol);
+        let mut output = format!("{}\n\n", self.s.heading(&show_heading));
 
         // Definition section
         let def_heading = format!("{h2} Definition");
@@ -1029,9 +1023,9 @@ impl OutputFormatter {
         }
         output.push('\n');
 
-        // Type section — same class-vs-other logic as condensed mode
-        let type_heading = format!("{h2} Type Info");
-        let _ = writeln!(output, "{}", self.s.heading(&type_heading));
+        // Signature section — same class-vs-other logic as condensed mode
+        let sig_heading = format!("{h2} Signature");
+        let _ = writeln!(output, "{}", self.s.heading(&sig_heading));
         self.write_type_section(
             &mut output,
             entry.definitions.first(),
@@ -1040,6 +1034,18 @@ impl OutputFormatter {
             cache,
         );
         output.push('\n');
+
+        // Doc section — only shown when --doc or --all is passed and a docstring is present
+        if entry.show_doc {
+            if let Some(hover) = entry.hover {
+                if let Some(doc) = Self::extract_hover_doc(&hover.contents) {
+                    let doc_heading = format!("{h2} Doc");
+                    let _ = writeln!(output, "{}", self.s.heading(&doc_heading));
+                    output.push_str(&doc);
+                    output.push_str("\n\n");
+                }
+            }
+        }
 
         // References section — always show count summary
         let refs_heading = format!("{h2} References");
@@ -1113,19 +1119,19 @@ impl OutputFormatter {
         output
     }
 
-    pub fn format_inspect(&self, entry: &InspectEntry<'_>, cache: &SourceCache) -> String {
+    pub fn format_show(&self, entry: &ShowEntry<'_>, cache: &SourceCache) -> String {
         if entry.is_empty() && self.format == OutputFormat::Human {
             return self.s.error(&format!("No results found for: '{}'", entry.symbol));
         }
         match self.format {
-            OutputFormat::Human => self.format_inspect_human(entry, 1, cache),
-            OutputFormat::Json => Self::format_inspect_json_single(entry),
-            OutputFormat::Csv => self.format_inspect_csv_single(entry, false),
-            OutputFormat::Paths => self.format_inspect_paths_single(entry),
+            OutputFormat::Human => self.format_show_human(entry, 1, cache),
+            OutputFormat::Json => Self::format_show_json_single(entry),
+            OutputFormat::Csv => self.format_show_csv_single(entry, false),
+            OutputFormat::Paths => self.format_show_paths_single(entry),
         }
     }
 
-    fn format_inspect_json_single(entry: &InspectEntry<'_>) -> String {
+    fn format_show_json_single(entry: &ShowEntry<'_>) -> String {
         let refs_json: Vec<serde_json::Value> =
             entry.displayed_references.iter().map(Self::enriched_ref_to_json).collect();
 
@@ -1136,11 +1142,27 @@ impl OutputFormatter {
 
         let test_count = entry.test_references.as_ref().map_or(0, |t| t.total_count);
 
+        let signature = entry.hover.as_ref().and_then(|h| {
+            let t = Self::extract_hover_type(&h.contents);
+            if t.is_empty() {
+                None
+            } else {
+                Some(t)
+            }
+        });
+
+        let doc = if entry.show_doc {
+            entry.hover.as_ref().and_then(|h| Self::extract_hover_doc(&h.contents))
+        } else {
+            None
+        };
+
         let json_val = serde_json::json!({
             "symbol": entry.symbol,
             "kind": entry.kind.map(Self::kind_label),
             "definitions": entry.definitions,
-            "hover": entry.hover,
+            "signature": signature,
+            "doc": doc,
             "reference_count": entry.total_reference_count,
             "reference_files": entry.total_reference_files,
             "references": refs_json,
@@ -1150,7 +1172,7 @@ impl OutputFormatter {
         serde_json::to_string_pretty(&json_val).unwrap_or_else(|_| "{}".to_string())
     }
 
-    fn format_inspect_csv_single(&self, entry: &InspectEntry<'_>, include_symbol: bool) -> String {
+    fn format_show_csv_single(&self, entry: &ShowEntry<'_>, include_symbol: bool) -> String {
         let header = if include_symbol {
             "symbol,section,file,line,column,context\n"
         } else {
@@ -1189,7 +1211,7 @@ impl OutputFormatter {
         output
     }
 
-    fn format_inspect_paths_single(&self, entry: &InspectEntry<'_>) -> String {
+    fn format_show_paths_single(&self, entry: &ShowEntry<'_>) -> String {
         let mut paths: Vec<String> = entry
             .definitions
             .iter()
@@ -1207,14 +1229,10 @@ impl OutputFormatter {
         paths.join("\n")
     }
 
-    /// Format results for one or more symbol inspect queries, grouped by symbol.
-    pub fn format_inspect_results(
-        &self,
-        results: &[InspectEntry<'_>],
-        cache: &SourceCache,
-    ) -> String {
+    /// Format results for one or more symbol show queries, grouped by symbol.
+    pub fn format_show_results(&self, results: &[ShowEntry<'_>], cache: &SourceCache) -> String {
         if results.len() == 1 {
-            return self.format_inspect(&results[0], cache);
+            return self.format_show(&results[0], cache);
         }
 
         match self.format {
@@ -1231,7 +1249,7 @@ impl OutputFormatter {
                         // Multi-symbol: symbol name gets top-level heading, sections get sub-headings
                         let symbol_heading = format!("# {}", entry.symbol);
                         let _ = writeln!(output, "{}", self.s.symbol(&symbol_heading));
-                        output.push_str(&self.format_inspect_human(entry, 2, cache));
+                        output.push_str(&self.format_show_human(entry, 2, cache));
                         output.push('\n');
                     }
                 }
@@ -1241,7 +1259,7 @@ impl OutputFormatter {
                 let grouped: Vec<serde_json::Value> = results
                     .iter()
                     .map(|entry| {
-                        serde_json::from_str(&Self::format_inspect_json_single(entry))
+                        serde_json::from_str(&Self::format_show_json_single(entry))
                             .unwrap_or_default()
                     })
                     .collect();
@@ -1251,7 +1269,7 @@ impl OutputFormatter {
                 let mut output = String::from("symbol,section,file,line,column,context\n");
                 for entry in results {
                     // Skip the header from each entry — we already wrote it
-                    let entry_csv = self.format_inspect_csv_single(entry, true);
+                    let entry_csv = self.format_show_csv_single(entry, true);
                     for line in entry_csv.lines().skip(1) {
                         output.push_str(line);
                         output.push('\n');
@@ -1624,8 +1642,8 @@ mod tests {
         kind: Option<&'a SymbolKind>,
         definitions: &'a [Location],
         hover: Option<&'a Hover>,
-    ) -> InspectEntry<'a> {
-        InspectEntry {
+    ) -> ShowEntry<'a> {
+        ShowEntry {
             symbol,
             kind,
             definitions,
@@ -1635,25 +1653,26 @@ mod tests {
             displayed_references: Vec::new(),
             remaining_reference_count: 0,
             show_individual_refs: false,
+            show_doc: false,
             test_references: None,
         }
     }
 
     #[test]
-    fn test_format_inspect_condensed_empty() {
+    fn test_format_show_condensed_empty() {
         let formatter = OutputFormatter::new(OutputFormat::Human);
         let entry = make_entry("missing", None, &[], None);
-        let result = formatter.format_inspect(&entry, &SourceCache::new());
+        let result = formatter.format_show(&entry, &SourceCache::new());
 
         // When all sections are empty, should show a single "no results" line
         assert_eq!(result, "No results found for: 'missing'");
     }
 
     #[test]
-    fn test_format_inspect_refs_zero_count_condensed() {
+    fn test_format_show_refs_zero_count_condensed() {
         let formatter = OutputFormatter::new(OutputFormat::Human);
         let defs = [make_location("file:///test.py", 0, 0)];
-        let entry = InspectEntry {
+        let entry = ShowEntry {
             symbol: "Animal",
             kind: Some(&SymbolKind::Class),
             definitions: &defs,
@@ -1663,9 +1682,10 @@ mod tests {
             displayed_references: Vec::new(),
             remaining_reference_count: 0,
             show_individual_refs: false,
+            show_doc: false,
             test_references: None,
         };
-        let result = formatter.format_inspect(&entry, &SourceCache::new());
+        let result = formatter.format_show(&entry, &SourceCache::new());
 
         // Zero refs should show "Refs: none"
         assert!(
@@ -1675,14 +1695,14 @@ mod tests {
     }
 
     #[test]
-    fn test_format_inspect_refs_count_without_individual_full() {
+    fn test_format_show_refs_count_without_individual_full() {
         let formatter = OutputFormatter::with_detail(
             OutputFormat::Human,
             OutputDetail::Full,
             Styler::no_color(),
         );
         let defs = [make_location("file:///test.py", 0, 0)];
-        let entry = InspectEntry {
+        let entry = ShowEntry {
             symbol: "Animal",
             kind: Some(&SymbolKind::Class),
             definitions: &defs,
@@ -1692,9 +1712,10 @@ mod tests {
             displayed_references: Vec::new(),
             remaining_reference_count: 0,
             show_individual_refs: false,
+            show_doc: false,
             test_references: None,
         };
-        let result = formatter.format_inspect(&entry, &SourceCache::new());
+        let result = formatter.format_show(&entry, &SourceCache::new());
 
         // Should show count summary but no individual refs
         assert!(
@@ -1704,50 +1725,50 @@ mod tests {
     }
 
     #[test]
-    fn test_format_inspect_condensed_with_kind() {
+    fn test_format_show_condensed_with_kind() {
         let formatter = OutputFormatter::new(OutputFormat::Human);
         let defs = [make_location("file:///test.py", 0, 0)];
         let entry = make_entry("foo", Some(&SymbolKind::Function), &defs, None);
-        let result = formatter.format_inspect(&entry, &SourceCache::new());
+        let result = formatter.format_show(&entry, &SourceCache::new());
 
-        assert!(result.contains("# Def (func)"));
+        assert!(result.contains("# Definition (func)"));
         assert!(result.contains("test.py:1:1"));
     }
 
     #[test]
-    fn test_format_inspect_full_empty() {
+    fn test_format_show_full_empty() {
         let formatter = OutputFormatter::with_detail(
             OutputFormat::Human,
             OutputDetail::Full,
             Styler::no_color(),
         );
         let entry = make_entry("missing", None, &[], None);
-        let result = formatter.format_inspect(&entry, &SourceCache::new());
+        let result = formatter.format_show(&entry, &SourceCache::new());
 
         // When all sections are empty, should show a single "no results" line
         assert_eq!(result, "No results found for: 'missing'");
     }
 
     #[test]
-    fn test_format_inspect_condensed_with_defs() {
+    fn test_format_show_condensed_with_defs() {
         let formatter = OutputFormatter::new(OutputFormat::Human);
         let defs = [make_location("file:///test.py", 0, 0)];
         let entry = make_entry("foo", None, &defs, None);
-        let result = formatter.format_inspect(&entry, &SourceCache::new());
+        let result = formatter.format_show(&entry, &SourceCache::new());
 
         // Should show path:line:col on one line (no numbering)
         assert!(result.contains("test.py:1:1"));
-        assert!(result.contains("# Def"));
+        assert!(result.contains("# Definition"));
         // No symbol name header for single symbol in condensed
         assert!(!result.contains("foo"));
     }
 
     #[test]
-    fn test_format_inspect_json() {
+    fn test_format_show_json() {
         let formatter = OutputFormatter::new(OutputFormat::Json);
         let defs = [make_location("file:///test.py", 0, 0)];
         let entry = make_entry("foo", Some(&SymbolKind::Function), &defs, None);
-        let result = formatter.format_inspect(&entry, &SourceCache::new());
+        let result = formatter.format_show(&entry, &SourceCache::new());
 
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(parsed["symbol"], "foo");
@@ -1827,7 +1848,7 @@ mod tests {
     }
 
     #[test]
-    fn test_condensed_inspect_separates_doc() {
+    fn test_condensed_show_separates_doc() {
         use crate::lsp::protocol::{Hover, HoverContents, MarkupContent, Range};
 
         let formatter = OutputFormatter::new(OutputFormat::Human);
@@ -1843,16 +1864,19 @@ mod tests {
             }),
         };
         let entry = make_entry("Animal", Some(&SymbolKind::Class), &defs, Some(&hover));
-        let result = formatter.format_inspect(&entry, &SourceCache::new());
+        let result = formatter.format_show(&entry, &SourceCache::new());
 
-        // Type section should have the class type without code fences or docstring
+        // Signature section should have the class type without code fences or docstring
         assert!(
-            result.contains("# Type\n<class 'Animal'>"),
-            "type section should contain bare type, got:\n{result}"
+            result.contains("# Signature\n<class 'Animal'>"),
+            "signature section should contain bare type, got:\n{result}"
         );
         assert!(!result.contains("```"), "should not contain code fences, got:\n{result}");
-        // Doc section should have the docstring separately
-        assert!(result.contains("# Doc\nBase class for animals."));
+        // Doc section should NOT appear by default (show_doc is false)
+        assert!(
+            !result.contains("# Doc"),
+            "doc section should not appear by default, got:\n{result}"
+        );
         // No raw --- separator in output
         assert!(!result.contains("\n---\n"));
     }
@@ -1923,7 +1947,7 @@ mod tests {
     }
 
     #[test]
-    fn test_condensed_inspect_shows_decorators() {
+    fn test_condensed_show_shows_decorators() {
         use crate::lsp::protocol::{Hover, HoverContents, MarkupContent, Range};
 
         let content = "@dataclass\nclass Config:\n    host: str\n";
@@ -1945,7 +1969,7 @@ mod tests {
             }),
         };
         let entry = make_entry("Config", Some(&SymbolKind::Class), &defs, Some(&hover));
-        let result = formatter.format_inspect(&entry, &cache);
+        let result = formatter.format_show(&entry, &cache);
 
         // Type section should show decorator + source class definition
         assert!(
@@ -1957,7 +1981,7 @@ mod tests {
     }
 
     #[test]
-    fn test_condensed_inspect_no_decorator_no_crash() {
+    fn test_condensed_show_no_decorator_no_crash() {
         use crate::lsp::protocol::{Hover, HoverContents, MarkupContent, Range};
 
         let content = "class Animal:\n    pass\n";
@@ -1978,11 +2002,11 @@ mod tests {
             }),
         };
         let entry = make_entry("Animal", Some(&SymbolKind::Class), &defs, Some(&hover));
-        let result = formatter.format_inspect(&entry, &cache);
+        let result = formatter.format_show(&entry, &cache);
 
         // Should show source class line (no decorator, no inheritance)
         assert!(
-            result.contains("# Type\nclass Animal:"),
+            result.contains("# Signature\nclass Animal:"),
             "should show source class definition, got:\n{result}"
         );
     }
@@ -2019,7 +2043,7 @@ mod tests {
     }
 
     #[test]
-    fn test_condensed_inspect_class_shows_source_definition() {
+    fn test_condensed_show_class_shows_source_definition() {
         use crate::lsp::protocol::{Hover, HoverContents, MarkupContent, Range};
 
         let content = "class Dog(Animal):\n    pass\n";
@@ -2040,7 +2064,7 @@ mod tests {
             }),
         };
         let entry = make_entry("Dog", Some(&SymbolKind::Class), &defs, Some(&hover));
-        let result = formatter.format_inspect(&entry, &cache);
+        let result = formatter.format_show(&entry, &cache);
 
         // Type section should show source class line with inheritance, not <class 'Dog'>
         assert!(
@@ -2054,7 +2078,7 @@ mod tests {
     }
 
     #[test]
-    fn test_condensed_inspect_decorated_class_with_inheritance() {
+    fn test_condensed_show_decorated_class_with_inheritance() {
         use crate::lsp::protocol::{Hover, HoverContents, MarkupContent, Range};
 
         let content = "@dataclass\nclass AppConfig(Config):\n    debug: bool\n";
@@ -2076,7 +2100,7 @@ mod tests {
             }),
         };
         let entry = make_entry("AppConfig", Some(&SymbolKind::Class), &defs, Some(&hover));
-        let result = formatter.format_inspect(&entry, &cache);
+        let result = formatter.format_show(&entry, &cache);
 
         // Should show decorator + source class line with inheritance
         assert!(
@@ -2086,7 +2110,7 @@ mod tests {
     }
 
     #[test]
-    fn test_condensed_inspect_function_keeps_hover_type() {
+    fn test_condensed_show_function_keeps_hover_type() {
         use crate::lsp::protocol::{Hover, HoverContents, MarkupContent, Range};
 
         let content = "def hello_world():\n    return 'hi'\n";
@@ -2107,7 +2131,7 @@ mod tests {
             }),
         };
         let entry = make_entry("hello_world", Some(&SymbolKind::Function), &defs, Some(&hover));
-        let result = formatter.format_inspect(&entry, &cache);
+        let result = formatter.format_show(&entry, &cache);
 
         // Functions should still show the hover type (has inferred return type)
         assert!(
@@ -2333,13 +2357,13 @@ mod tests {
         );
     }
 
-    // ── Enriched inspect output tests ──────────────────────────────────
+    // ── Enriched show output tests ──────────────────────────────────
 
     #[test]
-    fn test_format_inspect_with_ref_count_condensed() {
+    fn test_format_show_with_ref_count_condensed() {
         let formatter = OutputFormatter::new(OutputFormat::Human);
         let defs = [make_location("file:///test.py", 0, 0)];
-        let entry = InspectEntry {
+        let entry = ShowEntry {
             symbol: "my_func",
             kind: Some(&SymbolKind::Function),
             definitions: &defs,
@@ -2349,9 +2373,10 @@ mod tests {
             displayed_references: Vec::new(),
             remaining_reference_count: 0,
             show_individual_refs: false,
+            show_doc: false,
             test_references: None,
         };
-        let result = formatter.format_inspect(&entry, &SourceCache::new());
+        let result = formatter.format_show(&entry, &SourceCache::new());
 
         assert!(
             result.contains("# Refs: 47 across 12 file(s)"),
@@ -2360,7 +2385,7 @@ mod tests {
     }
 
     #[test]
-    fn test_format_inspect_with_enriched_refs_condensed() {
+    fn test_format_show_with_enriched_refs_condensed() {
         let formatter = OutputFormatter::new(OutputFormat::Human);
         let defs = [make_location("file:///test.py", 0, 0)];
         let enriched = vec![
@@ -2373,7 +2398,7 @@ mod tests {
                 context: "module scope".to_string(),
             },
         ];
-        let entry = InspectEntry {
+        let entry = ShowEntry {
             symbol: "my_func",
             kind: Some(&SymbolKind::Function),
             definitions: &defs,
@@ -2383,9 +2408,10 @@ mod tests {
             displayed_references: enriched,
             remaining_reference_count: 3,
             show_individual_refs: true,
+            show_doc: false,
             test_references: None,
         };
-        let result = formatter.format_inspect(&entry, &SourceCache::new());
+        let result = formatter.format_show(&entry, &SourceCache::new());
 
         assert!(result.contains("# Refs: 5 across 2 file(s)"), "should show count, got:\n{result}");
         assert!(result.contains("(RequestHandler.process)"), "should show context, got:\n{result}");
@@ -2397,14 +2423,14 @@ mod tests {
     }
 
     #[test]
-    fn test_format_inspect_json_includes_context() {
+    fn test_format_show_json_includes_context() {
         let formatter = OutputFormatter::new(OutputFormat::Json);
         let defs = [make_location("file:///test.py", 0, 0)];
         let enriched = vec![EnrichedReference {
             location: make_location("file:///src/main.py", 44, 11),
             context: "RequestHandler.process".to_string(),
         }];
-        let entry = InspectEntry {
+        let entry = ShowEntry {
             symbol: "my_func",
             kind: Some(&SymbolKind::Function),
             definitions: &defs,
@@ -2414,9 +2440,10 @@ mod tests {
             displayed_references: enriched,
             remaining_reference_count: 0,
             show_individual_refs: true,
+            show_doc: false,
             test_references: None,
         };
-        let result = formatter.format_inspect(&entry, &SourceCache::new());
+        let result = formatter.format_show(&entry, &SourceCache::new());
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
 
         assert_eq!(parsed["reference_count"], 1);
@@ -2646,10 +2673,10 @@ mod tests {
     }
 
     #[test]
-    fn test_format_inspect_condensed_with_test_refs_hint() {
+    fn test_format_show_condensed_with_test_refs_hint() {
         let formatter = OutputFormatter::new(OutputFormat::Human);
         let defs = [make_location("file:///test.py", 0, 0)];
-        let entry = InspectEntry {
+        let entry = ShowEntry {
             symbol: "my_func",
             kind: Some(&SymbolKind::Function),
             definitions: &defs,
@@ -2659,13 +2686,14 @@ mod tests {
             displayed_references: Vec::new(),
             remaining_reference_count: 0,
             show_individual_refs: false,
+            show_doc: false,
             test_references: Some(TestReferencesSection {
                 total_count: 5,
                 displayed: Vec::new(),
                 remaining_count: 0,
             }),
         };
-        let result = formatter.format_inspect(&entry, &SourceCache::new());
+        let result = formatter.format_show(&entry, &SourceCache::new());
         assert!(
             result.contains("Test Refs: 5 (use --tests/-t to show)"),
             "should show test refs heading with count, got:\n{result}"
@@ -2673,14 +2701,14 @@ mod tests {
     }
 
     #[test]
-    fn test_format_inspect_full_with_test_refs_hint() {
+    fn test_format_show_full_with_test_refs_hint() {
         let formatter = OutputFormatter::with_detail(
             OutputFormat::Human,
             OutputDetail::Full,
             Styler::no_color(),
         );
         let defs = [make_location("file:///test.py", 0, 0)];
-        let entry = InspectEntry {
+        let entry = ShowEntry {
             symbol: "my_func",
             kind: Some(&SymbolKind::Function),
             definitions: &defs,
@@ -2690,24 +2718,25 @@ mod tests {
             displayed_references: Vec::new(),
             remaining_reference_count: 0,
             show_individual_refs: false,
+            show_doc: false,
             test_references: Some(TestReferencesSection {
                 total_count: 4,
                 displayed: Vec::new(),
                 remaining_count: 0,
             }),
         };
-        let result = formatter.format_inspect(&entry, &SourceCache::new());
+        let result = formatter.format_show(&entry, &SourceCache::new());
         assert!(
             result.contains("Test Refs: 4 (use --tests/-t to show)"),
-            "full inspect should show test refs heading with count, got:\n{result}"
+            "full show should show test refs heading with count, got:\n{result}"
         );
     }
 
     #[test]
-    fn test_format_inspect_condensed_with_test_refs_shown() {
+    fn test_format_show_condensed_with_test_refs_shown() {
         let formatter = OutputFormatter::new(OutputFormat::Human);
         let defs = [make_location("file:///test.py", 0, 0)];
-        let entry = InspectEntry {
+        let entry = ShowEntry {
             symbol: "my_func",
             kind: Some(&SymbolKind::Function),
             definitions: &defs,
@@ -2717,6 +2746,7 @@ mod tests {
             displayed_references: Vec::new(),
             remaining_reference_count: 0,
             show_individual_refs: true,
+            show_doc: false,
             test_references: Some(TestReferencesSection {
                 total_count: 1,
                 displayed: vec![EnrichedReference {
@@ -2726,7 +2756,7 @@ mod tests {
                 remaining_count: 0,
             }),
         };
-        let result = formatter.format_inspect(&entry, &SourceCache::new());
+        let result = formatter.format_show(&entry, &SourceCache::new());
         assert!(result.contains("# Test Refs:"), "should show test refs section, got:\n{result}");
         assert!(result.contains("test_main.py"), "should show test file, got:\n{result}");
     }
@@ -2749,10 +2779,10 @@ mod tests {
     }
 
     #[test]
-    fn test_color_never_produces_no_ansi_in_inspect() {
+    fn test_color_never_produces_no_ansi_in_show() {
         let formatter = OutputFormatter::new(OutputFormat::Human);
         let defs = [make_location("file:///test.py", 0, 0)];
-        let entry = InspectEntry {
+        let entry = ShowEntry {
             symbol: "my_func",
             kind: Some(&SymbolKind::Function),
             definitions: &defs,
@@ -2762,9 +2792,10 @@ mod tests {
             displayed_references: Vec::new(),
             remaining_reference_count: 0,
             show_individual_refs: false,
+            show_doc: false,
             test_references: None,
         };
-        let result = formatter.format_inspect(&entry, &SourceCache::new());
+        let result = formatter.format_show(&entry, &SourceCache::new());
 
         assert!(
             !has_ansi(&result),
@@ -2773,10 +2804,10 @@ mod tests {
     }
 
     #[test]
-    fn test_color_always_produces_ansi_in_inspect_headings() {
+    fn test_color_always_produces_ansi_in_show_headings() {
         let formatter = formatter_with_color();
         let defs = [make_location("file:///test.py", 0, 0)];
-        let entry = InspectEntry {
+        let entry = ShowEntry {
             symbol: "my_func",
             kind: Some(&SymbolKind::Function),
             definitions: &defs,
@@ -2786,9 +2817,10 @@ mod tests {
             displayed_references: Vec::new(),
             remaining_reference_count: 0,
             show_individual_refs: false,
+            show_doc: false,
             test_references: None,
         };
-        let result = formatter.format_inspect(&entry, &SourceCache::new());
+        let result = formatter.format_show(&entry, &SourceCache::new());
 
         assert!(
             has_ansi(&result),
@@ -2837,7 +2869,7 @@ mod tests {
         );
         let defs = [make_location("file:///test.py", 0, 0)];
         let entry = make_entry("foo", Some(&SymbolKind::Function), &defs, None);
-        let result = formatter.format_inspect(&entry, &SourceCache::new());
+        let result = formatter.format_show(&entry, &SourceCache::new());
 
         assert!(
             !has_ansi(&result),
@@ -2855,7 +2887,7 @@ mod tests {
         );
         let defs = [make_location("file:///test.py", 0, 0)];
         let entry = make_entry("foo", Some(&SymbolKind::Function), &defs, None);
-        let result = formatter.format_inspect(&entry, &SourceCache::new());
+        let result = formatter.format_show(&entry, &SourceCache::new());
 
         assert!(
             !has_ansi(&result),
@@ -3113,75 +3145,75 @@ mod tests {
     }
 
     // ========================================================================
-    // format_inspect CSV/Paths single + multi-result
+    // format_show CSV/Paths single + multi-result
     // ========================================================================
 
     #[test]
-    fn test_format_inspect_csv_single() {
+    fn test_format_show_csv_single() {
         let formatter = OutputFormatter::new(OutputFormat::Csv);
         let defs = [make_location("file:///test.py", 0, 0)];
         let entry = make_entry("Animal", Some(&SymbolKind::Class), &defs, None);
-        let result = formatter.format_inspect(&entry, &SourceCache::new());
+        let result = formatter.format_show(&entry, &SourceCache::new());
         assert!(result.starts_with("section,file,line,column,context\n"));
         assert!(result.contains("definition,"));
     }
 
     #[test]
-    fn test_format_inspect_paths_single() {
+    fn test_format_show_paths_single() {
         let formatter = OutputFormatter::new(OutputFormat::Paths);
         let defs = [make_location("file:///a.py", 0, 0), make_location("file:///b.py", 1, 0)];
         let entry = make_entry("Animal", None, &defs, None);
-        let result = formatter.format_inspect(&entry, &SourceCache::new());
+        let result = formatter.format_show(&entry, &SourceCache::new());
         assert!(result.contains("a.py"));
         assert!(result.contains("b.py"));
     }
 
     #[test]
-    fn test_format_inspect_results_multiple_human() {
+    fn test_format_show_results_multiple_human() {
         let formatter = OutputFormatter::new(OutputFormat::Human);
         let defs1 = [make_location("file:///a.py", 0, 0)];
         let defs2 = [make_location("file:///b.py", 1, 0)];
         let entry1 = make_entry("Foo", Some(&SymbolKind::Class), &defs1, None);
         let entry2 = make_entry("Bar", Some(&SymbolKind::Function), &defs2, None);
-        let result = formatter.format_inspect_results(&[entry1, entry2], &SourceCache::new());
+        let result = formatter.format_show_results(&[entry1, entry2], &SourceCache::new());
         assert!(result.contains("# Foo"));
         assert!(result.contains("# Bar"));
     }
 
     #[test]
-    fn test_format_inspect_results_multiple_json() {
+    fn test_format_show_results_multiple_json() {
         let formatter = OutputFormatter::new(OutputFormat::Json);
         let defs1 = [make_location("file:///a.py", 0, 0)];
         let defs2 = [make_location("file:///b.py", 1, 0)];
         let entry1 = make_entry("Foo", Some(&SymbolKind::Class), &defs1, None);
         let entry2 = make_entry("Bar", Some(&SymbolKind::Function), &defs2, None);
-        let result = formatter.format_inspect_results(&[entry1, entry2], &SourceCache::new());
+        let result = formatter.format_show_results(&[entry1, entry2], &SourceCache::new());
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert!(parsed.is_array());
         assert_eq!(parsed.as_array().unwrap().len(), 2);
     }
 
     #[test]
-    fn test_format_inspect_results_multiple_csv() {
+    fn test_format_show_results_multiple_csv() {
         let formatter = OutputFormatter::new(OutputFormat::Csv);
         let defs1 = [make_location("file:///a.py", 0, 0)];
         let defs2 = [make_location("file:///b.py", 1, 0)];
         let entry1 = make_entry("Foo", Some(&SymbolKind::Class), &defs1, None);
         let entry2 = make_entry("Bar", Some(&SymbolKind::Function), &defs2, None);
-        let result = formatter.format_inspect_results(&[entry1, entry2], &SourceCache::new());
+        let result = formatter.format_show_results(&[entry1, entry2], &SourceCache::new());
         assert!(result.starts_with("symbol,section,file,line,column,context\n"));
         assert!(result.contains("Foo,"));
         assert!(result.contains("Bar,"));
     }
 
     #[test]
-    fn test_format_inspect_results_multiple_paths() {
+    fn test_format_show_results_multiple_paths() {
         let formatter = OutputFormatter::new(OutputFormat::Paths);
         let defs1 = [make_location("file:///a.py", 0, 0)];
         let defs2 = [make_location("file:///b.py", 1, 0)];
         let entry1 = make_entry("Foo", None, &defs1, None);
         let entry2 = make_entry("Bar", None, &defs2, None);
-        let result = formatter.format_inspect_results(&[entry1, entry2], &SourceCache::new());
+        let result = formatter.format_show_results(&[entry1, entry2], &SourceCache::new());
         assert!(result.contains("a.py"));
         assert!(result.contains("b.py"));
     }

@@ -7,8 +7,8 @@ use std::time::Duration;
 #[cfg(unix)]
 use crate::cli::args::DaemonCommands;
 use crate::cli::output::{
-    find_enclosing_symbol, EnrichedReference, EnrichedReferencesResult, InspectEntry,
-    OutputFormatter, SourceCache,
+    find_enclosing_symbol, EnrichedReference, EnrichedReferencesResult, OutputFormatter, ShowEntry,
+    SourceCache,
 };
 #[cfg(unix)]
 use crate::daemon::client::{ensure_daemon_running, spawn_daemon, DaemonClient, CLIENT_VERSION};
@@ -774,7 +774,7 @@ async fn find_symbol_via_workspace(
 
 #[cfg(unix)]
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
-pub async fn handle_inspect_command(
+pub async fn handle_show_command(
     workspace_root: &Path,
     file: Option<&Path>,
     symbols: &[String],
@@ -783,6 +783,7 @@ pub async fn handle_inspect_command(
     show_individual_refs: bool,
     references_limit: usize,
     show_tests: bool,
+    show_doc: bool,
     debug_log: Option<Arc<DebugLog>>,
 ) -> Result<()> {
     ensure_daemon_running().await?;
@@ -798,18 +799,18 @@ pub async fn handle_inspect_command(
         for r in &results {
             let has_hover = if r.hover.is_some() { "yes" } else { "no" };
             log.log_result_summary(&format!(
-                "inspect '{}': {} definition(s), hover={has_hover}, {} reference(s)",
+                "show '{}': {} definition(s), hover={has_hover}, {} reference(s)",
                 r.symbol,
                 r.definitions.len(),
                 r.references.len(),
             ));
         }
-        let cmd = format!("inspect {}", symbols.join(" "));
+        let cmd = format!("show {}", symbols.join(" "));
         log.log_reproduction_commands(workspace_root, symbols, &cmd);
     }
 
     // Build enriched entries — reuse a single daemon connection for all enrichment
-    let mut entries: Vec<InspectEntry<'_>> = Vec::new();
+    let mut entries: Vec<ShowEntry<'_>> = Vec::new();
     let needs_enrichment = show_individual_refs && results.iter().any(|r| !r.references.is_empty());
     let mut enrich_client = if needs_enrichment {
         Some(DaemonClient::connect_with_timeout(timeout).await?)
@@ -882,7 +883,7 @@ pub async fn handle_inspect_command(
             })
         };
 
-        entries.push(InspectEntry {
+        entries.push(ShowEntry {
             symbol: r.symbol.as_str(),
             kind: r.kind.as_ref(),
             definitions: r.definitions.as_slice(),
@@ -892,6 +893,7 @@ pub async fn handle_inspect_command(
             displayed_references,
             remaining_reference_count,
             show_individual_refs,
+            show_doc,
             test_references,
         });
     }
@@ -906,14 +908,14 @@ pub async fn handle_inspect_command(
         defs.chain(refs).chain(test)
     }))
     .await;
-    println!("{}", formatter.format_inspect_results(&entries, &cache));
+    println!("{}", formatter.format_show_results(&entries, &cache));
 
     Ok(())
 }
 
 #[cfg(not(unix))]
 #[allow(clippy::too_many_arguments)]
-pub async fn handle_inspect_command(
+pub async fn handle_show_command(
     _workspace_root: &Path,
     _file: Option<&Path>,
     _symbols: &[String],
@@ -922,10 +924,11 @@ pub async fn handle_inspect_command(
     _show_individual_refs: bool,
     _references_limit: usize,
     _show_tests: bool,
+    _show_doc: bool,
     _debug_log: Option<Arc<DebugLog>>,
 ) -> Result<()> {
     anyhow::bail!(
-        "The 'inspect' command requires the background daemon, which is only supported on Unix systems"
+        "The 'show' command requires the background daemon, which is only supported on Unix systems"
     )
 }
 
@@ -1149,7 +1152,7 @@ pub async fn handle_members_command(
                     _ => "not a class",
                 };
                 eprintln!(
-                    "'{}' is {kind_name}, not a class. Use 'inspect' instead.",
+                    "'{}' is {kind_name}, not a class. Use 'show' instead.",
                     result.class_name
                 );
                 has_output = true;

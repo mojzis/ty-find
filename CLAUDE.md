@@ -52,7 +52,7 @@ When a test fails during implementation:
 1. **LSP Client (`src/lsp/`)** - JSON-RPC client that communicates with ty's LSP server
 2. **CLI Interface (`src/cli/`)** - Command-line argument parsing and output formatting
 3. **Workspace Detection (`src/workspace/`)** - Python project detection and symbol finding
-4. **Main Application (`src/main.rs`)** - Orchestrates the main modes: find, inspect, refs, members, list
+4. **Main Application (`src/main.rs`)** - Orchestrates the main modes: find, show, refs, members, list
 
 Architecture details, patterns, and dependencies: see `docs/dev/ARCHITECTURE.md`.
 

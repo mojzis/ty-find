@@ -60,7 +60,7 @@ Subsequent calls reuse the running daemon and typically respond in 50–100ms. I
 For any issue, enable full debug output:
 
 ```bash
-RUST_LOG=ty_find=debug tyf inspect MySymbol
+RUST_LOG=ty_find=debug tyf show MySymbol
 ```
 
 This shows the LSP messages exchanged with ty, which helps diagnose protocol-level issues.

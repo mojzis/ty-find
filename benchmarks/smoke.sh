@@ -159,19 +159,34 @@ assert_output "django find fuzzy QuerySet" "QuerySet" "$output"
 output=$("$TYF" --workspace "$TP2" find User --fuzzy 2>&1)
 assert_output "test_project2 find fuzzy User" "User" "$output"
 
-# -- inspect --
+# -- show --
 
-output=$(cd "$PANDAS_DIR" && "$TYF" inspect DataFrame 2>&1)
-assert_output "pandas inspect DataFrame" "Def" "$output"
+output=$(cd "$PANDAS_DIR" && "$TYF" show DataFrame 2>&1)
+assert_output "pandas show DataFrame" "Definition" "$output"
 
-output=$("$TYF" --workspace "$TP2" inspect User 2>&1)
-assert_output "test_project2 inspect User" "services.py" "$output"
+output=$("$TYF" --workspace "$TP2" show User 2>&1)
+assert_output "test_project2 show User" "services.py" "$output"
 
-output=$(cd "$DJANGO_DIR" && "$TYF" inspect QuerySet 2>&1)
-assert_output "django inspect QuerySet" "Def" "$output"
+output=$(cd "$DJANGO_DIR" && "$TYF" show QuerySet 2>&1)
+assert_output "django show QuerySet" "Definition" "$output"
 
-output=$("$TYF" --workspace "$TP1" inspect Animal 2>&1)
-assert_output "test_project inspect Animal" "models.py" "$output"
+output=$("$TYF" --workspace "$TP1" show Animal 2>&1)
+assert_output "test_project show Animal" "models.py" "$output"
+
+# -- show --doc (opt-in docstring) --
+
+output=$("$TYF" --workspace "$TP1" show Animal --doc 2>&1)
+assert_output "test_project show Animal --doc" "# Doc" "$output"
+
+output=$("$TYF" --workspace "$TP1" show Animal 2>&1)
+# Without --doc, Doc section should NOT appear
+TOTAL=$((TOTAL + 1))
+if echo "$output" | grep -qF "# Doc"; then
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: test_project show Animal (no --doc should omit Doc section)"
+else
+    PASS=$((PASS + 1))
+fi
 
 # -- refs --
 
@@ -257,19 +272,19 @@ assert_output "test_project find nonexistent" "No results found" "$output"
 output=$("$TYF" --workspace "$TP2" find "$BOGUS" 2>&1) || true
 assert_output "test_project2 find nonexistent" "No results found" "$output"
 
-# -- inspect nonexistent across all 4 workspaces --
+# -- show nonexistent across all 4 workspaces --
 
-output=$(cd "$PANDAS_DIR" && "$TYF" inspect "$BOGUS" 2>&1) || true
-assert_output "pandas inspect nonexistent" "No results found" "$output"
+output=$(cd "$PANDAS_DIR" && "$TYF" show "$BOGUS" 2>&1) || true
+assert_output "pandas show nonexistent" "No results found" "$output"
 
-output=$(cd "$DJANGO_DIR" && "$TYF" inspect "$BOGUS" 2>&1) || true
-assert_output "django inspect nonexistent" "No results found" "$output"
+output=$(cd "$DJANGO_DIR" && "$TYF" show "$BOGUS" 2>&1) || true
+assert_output "django show nonexistent" "No results found" "$output"
 
-output=$("$TYF" --workspace "$TP1" inspect "$BOGUS" 2>&1) || true
-assert_output "test_project inspect nonexistent" "No results found" "$output"
+output=$("$TYF" --workspace "$TP1" show "$BOGUS" 2>&1) || true
+assert_output "test_project show nonexistent" "No results found" "$output"
 
-output=$("$TYF" --workspace "$TP2" inspect "$BOGUS" 2>&1) || true
-assert_output "test_project2 inspect nonexistent" "No results found" "$output"
+output=$("$TYF" --workspace "$TP2" show "$BOGUS" 2>&1) || true
+assert_output "test_project2 show nonexistent" "No results found" "$output"
 
 # -- refs nonexistent across all 4 workspaces --
 
@@ -310,8 +325,11 @@ assert_output "pandas find multi (Series)" "Found 2 definition(s)" "$output"
 output=$(cd "$PANDAS_DIR" && "$TYF" find DataFrame --fuzzy 2>&1)
 assert_line_count "pandas find fuzzy" 10 "DataFrame" "$output"
 
-output=$(cd "$PANDAS_DIR" && "$TYF" inspect DataFrame 2>&1)
-assert_output "pandas inspect" "Def" "$output"
+output=$(cd "$PANDAS_DIR" && "$TYF" show DataFrame 2>&1)
+assert_output "pandas show" "Definition" "$output"
+
+output=$(cd "$PANDAS_DIR" && "$TYF" show DataFrame --doc 2>&1)
+assert_output "pandas show --doc" "Signature" "$output"
 
 output=$(cd "$PANDAS_DIR" && "$TYF" refs read_csv 2>&1)
 assert_output "pandas refs" "reference(s) for: 'read_csv'" "$output"
@@ -330,8 +348,11 @@ output=$(cd "$DJANGO_DIR" && "$TYF" find QuerySet HttpResponse 2>&1)
 assert_output "django find multi (QuerySet)" "Found 1 definition(s)" "$output"
 assert_output "django find multi (HttpResponse)" "Found 1 definition(s)" "$output"
 
-output=$(cd "$DJANGO_DIR" && "$TYF" inspect QuerySet 2>&1)
-assert_output "django inspect" "Def" "$output"
+output=$(cd "$DJANGO_DIR" && "$TYF" show QuerySet 2>&1)
+assert_output "django show" "Definition" "$output"
+
+output=$(cd "$DJANGO_DIR" && "$TYF" show QuerySet --doc 2>&1)
+assert_output "django show --doc" "Signature" "$output"
 
 output=$(cd "$DJANGO_DIR" && "$TYF" refs reverse 2>&1)
 assert_output "django refs" "reference(s) for: 'reverse'" "$output"

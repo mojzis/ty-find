@@ -21,15 +21,15 @@
       "grep_median_s": null,
       "command": "ty-find find DataFrame Series Index"
     },
-    "inspect-DataFrame": {
+    "show-DataFrame": {
       "ty_find_median_s": 0.04386925288,
       "grep_median_s": null,
-      "command": "ty-find inspect DataFrame"
+      "command": "ty-find show DataFrame"
     },
-    "inspect-multi": {
+    "show-multi": {
       "ty_find_median_s": 0.09210966144,
       "grep_median_s": null,
-      "command": "ty-find inspect DataFrame Series"
+      "command": "ty-find show DataFrame Series"
     },
     "find-fuzzy": {
       "ty_find_median_s": 0.03993076342,

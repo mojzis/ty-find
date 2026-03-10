@@ -1,7 +1,7 @@
 /// Smoke tests that exercise the `test_project/` fixture end-to-end.
 ///
 /// These tests exercise the workspace-symbol lookup path (no `--file` flag) —
-/// the same path users typically hit from the CLI.  They verify that inspect
+/// the same path users typically hit from the CLI.  They verify that show
 /// returns hover information and references, which historically broke because
 /// workspace-symbol responses point at the declaration keyword (`class`/`def`)
 /// rather than the symbol name.
@@ -56,11 +56,11 @@ async fn test_src_include_override_ignores_pyproject_restriction() {
 
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
-async fn test_project_inspect_and_references() {
+async fn test_project_show_and_references() {
     common::require_ty();
 
-    // ── 1. inspect class via workspace symbols (no --file) ──────────
-    let out = run_tyf(&["inspect", "Animal"]);
+    // ── 1. show class via workspace symbols (no --file) ──────────
+    let out = run_tyf(&["show", "Animal"]);
     assert!(
         predicate::str::contains("models.py").eval(&out),
         "expected definition in models.py, got:\n{out}"
@@ -70,8 +70,8 @@ async fn test_project_inspect_and_references() {
         "hover should be present for Animal class, got:\n{out}"
     );
 
-    // ── 2. inspect function via workspace symbols ───────────────────
-    let out = run_tyf(&["inspect", "create_dog"]);
+    // ── 2. show function via workspace symbols ───────────────────
+    let out = run_tyf(&["show", "create_dog"]);
     assert!(
         !predicate::str::contains("No hover information").eval(&out),
         "hover should be present for create_dog, got:\n{out}"
@@ -81,8 +81,8 @@ async fn test_project_inspect_and_references() {
         "hover should mention create_dog, got:\n{out}"
     );
 
-    // ── 3. inspect with --references ────────────────────────────────
-    let out = run_tyf(&["inspect", "Animal", "--references"]);
+    // ── 3. show with --references ────────────────────────────────
+    let out = run_tyf(&["show", "Animal", "--references"]);
     assert!(
         !predicate::str::contains("No references found").eval(&out),
         "references should be present for Animal, got:\n{out}"
@@ -122,10 +122,10 @@ async fn test_project_inspect_and_references() {
         "references should be present for create_dog, got:\n{out}"
     );
 
-    // ── 6. inspect with --file (file-based path, regression check) ──
+    // ── 6. show with --file (file-based path, regression check) ──
     let models = test_project_root().join("models.py");
     let models_str = models.to_string_lossy().to_string();
-    let out = run_tyf(&["inspect", "Animal", "--file", &models_str]);
+    let out = run_tyf(&["show", "Animal", "--file", &models_str]);
     assert!(
         !predicate::str::contains("No hover information").eval(&out),
         "hover should be present when using --file, got:\n{out}"
@@ -153,8 +153,8 @@ async fn test_project_inspect_and_references() {
         "members should show fetch method for Dog, got:\n{out}"
     );
 
-    // ── 9. inspect decorated (dataclass) class via workspace symbols ─
-    let out = run_tyf(&["inspect", "Config"]);
+    // ── 9. show decorated (dataclass) class via workspace symbols ─
+    let out = run_tyf(&["show", "Config"]);
     assert!(
         predicate::str::contains("models.py").eval(&out),
         "expected definition in models.py for Config, got:\n{out}"
@@ -164,8 +164,8 @@ async fn test_project_inspect_and_references() {
         "hover should be present for @dataclass Config, got:\n{out}"
     );
 
-    // ── 10. inspect decorated child dataclass via workspace symbols ──
-    let out = run_tyf(&["inspect", "AppConfig"]);
+    // ── 10. show decorated child dataclass via workspace symbols ──
+    let out = run_tyf(&["show", "AppConfig"]);
     assert!(
         predicate::str::contains("models.py").eval(&out),
         "expected definition in models.py for AppConfig, got:\n{out}"

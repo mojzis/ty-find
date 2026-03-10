@@ -60,14 +60,14 @@ async fn test_json_output() {
 }
 
 #[tokio::test]
-async fn test_inspect_command_with_file() {
+async fn test_show_command_with_file() {
     common::require_ty();
 
-    // Inspect the `hello_world` function (--file path, uses SymbolFinder)
+    // Show the `hello_world` function (--file path, uses SymbolFinder)
     let mut cmd = cargo_bin_cmd!("tyf");
     cmd.arg("--workspace")
         .arg(workspace_root())
-        .arg("inspect")
+        .arg("show")
         .arg("hello_world")
         .arg("--file")
         .arg(fixture_path());
@@ -79,31 +79,31 @@ async fn test_inspect_command_with_file() {
     // Definition section must show the file location
     assert!(
         predicate::str::contains("example.py:1:").eval(&stdout),
-        "inspect should find definition, got:\n{stdout}"
+        "show should find definition, got:\n{stdout}"
     );
-    // Hover/Type section must contain actual type info (not "(none)")
+    // Hover/Signature section must contain actual type info (not "(none)")
     assert!(
         predicate::str::contains("hello_world").eval(&stdout),
-        "inspect should show type signature, got:\n{stdout}"
+        "show should show type signature, got:\n{stdout}"
     );
     assert!(
-        !predicate::str::contains("# Type\n(none)").eval(&stdout),
+        !predicate::str::contains("# Signature\n(none)").eval(&stdout),
         "hover should not be empty — type info must be returned, got:\n{stdout}"
     );
     // Reference count is always shown now (no -r needed)
     assert!(
         predicate::str::contains("# Refs:").eval(&stdout),
-        "inspect should always show reference count summary, got:\n{stdout}"
+        "show should always show reference count summary, got:\n{stdout}"
     );
 }
 
 #[tokio::test]
-async fn test_inspect_command_workspace_symbols() {
+async fn test_show_command_workspace_symbols() {
     common::require_ty();
 
-    // Inspect `hello_world` WITHOUT --file (uses workspace symbols + find_name_column)
+    // Show `hello_world` WITHOUT --file (uses workspace symbols + find_name_column)
     let mut cmd = cargo_bin_cmd!("tyf");
-    cmd.arg("--workspace").arg(workspace_root()).arg("inspect").arg("hello_world");
+    cmd.arg("--workspace").arg(workspace_root()).arg("show").arg("hello_world");
 
     let output = cmd.output().expect("failed to run tyf");
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -112,11 +112,11 @@ async fn test_inspect_command_workspace_symbols() {
     // Definition section must show the file location
     assert!(
         predicate::str::contains("example.py:1:").eval(&stdout),
-        "inspect should find definition, got:\n{stdout}"
+        "show should find definition, got:\n{stdout}"
     );
-    // Hover/Type section must contain actual type info (not "(none)")
+    // Hover/Signature section must contain actual type info (not "(none)")
     assert!(
-        !predicate::str::contains("# Type\n(none)").eval(&stdout),
+        !predicate::str::contains("# Signature\n(none)").eval(&stdout),
         "hover should not be empty — type info must be returned.\n\
          If this fails, find_name_column may have returned the wrong column.\n\
          Got:\n{stdout}"
@@ -124,14 +124,14 @@ async fn test_inspect_command_workspace_symbols() {
 }
 
 #[tokio::test]
-async fn test_inspect_class_workspace_symbols() {
+async fn test_show_class_workspace_symbols() {
     common::require_ty();
 
-    // Inspect `Calculator` class WITHOUT --file — this is the case where
+    // Show `Calculator` class WITHOUT --file — this is the case where
     // workspace symbols return column at "class" keyword, and find_name_column
     // must correct it to the "Calculator" name position for hover to work.
     let mut cmd = cargo_bin_cmd!("tyf");
-    cmd.arg("--workspace").arg(workspace_root()).arg("inspect").arg("Calculator");
+    cmd.arg("--workspace").arg(workspace_root()).arg("show").arg("Calculator");
 
     let output = cmd.output().expect("failed to run tyf");
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -144,7 +144,7 @@ async fn test_inspect_class_workspace_symbols() {
     );
     // Hover must return actual type info
     assert!(
-        !predicate::str::contains("# Type\n(none)").eval(&stdout),
+        !predicate::str::contains("# Signature\n(none)").eval(&stdout),
         "hover should not be empty for Calculator class.\n\
          This tests that find_name_column correctly shifts from 'class' keyword \
          to 'Calculator' name.\nGot:\n{stdout}"
@@ -152,14 +152,14 @@ async fn test_inspect_class_workspace_symbols() {
 }
 
 #[tokio::test]
-async fn test_inspect_command_with_references() {
+async fn test_show_command_with_references() {
     common::require_ty();
 
-    // Inspect `hello_world` with --references to verify all three sections
+    // Show `hello_world` with --references to verify all three sections
     let mut cmd = cargo_bin_cmd!("tyf");
     cmd.arg("--workspace")
         .arg(workspace_root())
-        .arg("inspect")
+        .arg("show")
         .arg("hello_world")
         .arg("--file")
         .arg(fixture_path())
@@ -176,13 +176,13 @@ async fn test_inspect_command_with_references() {
     );
     // Hover must have actual type info
     assert!(
-        !predicate::str::contains("# Type\n(none)").eval(&stdout),
-        "inspect should return hover info, got:\n{stdout}"
+        !predicate::str::contains("# Signature\n(none)").eval(&stdout),
+        "show should return hover info, got:\n{stdout}"
     );
     // References section must show count and file summary
     assert!(
         predicate::str::contains("# Refs:").eval(&stdout),
-        "inspect should show reference count, got:\n{stdout}"
+        "show should show reference count, got:\n{stdout}"
     );
     assert!(
         predicate::str::contains("across").eval(&stdout),
@@ -491,14 +491,14 @@ async fn test_members_command_csv_format() {
 // ── Reference count and enrichment tests ───────────────────────────
 
 #[tokio::test]
-async fn test_inspect_shows_reference_count_without_r_flag() {
+async fn test_show_shows_reference_count_without_r_flag() {
     common::require_ty();
 
-    // Inspect WITHOUT --references should still show reference count
+    // Show WITHOUT --references should still show reference count
     let mut cmd = cargo_bin_cmd!("tyf");
     cmd.arg("--workspace")
         .arg(workspace_root())
-        .arg("inspect")
+        .arg("show")
         .arg("hello_world")
         .arg("--file")
         .arg(fixture_path());
@@ -510,7 +510,7 @@ async fn test_inspect_shows_reference_count_without_r_flag() {
     // Should show "# Refs: N across M file(s)" even without -r
     assert!(
         predicate::str::contains("# Refs:").eval(&stdout),
-        "inspect should always show ref count, got:\n{stdout}"
+        "show should always show ref count, got:\n{stdout}"
     );
     assert!(
         predicate::str::contains("across").eval(&stdout)
@@ -527,14 +527,14 @@ async fn test_inspect_shows_reference_count_without_r_flag() {
 }
 
 #[tokio::test]
-async fn test_inspect_references_with_limit_truncation() {
+async fn test_show_references_with_limit_truncation() {
     common::require_ty();
 
-    // Inspect with --references and --references-limit 1 to test truncation
+    // Show with --references and --references-limit 1 to test truncation
     let mut cmd = cargo_bin_cmd!("tyf");
     cmd.arg("--workspace")
         .arg(workspace_root())
-        .arg("inspect")
+        .arg("show")
         .arg("hello_world")
         .arg("--file")
         .arg(fixture_path())
@@ -562,14 +562,14 @@ async fn test_inspect_references_with_limit_truncation() {
 }
 
 #[tokio::test]
-async fn test_inspect_references_limit_zero_shows_all() {
+async fn test_show_references_limit_zero_shows_all() {
     common::require_ty();
 
-    // Inspect with --references --references-limit 0 should show all refs
+    // Show with --references --references-limit 0 should show all refs
     let mut cmd = cargo_bin_cmd!("tyf");
     cmd.arg("--workspace")
         .arg(workspace_root())
-        .arg("inspect")
+        .arg("show")
         .arg("hello_world")
         .arg("--file")
         .arg(fixture_path())
@@ -589,14 +589,14 @@ async fn test_inspect_references_limit_zero_shows_all() {
 }
 
 #[tokio::test]
-async fn test_inspect_enriched_refs_show_context() {
+async fn test_show_enriched_refs_show_context() {
     common::require_ty();
 
-    // Inspect with --references to check enclosing symbol context
+    // Show with --references to check enclosing symbol context
     let mut cmd = cargo_bin_cmd!("tyf");
     cmd.arg("--workspace")
         .arg(workspace_root())
-        .arg("inspect")
+        .arg("show")
         .arg("hello_world")
         .arg("--file")
         .arg(fixture_path())
@@ -618,7 +618,7 @@ async fn test_inspect_enriched_refs_show_context() {
 }
 
 #[tokio::test]
-async fn test_inspect_module_scope_reference() {
+async fn test_show_module_scope_reference() {
     common::require_ty();
 
     // hello_world is defined at module scope — at least one ref should show "(module scope)"
@@ -626,7 +626,7 @@ async fn test_inspect_module_scope_reference() {
     let mut cmd = cargo_bin_cmd!("tyf");
     cmd.arg("--workspace")
         .arg(workspace_root())
-        .arg("inspect")
+        .arg("show")
         .arg("hello_world")
         .arg("--file")
         .arg(fixture_path())
@@ -864,5 +864,44 @@ async fn test_find_existing_symbol_still_works_with_rg() {
     assert!(
         predicate::str::contains("hello_world").eval(&stdout),
         "should find hello_world, got:\n{stdout}"
+    );
+}
+
+// ── Alias test ─────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn test_inspect_alias_matches_show() {
+    common::require_ty();
+
+    // Run with `show`
+    let mut show_cmd = cargo_bin_cmd!("tyf");
+    show_cmd
+        .arg("--workspace")
+        .arg(workspace_root())
+        .arg("show")
+        .arg("hello_world")
+        .arg("--file")
+        .arg(fixture_path());
+    let show_output = show_cmd.output().expect("failed to run tyf show");
+    let show_stdout = String::from_utf8_lossy(&show_output.stdout).to_string();
+    assert!(show_output.status.success(), "show command failed: {show_stdout}");
+
+    // Run with `inspect` (alias)
+    let mut inspect_cmd = cargo_bin_cmd!("tyf");
+    inspect_cmd
+        .arg("--workspace")
+        .arg(workspace_root())
+        .arg("inspect")
+        .arg("hello_world")
+        .arg("--file")
+        .arg(fixture_path());
+    let inspect_output = inspect_cmd.output().expect("failed to run tyf inspect");
+    let inspect_stdout = String::from_utf8_lossy(&inspect_output.stdout).to_string();
+    assert!(inspect_output.status.success(), "inspect alias command failed: {inspect_stdout}");
+
+    // Both should produce the same output
+    assert_eq!(
+        show_stdout, inspect_stdout,
+        "inspect alias should produce identical output to show"
     );
 }

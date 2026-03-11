@@ -8,21 +8,25 @@ Add this to your project's `CLAUDE.md` file:
 
 <!-- BEGIN SHARED:claude-snippet -->
 ```markdown
-### Python Symbol Navigation (ty-find)
+### Python Symbol Navigation — `tyf`
 
-IMPORTANT: Use `tyf` instead of Grep for Python symbol lookups.
-Grep matches in comments, strings, and docs — tyf is type-aware and precise.
-Run `tyf --help` to see all commands. Run `tyf <cmd> --help` for details.
+This project has `tyf` — a type-aware code search that gives LSP-quality
+results by symbol name. Use `tyf` instead of grep/ripgrep for Python symbol lookups.
 
-- Symbol overview (definition + type + refs): `tyf show my_function`
-- Find definition: `tyf find MyClass`
-- Class public interface: `tyf members TheirClass`
-- All usages before refactoring: `tyf refs my_function` or `tyf refs -f file.py -l LINE -c COL`
-- File outline: `tyf list file.py`
+| Task | Command |
+|------|---------|
+| Definition + signature | `tyf show my_function` |
+| ...with docstring | `tyf show my_function --doc` |
+| ...with all details | `tyf show my_function --all` |
+| Find definition | `tyf find MyClass` |
+| All usages (before refactoring) | `tyf refs my_function` |
+| Class public API | `tyf members TheirClass` |
+| File outline | `tyf list file.py` |
 
-All commands accept multiple symbols in one call — batch to save tool invocations.
+All commands accept multiple symbols — batch to save tool calls.
+Run `tyf <cmd> --help` for options.
 
-Grep is still appropriate for string literals, config values, TODOs, and non-symbol text.
+Use grep for: string literals, config values, TODOs, non-Python files.
 ```
 <!-- END SHARED:claude-snippet -->
 
@@ -46,9 +50,13 @@ This allows Claude Code to run any `tyf` command without asking each time.
 
 Claude Code's system prompt tells it to use its built-in Grep tool for searching code. This is a sensible default — Grep works everywhere and requires no setup.
 
-The problem is that Grep is a text search tool. For Python symbol navigation, it returns false positives from comments, docstrings, and string literals. It also can't tell you a symbol's type or find all references through the type system.
+The problem goes deeper than precision. To use an LSP (the gold standard for code intelligence), an LLM first needs a file position — but it doesn't know the position without searching. So it greps, gets imprecise results, and has to validate them — a circular round-trip that wastes tokens and time.
 
-The CLAUDE.md snippet uses emphatic language ("IMPORTANT", "instead of") because that's what it takes to override a strong system-level preference. Softer phrasing like "consider using tyf" gets ignored in practice.
+tyf breaks this cycle: the LLM passes a symbol name, and tyf resolves the position internally, returning structured LSP results directly. No grep step, no position guessing, no validation loop.
+
+On top of that, grep is a text search tool — it returns false positives from comments, docstrings, and string literals. It can't tell you a symbol's type or find all references through the type system.
+
+The CLAUDE.md snippet uses emphatic language ("Use `tyf` instead of grep") because that's what it takes to override a strong system-level preference. Softer phrasing like "consider using tyf" gets ignored in practice.
 
 ## Priming a new session
 

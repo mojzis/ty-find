@@ -1,15 +1,13 @@
 # ty-find
 
-> Type-aware Python code navigation — powered by ty's LSP server.
+> LSP adapter for AI coding agents — symbol name in, structured code intelligence out.
 
-ty-find is a CLI tool (`tyf`) for Python code navigation. Unlike grep, it understands
-your code's type structure: it finds actual symbol usages (not string matches
-in comments or docs), resolves definitions through imports, and shows type
-signatures. It talks to ty's LSP server behind the scenes, but you don't need
-to know anything about LSP to use it.
+ty-find (`tyf`) lets AI coding agents query Python's type system by symbol name.
+It wraps ty's LSP server so that `tyf show MyClass` returns the definition
+location, type signature, and all references — without requiring file paths or
+line numbers. A background daemon keeps responses under 100ms.
 
-First command takes 1-2s (LSP startup); subsequent ones are 50-100ms thanks to
-a daemon that keeps connections warm.
+Also useful for humans who want fast, precise Python navigation from the terminal.
 
 ## Commands
 
@@ -107,18 +105,18 @@ tyf --format json show MyClass
 tyf --format paths find calculate_sum | head -1 | xargs code
 ```
 
-## When to use tyf vs grep
+## Why tyf?
 
-Use **tyf** when you want type-aware, precise results:
-- Find where a function/class/variable is actually defined
-- Find all actual usages of a symbol (not string matches)
-- Get type signatures and documentation
-- Understand impact before renaming or deleting code
+**vs grep/ripgrep:**
+- grep matches text; tyf understands Python's type system
+- grep returns hits in comments, strings, and docstrings; tyf returns only real symbol references
 
-Use **grep** for non-symbol text:
-- String literals, config values, TODOs
-- Comments and documentation content
-- Non-Python files
+**vs raw LSP (in editors):**
+- LSP requires file:line:col positions to answer queries
+- An LLM doesn't know positions without searching first — it would need to grep, which is imprecise
+- tyf accepts symbol names directly, resolves positions internally, and returns structured results
+
+Use **grep** for: string literals, config values, TODOs, non-Python files.
 
 ## Performance Tips
 

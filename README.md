@@ -1,6 +1,31 @@
 # ty-find
 
-A command-line tool for Python code navigation using ty's LSP server. Uses a daemon-backed architecture to keep LSP connections warm between commands (~50-100ms after initial startup).
+An **LSP adapter for AI coding agents**. Symbol name in, structured code intelligence out.
+
+LSP servers are the gold standard for code navigation — but they require file positions (`file.py:29:7`). LLMs think in symbol names (`MyClass`). To use an LSP, an LLM first has to grep for the position, which is imprecise and adds a round-trip. **tyf bridges this gap:** one command gives you definition, signature, and references — by name, no file paths needed.
+
+```bash
+$ tyf show MyClass
+MyClass
+  Definition: src/models.py:15:1
+  Signature:  type[MyClass]
+
+$ tyf show MyClass --all    # add docstring + refs + test refs
+```
+
+**Built for:** Claude Code, Codex, Cursor, Gemini CLI — and humans who want fast terminal-based navigation.
+
+## Why tyf?
+
+**vs grep/ripgrep:**
+- grep matches text — tyf understands Python's type system
+- grep returns hits in comments, strings, and docstrings; tyf returns only real symbol references
+
+**vs raw LSP (in editors):**
+- LSP requires `file:line:col` positions to answer queries
+- An LLM doesn't know positions without searching first
+- Searching with grep is imprecise — circular problem
+- tyf accepts symbol names directly, resolves positions internally
 
 ## Usage with Claude Code
 
@@ -8,29 +33,27 @@ Add this to your project's `CLAUDE.md` to enable type-aware code navigation:
 
 <!-- BEGIN SHARED:claude-snippet -->
 ```markdown
-### Python Symbol Navigation (ty-find)
+### Python Symbol Navigation — `tyf`
 
-IMPORTANT: Use `tyf` instead of Grep for Python symbol lookups.
-Grep matches in comments, strings, and docs — tyf is type-aware and precise.
-Run `tyf --help` to see all commands. Run `tyf <cmd> --help` for details.
+This project has `tyf` — a type-aware code search that gives LSP-quality
+results by symbol name. Use `tyf` instead of grep/ripgrep for Python symbol lookups.
 
-- Symbol overview (definition + signature + refs): `tyf show my_function`
-- Find definition: `tyf find MyClass`
-- Class public interface: `tyf members TheirClass`
-- All usages before refactoring: `tyf refs my_function` or `tyf refs -f file.py -l LINE -c COL`
-- File outline: `tyf list file.py`
+| Task | Command |
+|------|---------|
+| Definition + signature | `tyf show my_function` |
+| ...with docstring | `tyf show my_function --doc` |
+| ...with all details | `tyf show my_function --all` |
+| Find definition | `tyf find MyClass` |
+| All usages (before refactoring) | `tyf refs my_function` |
+| Class public API | `tyf members TheirClass` |
+| File outline | `tyf list file.py` |
 
-All commands accept multiple symbols in one call — batch to save tool invocations.
+All commands accept multiple symbols — batch to save tool calls.
+Run `tyf <cmd> --help` for options.
 
-Grep is still appropriate for string literals, config values, TODOs, and non-symbol text.
+Use grep for: string literals, config values, TODOs, non-Python files.
 ```
 <!-- END SHARED:claude-snippet -->
-
-### Why ty-find over grep?
-
-- **Type-aware precision** — grep matches in comments, docstrings, and strings; tyf returns only actual code references through ty's type inference engine
-- **Rich symbol detail** — definition location, type signatures, full class interfaces (methods, properties, class variables), and cross-project references, all in one call
-- **Token-efficient** — condensed output by default, giving AI agents maximum information in minimum context window space
 
 ## Installation
 

@@ -1,14 +1,22 @@
 # What is ty-find?
 
-ty-find is a command-line tool (`tyf`) for type-aware Python code navigation. It talks to [ty](https://github.com/astral-sh/ty)'s LSP server to find definitions, references, and type information for Python symbols — directly from the terminal. A background daemon keeps the LSP server warm so that repeated queries respond in 50–100ms.
+ty-find (`tyf`) is an LSP adapter that lets AI coding agents query Python's type system by symbol name. It wraps [ty](https://github.com/astral-sh/ty)'s LSP server so that `tyf show MyClass` returns the definition location, type signature, and all references — without requiring file paths or line numbers. A background daemon keeps responses under 100ms.
 
-## Why not grep?
+Built for Claude Code, Codex, Cursor, Gemini CLI — and humans who want fast Python navigation from the terminal.
 
-Grep matches text. tyf understands Python's type system.
+## Why tyf?
 
-When you grep for `calculate_sum`, you'll get hits in comments, docstrings, string literals, and variable names that happen to contain the substring. tyf returns only the actual symbol definition, its type signature, and where it's referenced — because it uses ty's type inference engine under the hood.
+### vs grep/ripgrep
 
-This matters most for AI coding agents (Claude Code, Codex, etc.) that need precise symbol information to make correct edits.
+grep matches text. tyf understands Python's type system.
+
+When you grep for `calculate_sum`, you get hits in comments, docstrings, string literals, and variable names that happen to contain the substring. tyf returns only the actual symbol definition, its type signature, and where it's referenced — because it uses ty's type inference engine under the hood.
+
+### vs raw LSP (in editors)
+
+LSP servers are the gold standard for code intelligence, but they require file positions (`file.py:29:7`) to answer queries. An LLM doesn't know positions — it thinks in symbol names (`MyClass`). To use an LSP, it would first need to grep for the position, which is imprecise and adds a round-trip.
+
+tyf breaks this cycle: symbol name in → structured LSP knowledge out. No file paths, no line numbers, no grep step needed.
 
 ## Installation
 
@@ -31,16 +39,15 @@ pip install ty-find
 ## Quick start
 
 ```bash
-# Get a full overview of a symbol: definition, type, and references
+# Definition + signature (default)
 $ tyf show MyClass
 
 MyClass
   Definition: src/models.py:15:1
-  Signature: type[MyClass]
-  References:
-    src/main.py:3:1
-    src/main.py:45:12
-    tests/test_models.py:8:5
+  Signature:  type[MyClass]
+
+# Everything: doc + refs + test refs
+$ tyf show MyClass --all
 
 # Find where a function is defined
 $ tyf find calculate_sum

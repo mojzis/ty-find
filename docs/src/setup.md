@@ -13,15 +13,11 @@ Add this to your project's `CLAUDE.md` file:
 This project has `tyf` — a type-aware code search that gives LSP-quality
 results by symbol name. Use `tyf` instead of grep/ripgrep for Python symbol lookups.
 
-| Task | Command |
-|------|---------|
-| Definition + signature | `tyf show my_function` |
-| ...with docstring | `tyf show my_function --doc` |
-| ...with all details | `tyf show my_function --all` |
-| Find definition | `tyf find MyClass` |
-| All usages (before refactoring) | `tyf refs my_function` |
-| Class public API | `tyf members TheirClass` |
-| File outline | `tyf list file.py` |
+- `tyf show my_function` — definition + signature (add `-d` docs, `-r` refs, `-t` test refs, or `--all`)
+- `tyf find MyClass` — find definition location
+- `tyf refs my_function` — all usages (before refactoring)
+- `tyf members TheirClass` — class public API
+- `tyf list file.py` — file outline
 
 All commands accept multiple symbols — batch to save tool calls.
 Run `tyf <cmd> --help` for options.

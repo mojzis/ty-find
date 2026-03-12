@@ -4,13 +4,17 @@ An **LSP adapter for AI coding agents**. Symbol name in, structured code intelli
 
 LSP servers are the gold standard for code navigation — but they require file positions (`file.py:29:7`). LLMs think in symbol names (`MyClass`). To use an LSP, an LLM first has to grep for the position, which is imprecise and adds a round-trip. **tyf bridges this gap:** one command gives you definition, signature, and references — by name, no file paths needed.
 
-```bash
-$ tyf show MyClass
-MyClass
-  Definition: src/models.py:15:1
-  Signature:  type[MyClass]
+```
+$ tyf show list_animals
+# Definition (func)
+main.py:14:1
 
-$ tyf show MyClass --all    # add docstring + refs + test refs
+# Signature
+def list_animals(animals: list[Animal]) -> None
+
+# Refs: 2 across 1 file(s)
+
+$ tyf show list_animals --all    # add docs, refs, test refs
 ```
 
 **Built for:** Claude Code, Codex, Cursor, Gemini CLI — and humans who want fast terminal-based navigation.
@@ -38,15 +42,11 @@ Add this to your project's `CLAUDE.md` to enable type-aware code navigation:
 This project has `tyf` — a type-aware code search that gives LSP-quality
 results by symbol name. Use `tyf` instead of grep/ripgrep for Python symbol lookups.
 
-| Task | Command |
-|------|---------|
-| Definition + signature | `tyf show my_function` |
-| ...with docstring | `tyf show my_function --doc` |
-| ...with all details | `tyf show my_function --all` |
-| Find definition | `tyf find MyClass` |
-| All usages (before refactoring) | `tyf refs my_function` |
-| Class public API | `tyf members TheirClass` |
-| File outline | `tyf list file.py` |
+- `tyf show my_function` — definition + signature (add `-d` docs, `-r` refs, `-t` test refs, or `--all`)
+- `tyf find MyClass` — find definition location
+- `tyf refs my_function` — all usages (before refactoring)
+- `tyf members TheirClass` — class public API
+- `tyf list file.py` — file outline
 
 All commands accept multiple symbols — batch to save tool calls.
 Run `tyf <cmd> --help` for options.
@@ -72,75 +72,29 @@ sudo apt install ripgrep
 cargo install ripgrep
 ```
 
-### From PyPI
-
 ```bash
-pip install ty-find
-
-# Or with uv
 uv add --dev ty-find
 ```
 
-### From Git (Pre-Release)
-
-Requires the Rust toolchain to build from source:
-
-```bash
-pip install "ty-find @ git+https://github.com/mojzis/ty-find.git"
-
-# Or with uv
-uv add --dev "ty-find @ git+https://github.com/mojzis/ty-find.git"
-```
-
-### From Source
-
-```bash
-git clone https://github.com/mojzis/ty-find.git
-cd ty-find
-cargo install --path .
-```
-
-**Note:** Windows support is limited — see [Platform Support](#platform-support) below.
-
-## Platform Support
-
-ty-find builds and installs on all platforms, but the background daemon requires Unix domain sockets and is only available on Unix systems (Linux, macOS).
-
-| Command | Linux / macOS | Windows |
-|---------|:---:|:---:|
-| `find --file` | Yes | Yes |
-| `find` (no file) | Yes | No |
-| `find --fuzzy` | Yes | No |
-| `show` | Yes | No |
-| `refs` | Yes | No |
-| `list` | Yes | No |
-| `daemon` | Yes | No |
-
-On Windows, daemon-dependent commands exit with a clear error message. Adding the package as a dependency won't break your project on Windows — it just won't have full functionality. PRs for Windows named-pipe support are welcome!
+**Note:** On Windows, only `tyf find --file` is supported for now. All other commands require Unix domain sockets (Linux, macOS).
 
 ## Usage
 
 ### Show (Definition + Signature + References)
 
-All-in-one command — searches the workspace by symbol name, no file needed. Supports multiple symbols in a single call:
+All-in-one command — searches the workspace by symbol name, no file needed. Add `-d` (docs), `-r` (references), `-t` (test refs), or `--all` for everything:
 
 ```bash
 tyf show calculate_sum
 
-# Show multiple symbols at once (results grouped by symbol)
+# Multiple symbols at once
 tyf show calculate_sum UserService Config
 
-# Include docstring
-tyf show calculate_sum --doc
-
-# Show everything (doc + refs + test refs)
+# Include docstring + refs + test refs
 tyf show calculate_sum --all
 
 # Narrow to a specific file
 tyf show calculate_sum --file src/math.py
-
-# JSON output for scripting
-tyf --format json show UserService
 ```
 
 ### Find Symbol by Name
@@ -174,6 +128,12 @@ tyf refs file.py:10:5 my_func
 ... | tyf refs --stdin
 ```
 
+### Members (Class Public API)
+
+```bash
+tyf members MyClass
+```
+
 ### Document Outline
 
 ```bash
@@ -182,13 +142,7 @@ tyf list src/services/user.py
 
 ### Daemon Management
 
-The daemon starts automatically on first use. Manual control:
-
-```bash
-tyf daemon start    # Start manually
-tyf daemon status   # Check status
-tyf daemon stop     # Stop
-```
+The daemon starts automatically on first use. Run `tyf daemon --help` for manual control.
 
 ## Output Formats
 
@@ -206,7 +160,7 @@ CLI Command → Daemon Client (auto-connects) → Unix Socket
 → Daemon Server (5min idle timeout) → LSP Client Pool → ty LSP Server
 ```
 
-The daemon keeps LSP connections warm: first command takes 1-2s, subsequent commands 50-100ms.
+The daemon keeps LSP connections warm: first command takes 1-2s, subsequent commands 50-100ms. See [How it works](https://mojzis.github.io/ty-find/how-it-works.html) for details.
 
 ## Development
 

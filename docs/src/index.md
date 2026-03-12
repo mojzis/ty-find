@@ -30,30 +30,21 @@ uv add --dev ty
 uv add --dev ty-find
 ```
 
-Or with pip:
-
-```bash
-pip install ty-find
-```
-
 ## Quick start
 
-```bash
+```
 # Definition + signature (default)
-$ tyf show MyClass
+$ tyf show list_animals
+# Definition (func)
+main.py:14:1
 
-MyClass
-  Definition: src/models.py:15:1
-  Signature:  type[MyClass]
+# Signature
+def list_animals(animals: list[Animal]) -> None
 
-# Everything: doc + refs + test refs
-$ tyf show MyClass --all
+# Refs: 2 across 1 file(s)
 
-# Find where a function is defined
-$ tyf find calculate_sum
-
-calculate_sum
-  src/utils.py:22:1
+# Everything: docs + refs + test refs
+$ tyf show list_animals --all
 
 # See all commands
 $ tyf --help

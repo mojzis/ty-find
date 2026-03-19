@@ -74,6 +74,44 @@ def fetch_data(url: str) -> dict[str, Any]:
     return {"url": url, "data": "mock"}
 
 
+class TestConfig:
+    """Configuration for test decorators."""
+    def __init__(
+        self,
+        paint_blue: bool = False,
+        tags: list[str] | None = None,
+        visibility: float = 1.0,
+        something: int = 0,
+    ) -> None:
+        self.paint_blue = paint_blue
+        self.tags = tags or []
+        self.visibility = visibility
+        self.something = something
+
+
+def test_dec(config: TestConfig) -> Callable[[F], F]:
+    """Decorator factory that accepts a complex config object."""
+    def decorator(func: F) -> F:
+        @functools.wraps(func)
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            return func(*args, **kwargs)
+        return wrapper  # type: ignore[return-value]
+    return decorator
+
+
+@test_dec(
+    config=TestConfig(
+        paint_blue=True,
+        tags=["a", "b"],
+        visibility=0.9,
+        something=1,
+    )
+)
+def complex_decorated(x: int, y: int) -> int:
+    """Function with a complex multi-line decorator."""
+    return x + y
+
+
 @validate_positive
 def square_root(x: float) -> float:
     """Decorated function with validation."""

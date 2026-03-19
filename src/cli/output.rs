@@ -115,6 +115,19 @@ struct DefinitionContext {
     definition_line: String,
 }
 
+/// Count net parentheses in a line: `(` adds 1, `)` subtracts 1.
+fn paren_delta(line: &str) -> i32 {
+    let mut depth = 0i32;
+    for ch in line.chars() {
+        match ch {
+            '(' => depth += 1,
+            ')' => depth -= 1,
+            _ => {}
+        }
+    }
+    depth
+}
+
 /// Read definition context from a file at a 0-indexed starting line.
 ///
 /// Handles both cases:
@@ -132,25 +145,49 @@ fn read_definition_context(
     let lines: Vec<&str> = content.lines().collect();
     let start = start_line_0 as usize;
 
-    // Find the keyword line by scanning forward past decorators
+    // Find the keyword line by scanning forward past decorators.
+    // Multi-line decorators like `@foo(\n  ...\n)` are tracked via paren depth.
     let mut def_idx = None;
+    let mut paren_depth: i32 = 0;
     for (i, line) in lines.iter().enumerate().skip(start) {
-        if !line.trim().starts_with('@') {
-            def_idx = Some(i);
-            break;
+        let trimmed = line.trim();
+        if paren_depth > 0 {
+            // Inside a multi-line decorator — keep scanning.
+            paren_depth += paren_delta(trimmed);
+            continue;
         }
+        if trimmed.starts_with('@') {
+            paren_depth += paren_delta(trimmed);
+            continue;
+        }
+        def_idx = Some(i);
+        break;
     }
     let def_idx = def_idx?;
     let definition_line = lines[def_idx].trim().to_string();
 
-    // Scan backwards from the keyword line to collect all decorators
-    let mut decorator_lines = Vec::new();
+    // Scan backwards from the keyword line to collect all decorator lines.
+    // Multi-line decorators: when we hit a `)` first, track paren depth
+    // backwards until we reach the `@` line.
+    let mut decorator_lines: Vec<&str> = Vec::new();
     let mut idx = def_idx;
+    let mut paren_depth: i32 = 0;
     while idx > 0 {
         idx -= 1;
         let trimmed = lines[idx].trim();
+        if paren_depth < 0 {
+            // Inside a multi-line decorator, scanning upwards.
+            decorator_lines.push(trimmed);
+            paren_depth += paren_delta(trimmed);
+            continue;
+        }
         if trimmed.starts_with('@') {
             decorator_lines.push(trimmed);
+            // Single-line decorator — continue scanning for more decorators above.
+        } else if trimmed.ends_with(')') || trimmed == ")" {
+            // Closing paren of a multi-line decorator — scan upwards for `@`.
+            decorator_lines.push(trimmed);
+            paren_depth += paren_delta(trimmed);
         } else {
             break;
         }
@@ -827,6 +864,7 @@ impl OutputFormatter {
     /// inheritance info that ty's hover strips away).
     /// For everything else: shows decorators + hover type (has inferred return types).
     /// Falls back to `empty_label` when no information is available.
+    #[allow(clippy::unused_self)]
     fn write_type_section(
         &self,
         output: &mut String,
@@ -836,9 +874,9 @@ impl OutputFormatter {
         cache: &SourceCache,
     ) {
         if let Some(location) = location {
-            let file_path = self.uri_to_path(&location.uri);
-            if let Some(ctx) = read_definition_context(cache, &file_path, location.range.start.line)
-            {
+            // Use absolute path for cache lookup (cache stores absolute paths from URIs).
+            let abs_path = location.uri.strip_prefix("file://").unwrap_or(&location.uri);
+            if let Some(ctx) = read_definition_context(cache, abs_path, location.range.start.line) {
                 // Show decorators
                 if let Some(decs) = &ctx.decorators {
                     output.push_str(decs);
@@ -3388,6 +3426,55 @@ mod tests {
         let decorators = ctx.decorators.unwrap();
         assert!(decorators.contains("@dataclass"));
         assert!(decorators.contains("@frozen"));
+    }
+
+    #[test]
+    fn test_read_definition_context_multiline_decorator_from_def_line() {
+        // LSP points to the `def` line; multi-line decorator should still be collected.
+        let path = "/tmp/test_def_ctx_multiline.py";
+        let content = "\
+@test_dec(
+    config=TestConfig(
+        paint_blue=True,
+        tags=[\"a\", \"b\"],
+        visibility=0.9,
+        something=1,
+    )
+)
+def complex_decorated(x: int, y: int) -> int:
+    return x + y
+";
+        let cache = SourceCache::from_entries([(path.to_string(), content.to_string())]);
+
+        // start_line_0 = 8 (the `def` line, 0-indexed)
+        let ctx = read_definition_context(&cache, path, 8).unwrap();
+        assert_eq!(ctx.definition_line, "def complex_decorated(x: int, y: int) -> int:");
+        assert!(ctx.decorators.is_some(), "multi-line decorator should be found");
+        let decs = ctx.decorators.unwrap();
+        assert!(decs.contains("@test_dec("), "should contain the decorator start: got {decs:?}");
+    }
+
+    #[test]
+    fn test_read_definition_context_multiline_decorator_from_at_line() {
+        // LSP points to the `@` line; forward scan should skip the decorator body.
+        let path = "/tmp/test_def_ctx_multiline2.py";
+        let content = "\
+@test_dec(
+    config=TestConfig(
+        paint_blue=True,
+    )
+)
+def complex_decorated(x: int) -> int:
+    return x
+";
+        let cache = SourceCache::from_entries([(path.to_string(), content.to_string())]);
+
+        // start_line_0 = 0 (the `@` line)
+        let ctx = read_definition_context(&cache, path, 0).unwrap();
+        assert_eq!(ctx.definition_line, "def complex_decorated(x: int) -> int:");
+        assert!(ctx.decorators.is_some(), "multi-line decorator should be found");
+        let decs = ctx.decorators.unwrap();
+        assert!(decs.contains("@test_dec("), "should contain the decorator start: got {decs:?}");
     }
 
     #[test]

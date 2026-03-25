@@ -4,8 +4,11 @@ Definition, type signature, and usages of a symbol — where it's defined, its t
 
 > **Backward compatibility:** `tyf inspect` still works as a hidden alias for `tyf show`.
 
+Use `Class.method` dotted notation to narrow to a specific class member.
+
 Examples:
   tyf show MyClass
+  tyf show MyClass.get_data             # narrow to a specific class method
   tyf show calculate_sum UserService    # multiple symbols at once
   tyf show MyClass --references         # also show all usages
   tyf show MyClass --doc                # include docstring
@@ -21,7 +24,7 @@ tyf show <SYMBOLS> [OPTIONS]
 ## Arguments
 
 **`<symbols>`** *(required)*
-: Symbol name(s) to show (supports multiple symbols)
+: Symbol name(s) to show. Use `Class.method` to narrow to a specific class.
 
 ## Options
 
@@ -42,6 +45,9 @@ tyf show <SYMBOLS> [OPTIONS]
 ```bash
 # Show a single symbol
 tyf show MyClass
+
+# Show a specific class method (dotted notation)
+tyf show MyClass.get_data
 
 # Show multiple symbols at once
 tyf show MyClass my_function

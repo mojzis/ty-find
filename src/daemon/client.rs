@@ -302,7 +302,13 @@ impl DaemonClient {
         workspace: PathBuf,
         query: String,
     ) -> Result<WorkspaceSymbolsResult> {
-        let params = WorkspaceSymbolsParams { workspace, query, limit: None, exact_name: None };
+        let params = WorkspaceSymbolsParams {
+            workspace,
+            query,
+            limit: None,
+            exact_name: None,
+            container_name: None,
+        };
         self.execute(Method::WorkspaceSymbols, params).await
     }
 
@@ -313,7 +319,33 @@ impl DaemonClient {
         query: String,
     ) -> Result<WorkspaceSymbolsResult> {
         let exact_name = Some(query.clone());
-        let params = WorkspaceSymbolsParams { workspace, query, limit: None, exact_name };
+        let params = WorkspaceSymbolsParams {
+            workspace,
+            query,
+            limit: None,
+            exact_name,
+            container_name: None,
+        };
+        self.execute(Method::WorkspaceSymbols, params).await
+    }
+
+    /// Execute a workspace symbols request filtered to exact name + container.
+    ///
+    /// Used for dotted notation like `Class.method`: searches for `symbol_name`
+    /// and filters results where `container_name` matches `container`.
+    pub async fn execute_workspace_symbols_exact_with_container(
+        &mut self,
+        workspace: PathBuf,
+        symbol_name: String,
+        container: String,
+    ) -> Result<WorkspaceSymbolsResult> {
+        let params = WorkspaceSymbolsParams {
+            workspace,
+            query: symbol_name.clone(),
+            limit: None,
+            exact_name: Some(symbol_name),
+            container_name: Some(container),
+        };
         self.execute(Method::WorkspaceSymbols, params).await
     }
 

@@ -30,6 +30,9 @@ maturin develop
 
 Run `tyf --help` and `tyf <cmd> --help` for CLI usage examples.
 
+Symbol commands (`show`, `find`, `refs`) support dotted notation to narrow to a class member:
+`tyf show Calculator.add`, `tyf find Database.get_data`, `tyf refs MyClass.method`.
+
 If formatting fails, fix it with `cargo fmt` and re-run the checks.
 
 ## Development Workflow

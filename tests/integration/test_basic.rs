@@ -905,3 +905,120 @@ async fn test_inspect_alias_matches_show() {
         "inspect alias should produce identical output to show"
     );
 }
+
+// ==================== Dotted notation tests ====================
+
+#[tokio::test]
+async fn test_show_dotted_notation() {
+    common::require_ty();
+
+    // Show Calculator.add — should find the `add` method inside Calculator
+    let mut cmd = cargo_bin_cmd!("tyf");
+    cmd.arg("--workspace").arg(workspace_root()).arg("show").arg("Calculator.add");
+
+    let output = cmd.output().expect("failed to run tyf");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "command failed: {stdout}");
+
+    // Should find the method definition
+    assert!(
+        predicate::str::contains("example.py:").eval(&stdout),
+        "dotted show should find Calculator.add, got:\n{stdout}"
+    );
+}
+
+#[tokio::test]
+async fn test_show_dotted_notation_nonexistent() {
+    common::require_ty();
+
+    // Show Calculator.nonexistent — should return empty (no fallback)
+    let mut cmd = cargo_bin_cmd!("tyf");
+    cmd.arg("--workspace").arg(workspace_root()).arg("show").arg("Calculator.nonexistent");
+
+    let output = cmd.output().expect("failed to run tyf");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "command failed: {stdout}");
+
+    // Should not find anything
+    assert!(
+        !predicate::str::contains("example.py:").eval(&stdout),
+        "dotted show with nonexistent member should return empty, got:\n{stdout}"
+    );
+}
+
+#[tokio::test]
+async fn test_show_bare_name_still_works() {
+    common::require_ty();
+
+    // Bare name (no dot) should still work — no regressions
+    let mut cmd = cargo_bin_cmd!("tyf");
+    cmd.arg("--workspace").arg(workspace_root()).arg("show").arg("calculate_sum");
+
+    let output = cmd.output().expect("failed to run tyf");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "command failed: {stdout}");
+
+    assert!(
+        predicate::str::contains("example.py:").eval(&stdout),
+        "bare name show should still work, got:\n{stdout}"
+    );
+}
+
+#[tokio::test]
+async fn test_find_dotted_notation() {
+    common::require_ty();
+
+    // Find Calculator.multiply — should find the method
+    let mut cmd = cargo_bin_cmd!("tyf");
+    cmd.arg("--workspace").arg(workspace_root()).arg("find").arg("Calculator.multiply");
+
+    let output = cmd.output().expect("failed to run tyf");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "command failed: {stdout}");
+
+    assert!(
+        predicate::str::contains("example.py:").eval(&stdout),
+        "dotted find should find Calculator.multiply, got:\n{stdout}"
+    );
+}
+
+#[tokio::test]
+async fn test_refs_dotted_notation() {
+    common::require_ty();
+
+    // Refs for Calculator.multiply — should find references
+    let mut cmd = cargo_bin_cmd!("tyf");
+    cmd.arg("--workspace").arg(workspace_root()).arg("refs").arg("Calculator.multiply");
+
+    let output = cmd.output().expect("failed to run tyf");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "command failed: {stdout}");
+
+    assert!(
+        predicate::str::contains("example.py:").eval(&stdout),
+        "dotted refs should find Calculator.multiply references, got:\n{stdout}"
+    );
+}
+
+#[tokio::test]
+async fn test_show_mixed_dotted_and_bare() {
+    common::require_ty();
+
+    // Mix dotted and bare names: tyf show Calculator.add hello_world
+    let mut cmd = cargo_bin_cmd!("tyf");
+    cmd.arg("--workspace")
+        .arg(workspace_root())
+        .arg("show")
+        .arg("Calculator.add")
+        .arg("hello_world");
+
+    let output = cmd.output().expect("failed to run tyf");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "command failed: {stdout}");
+
+    // Should find both symbols
+    assert!(
+        predicate::str::contains("hello_world").eval(&stdout),
+        "mixed notation should find bare name, got:\n{stdout}"
+    );
+}

@@ -2,6 +2,8 @@
 
 All usages of a symbol across the codebase. Useful before renaming or removing code to understand the impact.
 
+Use `Class.method` dotted notation to narrow to a specific class member.
+
 ## Usage
 
 ```
@@ -39,6 +41,9 @@ tyf refs -f main.py -l 10 -c 5
 
 # Symbol mode: find references by name
 tyf refs my_function
+
+# Symbol mode: dotted notation for a specific method
+tyf refs Calculator.add
 
 # Symbol mode: multiple symbols searched in parallel
 tyf refs my_function MyClass calculate_sum

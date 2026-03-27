@@ -199,6 +199,89 @@ async fn find_name_column(file_path: &str, line_0: u32, name: &str) -> Option<(u
     None
 }
 
+/// Parse dotted notation like `Container.member` into `(container, symbol)`.
+///
+/// Splits on the **last** dot so that `A.B.method` yields `("A.B", "method")`.
+/// Returns `None` for bare names (no dot), meaning "search without container filter".
+fn parse_dotted_symbol(input: &str) -> Option<(&str, &str)> {
+    let dot = input.rfind('.')?;
+    let container = &input[..dot];
+    let symbol = &input[dot + 1..];
+    if container.is_empty() || symbol.is_empty() {
+        return None;
+    }
+    Some((container, symbol))
+}
+
+/// Search workspace symbols with dotted-notation support.
+///
+/// If `symbol` contains a dot (e.g. `Class.method`), splits on the last dot,
+/// searches for the member name, then verifies each result is inside the
+/// expected container using the document symbol tree.
+/// Returns `(search_name, result)` where `search_name` is the symbol part
+/// actually searched for (the part after the last dot, or the full name).
+#[cfg(unix)]
+async fn workspace_symbols_dotted(
+    client: &mut DaemonClient,
+    workspace: PathBuf,
+    symbol: &str,
+) -> Result<(String, crate::daemon::protocol::WorkspaceSymbolsResult)> {
+    if let Some((container, member)) = parse_dotted_symbol(symbol) {
+        let result =
+            client.execute_workspace_symbols_exact(workspace.clone(), member.to_string()).await?;
+
+        if result.symbols.is_empty() {
+            return Ok((member.to_string(), result));
+        }
+
+        // Filter symbols by checking the document symbol tree for each file.
+        // A symbol qualifies if find_enclosing_symbol returns a path starting
+        // with the container name (e.g. "Calculator.add" starts with "Calculator").
+        let mut doc_sym_cache: HashMap<String, Vec<DocumentSymbol>> = HashMap::new();
+        let mut filtered = Vec::new();
+
+        for sym_info in result.symbols {
+            let file_path = sym_info
+                .location
+                .uri
+                .strip_prefix("file://")
+                .unwrap_or(&sym_info.location.uri)
+                .to_string();
+
+            let doc_symbols = if let Some(cached) = doc_sym_cache.get(&file_path) {
+                cached
+            } else {
+                let ds = client
+                    .execute_document_symbols(workspace.clone(), file_path.clone())
+                    .await
+                    .map(|r| r.symbols)
+                    .unwrap_or_default();
+                doc_sym_cache.entry(file_path.clone()).or_insert(ds)
+            };
+
+            let line = sym_info.location.range.start.line;
+            let character = sym_info.location.range.start.character;
+            if let Some(enclosing) = find_enclosing_symbol(doc_symbols, line, character) {
+                // enclosing is like "Calculator.add"; container is "Calculator"
+                // Check that enclosing starts with container (exact segment match)
+                if enclosing == format!("{container}.{member}")
+                    || enclosing.starts_with(&format!("{container}."))
+                {
+                    filtered.push(sym_info);
+                }
+            }
+        }
+
+        Ok((
+            member.to_string(),
+            crate::daemon::protocol::WorkspaceSymbolsResult { symbols: filtered },
+        ))
+    } else {
+        let result = client.execute_workspace_symbols_exact(workspace, symbol.to_string()).await?;
+        Ok((symbol.to_string(), result))
+    }
+}
+
 /// Try to parse a string as `file:line:col`. Returns `None` if it doesn't match.
 fn parse_file_position(input: &str) -> Option<(String, u32, u32)> {
     let last_colon = input.rfind(':')?;
@@ -263,9 +346,8 @@ async fn resolve_symbols_to_queries(
     } else {
         let mut client = DaemonClient::connect_with_timeout(timeout).await?;
         for symbol in symbols {
-            let result = client
-                .execute_workspace_symbols_exact(workspace_root.to_path_buf(), symbol.clone())
-                .await?;
+            let (_search_name, result) =
+                workspace_symbols_dotted(&mut client, workspace_root.to_path_buf(), symbol).await?;
 
             if result.symbols.is_empty() {
                 resolved.push(ResolvedQuery {
@@ -755,15 +837,20 @@ async fn find_symbol_via_workspace(
     ensure_daemon_running().await?;
     let mut client = connect_daemon(timeout, debug_log).await?;
 
-    // Use exact_name filter so the daemon only returns symbols with matching names,
-    // avoiding serialization of thousands of fuzzy matches.
-    let result = client
-        .execute_workspace_symbols_exact(workspace_root.to_path_buf(), symbol.to_string())
-        .await?;
+    // Use exact_name filter (with optional container filter for dotted notation)
+    // so the daemon only returns symbols with matching names.
+    let (_search_name, result) =
+        workspace_symbols_dotted(&mut client, workspace_root.to_path_buf(), symbol).await?;
 
-    // If exact matches found, use them; otherwise fall back to fuzzy search.
+    // If exact matches found, use them; otherwise fall back to fuzzy search
+    // (only for bare names — dotted notation never falls back to avoid confusion).
     if !result.symbols.is_empty() {
         return Ok(result.symbols.into_iter().map(|s| s.location).collect());
+    }
+
+    if parse_dotted_symbol(symbol).is_some() {
+        // Dotted notation: no fallback to fuzzy search
+        return Ok(Vec::new());
     }
 
     // Fallback: fuzzy search (no exact_name filter), reuse the same connection
@@ -988,11 +1075,10 @@ async fn inspect_single_symbol(
             // File-based search doesn't provide symbol kind
             (client, file_str.to_string(), first_line, first_col, all_definitions, None)
         } else {
-            // Use exact_name filter to avoid transferring thousands of fuzzy matches
+            // Use exact_name filter (with optional container for dotted notation)
             let mut client = DaemonClient::connect_with_timeout(timeout).await?;
-            let result = client
-                .execute_workspace_symbols_exact(workspace_root.to_path_buf(), symbol.to_string())
-                .await?;
+            let (_search_name, result) =
+                workspace_symbols_dotted(&mut client, workspace_root.to_path_buf(), symbol).await?;
 
             let matched = &result.symbols;
 
@@ -1702,5 +1788,32 @@ mod tests {
         let args = vec!["foo".to_string(), "bar".to_string()];
         let result = collect_queries(&args, false).unwrap();
         assert_eq!(result, vec!["foo", "bar"]);
+    }
+
+    #[test]
+    fn test_parse_dotted_symbol_simple() {
+        assert_eq!(parse_dotted_symbol("Class.method"), Some(("Class", "method")));
+    }
+
+    #[test]
+    fn test_parse_dotted_symbol_multiple_dots() {
+        // Split on last dot: A.B.method → ("A.B", "method")
+        assert_eq!(parse_dotted_symbol("A.B.method"), Some(("A.B", "method")));
+    }
+
+    #[test]
+    fn test_parse_dotted_symbol_bare_name() {
+        assert_eq!(parse_dotted_symbol("my_function"), None);
+        assert_eq!(parse_dotted_symbol("MyClass"), None);
+    }
+
+    #[test]
+    fn test_parse_dotted_symbol_edge_cases() {
+        // Leading dot → empty container
+        assert_eq!(parse_dotted_symbol(".method"), None);
+        // Trailing dot → empty symbol
+        assert_eq!(parse_dotted_symbol("Class."), None);
+        // Just a dot
+        assert_eq!(parse_dotted_symbol("."), None);
     }
 }

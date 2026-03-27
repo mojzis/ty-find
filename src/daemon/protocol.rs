@@ -386,6 +386,11 @@ pub struct WorkspaceSymbolsParams {
     /// results are filtered daemon-side before serialization.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub exact_name: Option<String>,
+
+    /// If set, only return symbols whose `container_name` exactly matches
+    /// this string. Used for dotted notation like `Class.method`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub container_name: Option<String>,
 }
 
 /// Parameters for document symbols request.

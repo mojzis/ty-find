@@ -87,8 +87,10 @@ pub enum Commands {
         long_about = "Definition, signature, and usages of a symbol \u{2014} where it's defined, \
         its type signature, and optionally all usages. Searches the whole project by name, \
         no file path needed.\n\n\
+        Use Class.method dotted notation to narrow to a specific class member.\n\n\
         Examples:\n  \
         tyf show MyClass\n  \
+        tyf show MyClass.get_data             # narrow to a specific class method\n  \
         tyf show calculate_sum UserService    # multiple symbols at once\n  \
         tyf show MyClass --doc                # include docstring\n  \
         tyf show MyClass --references         # also show all usages\n  \
@@ -96,7 +98,7 @@ pub enum Commands {
         tyf show MyClass --file src/models.py # narrow to one file"
     )]
     Show {
-        /// Symbol name(s) to show (supports multiple symbols)
+        /// Symbol name(s) to show. Use Class.method to narrow to a specific class.
         #[arg(required = true, num_args = 1..)]
         symbols: Vec<String>,
 
@@ -128,15 +130,17 @@ pub enum Commands {
     /// Find where a symbol is defined by name (--fuzzy for partial matching)
     #[command(long_about = "Find where a function, class, or variable is defined. Searches the \
         whole project by name \u{2014} no need to know which file it's in.\n\n\
+        Use Class.method dotted notation to narrow to a specific class member.\n\
         Use --fuzzy for partial/prefix matching (returns richer symbol information \
         including kind and container name).\n\n\
         Examples:\n  \
         tyf find calculate_sum\n  \
+        tyf find Calculator.add                  # find a specific class method\n  \
         tyf find calculate_sum multiply divide   # multiple symbols at once\n  \
         tyf find handler --file src/routes.py    # narrow to one file\n  \
         tyf find handle_ --fuzzy                 # fuzzy/prefix match")]
     Find {
-        /// Symbol name(s) to find (supports multiple symbols)
+        /// Symbol name(s) to find. Use Class.method to narrow to a specific class.
         #[arg(required = true, num_args = 1..)]
         symbols: Vec<String>,
 
@@ -154,9 +158,11 @@ pub enum Commands {
         name = "refs",
         long_about = "All usages of a symbol across the codebase. Useful before \
         renaming or removing code to understand the impact.\n\n\
+        Use Class.method dotted notation to narrow to a specific class member.\n\n\
         Examples:\n  \
         tyf refs myfile.py -l 10 -c 5\n  \
         tyf refs my_func my_class\n  \
+        tyf refs Calculator.add                 # refs for a specific method\n  \
         tyf refs file.py:10:5 my_func\n  \
         ... | tyf refs --stdin"
     )]

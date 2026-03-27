@@ -24,6 +24,7 @@ No file path needed — it searches the whole project by name.
 
 ```
 tyf show MyClass
+tyf show MyClass.get_data                # narrow to a specific class method
 tyf show calculate_sum UserService       # multiple symbols at once
 tyf show MyClass --references            # also list all usages
 tyf show MyClass --doc                   # include docstring
@@ -40,6 +41,7 @@ Use `--fuzzy` for partial/prefix matching with richer output (kind + container).
 
 ```
 tyf find calculate_sum
+tyf find Calculator.add                     # find a specific class method
 tyf find calculate_sum multiply divide      # multiple symbols at once
 tyf find handler --file src/routes.py       # narrow to one file
 tyf find handle_ --fuzzy                    # fuzzy/prefix match
@@ -53,6 +55,7 @@ code — tells you exactly what will break.
 
 ```
 tyf refs my_func my_class                   # by name
+tyf refs Calculator.add                     # refs for a specific method
 tyf refs -f myfile.py -l 10 -c 5           # by position
 tyf refs file.py:10:5 my_func              # mixed
 ... | tyf refs --stdin                      # piped input

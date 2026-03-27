@@ -424,6 +424,11 @@ impl DaemonServer {
             symbols.retain(|s| s.name == *exact_name);
         }
 
+        // Filter by container name if specified (dotted notation: Class.method)
+        if let Some(ref container) = params.container_name {
+            symbols.retain(|s| s.container_name.as_deref() == Some(container.as_str()));
+        }
+
         // Apply limit if specified
         if let Some(limit) = params.limit {
             symbols.truncate(limit);

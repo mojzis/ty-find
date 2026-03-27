@@ -215,8 +215,9 @@ fn parse_dotted_symbol(input: &str) -> Option<(&str, &str)> {
 
 /// Search workspace symbols with dotted-notation support.
 ///
-/// If `symbol` contains a dot (e.g. `Class.method`), splits on the last dot
-/// and filters results by `container_name`. Otherwise searches by exact name.
+/// If `symbol` contains a dot (e.g. `Class.method`), splits on the last dot,
+/// searches for the member name, then verifies each result is inside the
+/// expected container using the document symbol tree.
 /// Returns `(search_name, result)` where `search_name` is the symbol part
 /// actually searched for (the part after the last dot, or the full name).
 #[cfg(unix)]
@@ -226,14 +227,55 @@ async fn workspace_symbols_dotted(
     symbol: &str,
 ) -> Result<(String, crate::daemon::protocol::WorkspaceSymbolsResult)> {
     if let Some((container, member)) = parse_dotted_symbol(symbol) {
-        let result = client
-            .execute_workspace_symbols_exact_with_container(
-                workspace,
-                member.to_string(),
-                container.to_string(),
-            )
-            .await?;
-        Ok((member.to_string(), result))
+        let result =
+            client.execute_workspace_symbols_exact(workspace.clone(), member.to_string()).await?;
+
+        if result.symbols.is_empty() {
+            return Ok((member.to_string(), result));
+        }
+
+        // Filter symbols by checking the document symbol tree for each file.
+        // A symbol qualifies if find_enclosing_symbol returns a path starting
+        // with the container name (e.g. "Calculator.add" starts with "Calculator").
+        let mut doc_sym_cache: HashMap<String, Vec<DocumentSymbol>> = HashMap::new();
+        let mut filtered = Vec::new();
+
+        for sym_info in result.symbols {
+            let file_path = sym_info
+                .location
+                .uri
+                .strip_prefix("file://")
+                .unwrap_or(&sym_info.location.uri)
+                .to_string();
+
+            let doc_symbols = if let Some(cached) = doc_sym_cache.get(&file_path) {
+                cached
+            } else {
+                let ds = client
+                    .execute_document_symbols(workspace.clone(), file_path.clone())
+                    .await
+                    .map(|r| r.symbols)
+                    .unwrap_or_default();
+                doc_sym_cache.entry(file_path.clone()).or_insert(ds)
+            };
+
+            let line = sym_info.location.range.start.line;
+            let character = sym_info.location.range.start.character;
+            if let Some(enclosing) = find_enclosing_symbol(doc_symbols, line, character) {
+                // enclosing is like "Calculator.add"; container is "Calculator"
+                // Check that enclosing starts with container (exact segment match)
+                if enclosing == format!("{container}.{member}")
+                    || enclosing.starts_with(&format!("{container}."))
+                {
+                    filtered.push(sym_info);
+                }
+            }
+        }
+
+        Ok((
+            member.to_string(),
+            crate::daemon::protocol::WorkspaceSymbolsResult { symbols: filtered },
+        ))
     } else {
         let result = client.execute_workspace_symbols_exact(workspace, symbol.to_string()).await?;
         Ok((symbol.to_string(), result))

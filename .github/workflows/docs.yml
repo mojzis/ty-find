@@ -46,7 +46,7 @@ jobs:
       - name: Generate llms.txt
         run: bash docs/generate-llms-txt.sh
 
-      - uses: actions/upload-pages-artifact@v4
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: docs/book/html
 

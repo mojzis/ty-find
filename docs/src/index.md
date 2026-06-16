@@ -18,6 +18,10 @@ LSP servers are the gold standard for code intelligence, but they require file p
 
 tyf breaks this cycle: symbol name in → structured LSP knowledge out. No file paths, no line numbers, no grep step needed.
 
+### vs ty check
+
+tyf surfaces ty's **navigation and symbol** knowledge — definitions, signatures, and references — **not** ty's type-checking diagnostics. So the false-positive noise that affects `ty check` on dynamic frameworks (Pydantic, SQLAlchemy, and similar) never appears in tyf output, because tyf doesn't report type errors at all. See [Relationship to ty](relationship-to-ty.md) for how the two tools relate.
+
 ## Installation
 
 ty-find requires [ty](https://github.com/astral-sh/ty) to be installed and on PATH.

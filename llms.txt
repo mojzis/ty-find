@@ -9,6 +9,23 @@ line numbers. A background daemon keeps responses under 100ms.
 
 Also useful for humans who want fast, precise Python navigation from the terminal.
 
+## Relationship to ty
+
+tyf is an adapter over ty's LSP server; it does no Python analysis of its own.
+
+- **tyf does not ship ty.** ty is a required peer dependency you install yourself
+  (`uv add --dev ty`). tyf does not bundle or pin a copy — at runtime it binds to
+  whatever ty is on PATH, falling back to `uvx ty`. The analysis you get depends on
+  the installed ty version, not the tyf version.
+- **ty is pre-release (`0.0.x`)** with frequent breaking changes, including to
+  LSP/diagnostic behavior. A ty upgrade can change tyf output with no change to tyf.
+  Keep ty current within the supported range; if results shift after a ty upgrade,
+  check `ty --version` (or `uvx ty --version`) against the supported list.
+- **Navigation, not diagnostics.** tyf surfaces ty's navigation/symbol knowledge —
+  definitions, signatures, references, members — not ty's type-checking diagnostics.
+  tyf never reports type errors, so the false-positive noise that affects `ty check`
+  on dynamic frameworks (Pydantic, SQLAlchemy, etc.) does not appear in tyf output.
+
 ## Commands
 
 ### show — Definition, type signature, and usages of a symbol by name
@@ -137,7 +154,7 @@ Install [ripgrep](https://github.com/BurntSushi/ripgrep) (`rg`) to speed up look
 
 ## Installation
 
-Requires [ty](https://github.com/astral-sh/ty) (`uv add --dev ty`).
+Requires [ty](https://github.com/astral-sh/ty) (`uv add --dev ty`) — see Relationship to ty above.
 Optional: [ripgrep](https://github.com/BurntSushi/ripgrep) for faster non-existent symbol lookups.
 
 ```
@@ -145,3 +162,41 @@ pip install ty-find
 # or
 uv add --dev ty-find
 ```
+
+## Supported ty versions
+
+Placeholder — pending the version-floor task. The concrete list of supported ty
+versions is owned by a single source of truth (version-floor / CI task) that is not
+in the repository yet, so no version numbers are listed here (and none are invented).
+Policy: tyf is tested against specific pinned ty versions and supports a contiguous
+range, from a documented floor up to the latest tested release. Until the source
+lands, check your own version with `ty --version` (or `uvx ty --version`).
+
+## Testing
+
+tyf's integration tests drive a real `ty lsp` process (ty is never mocked): each test
+spawns the actual tyf binary, which starts a real daemon and a real ty LSP server, and
+asserts on structured output for fixtures at the repo root (`example.py`,
+`test_project/`, `test_project2/`). Suites live in `tests/integration/`.
+
+```
+uv add --dev ty              # ty required for integration tests
+cargo test --all-features    # unit + integration
+cargo test --test test_basic # just the basic integration suite
+```
+
+CI runs `cargo test --all-features` with ty installed, plus a smoke-test workflow
+(`benchmarks/smoke.sh`) against the release binary.
+
+## Troubleshooting
+
+- **Empty results for something that should exist** has two causes. (a) The symbol
+  isn't statically visible (dynamic constructs: `getattr`, runtime-generated classes,
+  metaprogramming). (b) ty couldn't resolve the environment (wrong interpreter, missing
+  stubs, third-party package not installed). Diagnose with `ty check <file>`: unresolved
+  imports mean an environment problem, not a tyf bug.
+- **Which ty am I running, and is it supported?** Print `ty --version` (or
+  `uvx ty --version`) and compare against the supported list.
+- **Signatures show a source annotation or `(unannotated)`.** Expected, not a bug:
+  when ty can't resolve a type (e.g. missing stubs), tyf falls back to the literal
+  source annotation instead of `Unknown`; no annotation is shown as `(unannotated)`.

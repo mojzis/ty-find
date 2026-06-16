@@ -16,6 +16,12 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  # Nightly drift sweep: floor + latest + a RANDOM in-between version (see the
+  # integration-random job). Non-blocking and only on schedule/dispatch, so the
+  # per-PR gate stays deterministic and reproducible while we still get broad
+  # coverage across the supported range over time.
+  schedule:
+    - cron: "0 6 * * *"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -42,12 +48,22 @@ jobs:
     outputs:
       blocking: ${{ steps.read.outputs.blocking }}
       non_blocking: ${{ steps.read.outputs.non_blocking }}
+      random: ${{ steps.read.outputs.random }}
     steps:
       - uses: actions/checkout@v6
       - id: read
         run: |
           echo "blocking=$(jq -c '.matrix.blocking' ci/ty-versions.json)" >> "$GITHUB_OUTPUT"
           echo "non_blocking=$(jq -c '.matrix.non_blocking' ci/ty-versions.json)" >> "$GITHUB_OUTPUT"
+          # Nightly drift set: floor + latest + one RANDOM version strictly
+          # between them, drawn fresh each run from the supported range.
+          floor=$(jq -r '.floor' ci/ty-versions.json)
+          latest=$(jq -r '.latest' ci/ty-versions.json)
+          mid=$(jq -r '.supported[]' ci/ty-versions.json \
+                | grep -vx "$floor" | grep -vx "$latest" | shuf -n1)
+          random=$(jq -nc --arg f "$floor" --arg m "$mid" --arg l "$latest" '[$f, $m, $l]')
+          echo "random=$random" >> "$GITHUB_OUTPUT"
+          echo "Nightly random drift set: $random"
 
   # Blocking jobs: floor + middle versions. A regression here fails the PR.
   integration:
@@ -59,6 +75,43 @@ jobs:
       fail-fast: false
       matrix:
         ty: ${{ fromJSON(needs.load-versions.outputs.blocking) }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Install pinned ty
+        run: pip install "ty==${{ matrix.ty }}"
+      - name: Verify ty version
+        run: ty --version
+      - name: Install ripgrep
+        run: sudo apt-get update && sudo apt-get install -y ripgrep
+      - name: Run integration suite
+        run: |
+          cargo test --test test_basic \
+                     --test test_daemon \
+                     --test test_project_smoke \
+                     --test test_complex_project \
+                     --test test_multi_workspace
+
+  # Nightly drift sweep: floor + latest + a RANDOM in-between version, drawn
+  # fresh each scheduled run. Non-blocking and gated to schedule/dispatch so the
+  # per-PR matrix stays deterministic. Over a week of nightlies this covers the
+  # whole supported range and pings us about mid-range regressions.
+  integration-random:
+    name: Integration (ty ${{ matrix.ty }}, nightly drift — non-blocking)
+    needs: load-versions
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        ty: ${{ fromJSON(needs.load-versions.outputs.random) }}
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable

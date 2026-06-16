@@ -174,6 +174,23 @@ cargo fmt --check
 RUST_LOG=ty_find=debug cargo run -- find hello_world
 ```
 
+### Testing / supported `ty` versions
+
+`tyf` does not ship `ty` — it drives whatever `ty` LSP server you have
+installed. `ty` is `0.0.x` and changes frequently, so the integration suite is
+run in CI against a curated set of **pinned, exact** `ty` versions on every push
+and PR (and on dependabot `ty` bumps).
+
+The tested floor is **`0.0.15`** and the current latest tested is **`0.0.49`**.
+This is a practical baseline, not a hard limit: the suite behaves identically
+(same output, same ~180ms cold start) across the whole modern range — genuine
+capability gaps only exist in `ty ≤ 0.0.5`, which don't return multi-file
+workspace symbols (`0.0.1` has no Linux glibc wheel at all).
+
+The exact list of tested versions is the single source of truth in
+[`ci/ty-versions.json`](ci/ty-versions.json); the methodology and per-version
+findings are in [`docs/dev/TY_VERSIONS.md`](docs/dev/TY_VERSIONS.md).
+
 ## Troubleshooting
 
 ```bash

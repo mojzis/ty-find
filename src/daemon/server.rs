@@ -535,7 +535,20 @@ impl DaemonServer {
         let hover = Self::hover_with_warmup(&client, &file_str, params.line, params.column).await?;
 
         let references = if params.include_references {
-            client.find_references(&file_str, params.line, params.column, false).await?
+            // Mirror the standalone references handler's cold-start retry: on a
+            // freshly spawned daemon `ty` can return an empty reference set
+            // before indexing settles, and `show` must not report "# Refs: none"
+            // for a symbol that genuinely has references. Without this retry the
+            // enrichment path raced the index (the only nondeterminism the
+            // integration suite exhibited at a fixed `ty`).
+            with_warmup(
+                "inspect references",
+                &WARMUP_DELAYS,
+                |locs: &Vec<Location>| !locs.is_empty(),
+                || client.find_references(&file_str, params.line, params.column, false),
+                None,
+            )
+            .await?
         } else {
             Vec::new()
         };
@@ -559,7 +572,17 @@ impl DaemonServer {
         let file_str = resolved.to_string_lossy().to_string();
         client.open_document(&file_str).await?;
 
-        let doc_symbols = client.document_symbols(&file_str).await?;
+        // Retry on cold start like `handle_document_symbols`: a freshly spawned
+        // daemon can return an empty symbol set before indexing settles, which
+        // would make a real class look "not found".
+        let doc_symbols = with_warmup(
+            "members document symbols",
+            &WARMUP_DELAYS,
+            |syms: &Vec<DocumentSymbol>| !syms.is_empty(),
+            || client.document_symbols(&file_str),
+            None,
+        )
+        .await?;
 
         // Find the target class anywhere in the symbol tree (may be nested)
         let target = Self::find_symbol_recursive(&doc_symbols, &params.class_name);

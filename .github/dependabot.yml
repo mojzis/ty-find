@@ -24,3 +24,22 @@ updates:
     labels:
       - "dependencies"
       - "ci"
+
+  # Python dependencies (uv). `ty` is declared here (pyproject.toml
+  # [dependency-groups].dev) and pinned in uv.lock. Dependabot's "pip"
+  # ecosystem auto-detects uv projects and bumps uv.lock, so a new `ty`
+  # release opens a PR. Daily cadence surfaces new ty releases promptly.
+  # That PR is validated by the ty Version Matrix workflow, which runs on every
+  # pull_request (including dependabot's).
+  #
+  # Note: PEP 735 [dependency-groups] are currently treated as production deps
+  # by dependabot (dev/prod grouping is still WIP upstream), but the `ty` bump
+  # still happens — which is all this story needs.
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "daily"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "python"

@@ -31,19 +31,18 @@ Practical guidance:
 
 ## Supported ty versions
 
-<!-- TODO(version-floor): replace this placeholder with a reference to the single
-     source of truth for supported ty versions once the version-floor / CI task
-     lands. Do not hardcode a second copy of the version list here. -->
+`tyf` is tested against a contiguous range of **pinned, exact** `ty` versions, from a documented floor up to the latest tested release:
 
-> **⚠️ Placeholder — pending the version-floor task.**
-> The concrete list of supported `ty` versions is owned by the version-floor / CI
-> task as a **single source of truth**. That source is not in this repository yet,
-> so **no version numbers are listed here** (and none are invented). When the
-> source lands, this section will reference it rather than copy it.
+- **Floor:** `0.0.15`
+- **Latest tested:** `0.0.49`
 
-**Support policy.** `tyf` is tested against specific pinned `ty` versions and supports a contiguous range — from a documented floor up to the latest tested release. The exact floor, the latest tested version, and the policy's bound (for example latest-N) are defined by the version-floor task referenced above.
+This is a *practical* baseline, not a hard technical limit. The integration suite behaves identically — same output, same ~180ms cold start — across the whole modern range; the only genuine capability gaps are in `ty ≤ 0.0.5` (no multi-file workspace symbols), and `0.0.1` has no Linux glibc wheel at all.
 
-In the meantime, you can always check which `ty` you are running:
+> **Single source of truth.** The exact list of tested versions, the floor, and the latest tested release live in [`ci/ty-versions.json`](https://github.com/mojzis/ty-find/blob/main/ci/ty-versions.json). The CI matrix and the docs read from it — the version numbers above are a convenience summary, not a second copy of the list. The methodology and per-version findings are in [`docs/dev/TY_VERSIONS.md`](https://github.com/mojzis/ty-find/blob/main/docs/dev/TY_VERSIONS.md).
+
+**Support policy.** `tyf` supports the range from the floor up to the latest tested version. Because `ty` is pre-release and changes often, a `ty` version outside this range may produce different output (or none) without that being a `tyf` bug — check your version first when results shift after an upgrade.
+
+You can always check which `ty` you are running:
 
 ```bash
 ty --version
@@ -82,5 +81,16 @@ cargo test --test test_basic
 
 CI runs the same `cargo test --all-features` suite with `ty` installed, plus a separate smoke-test workflow (`benchmarks/smoke.sh`) against the release binary.
 
-<!-- Gated: not yet shipped. -->
-> _Planned (not yet shipped): running the integration suite against each pinned `ty` version in the supported range, driven by the version-floor task's source of truth._
+### Testing across ty versions
+
+Because `tyf` binds to whatever `ty` you have installed, green CI against a single pinned `ty` proves little about the version a user actually runs. So the integration suite is also run against a **curated set of pinned, exact `ty` versions** by the [`ty-version-matrix`](https://github.com/mojzis/ty-find/blob/main/.github/workflows/ty-version-matrix.yml) workflow. The version list is read from [`ci/ty-versions.json`](https://github.com/mojzis/ty-find/blob/main/ci/ty-versions.json) (the single source of truth), so it lives in exactly one place. The matrix has three tiers:
+
+| Tier | When | Versions | Effect |
+|------|------|----------|--------|
+| **Blocking** | every push / PR | floor + middle versions (`0.0.15`, `0.0.18`, `0.0.33`) | a regression here fails the PR |
+| **Latest (non-blocking)** | every push / PR | latest tested (`0.0.49`) | `continue-on-error` — a fresh `ty` release that breaks the suite pings us without blocking unrelated PRs |
+| **Nightly drift (non-blocking)** | scheduled (cron) | floor + latest + one *random* in-between version | over a week of nightlies the whole supported range is covered, while the per-PR gate stays deterministic |
+
+This also catches dependabot `ty` bumps before merge. The full sweep methodology, the empirical floor rationale, and per-version findings are in [`docs/dev/TY_VERSIONS.md`](https://github.com/mojzis/ty-find/blob/main/docs/dev/TY_VERSIONS.md).
+
+Linux only: the daemon needs a Unix domain socket, so the matrix does not cover Windows (only `tyf find --file` works there); macOS is covered by the release-build workflow.

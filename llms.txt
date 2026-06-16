@@ -165,12 +165,14 @@ uv add --dev ty-find
 
 ## Supported ty versions
 
-Placeholder — pending the version-floor task. The concrete list of supported ty
-versions is owned by a single source of truth (version-floor / CI task) that is not
-in the repository yet, so no version numbers are listed here (and none are invented).
-Policy: tyf is tested against specific pinned ty versions and supports a contiguous
-range, from a documented floor up to the latest tested release. Until the source
-lands, check your own version with `ty --version` (or `uvx ty --version`).
+tyf is tested against a contiguous range of pinned, exact ty versions: floor `0.0.15`
+up to latest tested `0.0.49`. This is a practical baseline, not a hard limit — the suite
+behaves identically across the modern range; genuine capability gaps only exist in
+ty <= 0.0.5 (no multi-file workspace symbols), and 0.0.1 has no Linux glibc wheel.
+Single source of truth for the exact list/floor/latest is `ci/ty-versions.json`; the
+methodology and per-version findings are in `docs/dev/TY_VERSIONS.md`. ty is pre-release
+(`0.0.x`), so if results shift after an upgrade, check your version (`ty --version` or
+`uvx ty --version`) against the supported range first.
 
 ## Testing
 
@@ -187,6 +189,15 @@ cargo test --test test_basic # just the basic integration suite
 
 CI runs `cargo test --all-features` with ty installed, plus a smoke-test workflow
 (`benchmarks/smoke.sh`) against the release binary.
+
+Testing across ty versions: because tyf binds to whatever ty is installed, the
+integration suite is also run against a curated set of pinned, exact ty versions by the
+`.github/workflows/ty-version-matrix.yml` workflow (version list read from
+`ci/ty-versions.json`). Three tiers: blocking (floor + middles 0.0.15/0.0.18/0.0.33,
+runs per push/PR, regression fails the PR); latest non-blocking (0.0.49, continue-on-error
+so a fresh ty release pings without blocking PRs); nightly drift non-blocking (floor +
+latest + one random in-between, covering the whole range over time). Linux only (the
+daemon needs a Unix domain socket). Also catches dependabot ty bumps.
 
 ## Troubleshooting
 

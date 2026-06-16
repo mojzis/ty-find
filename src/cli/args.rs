@@ -87,7 +87,9 @@ pub enum Commands {
         long_about = "Definition, signature, and usages of a symbol \u{2014} where it's defined, \
         its type signature, and optionally all usages. Searches the whole project by name, \
         no file path needed.\n\n\
-        Use Class.method dotted notation to narrow to a specific class member.\n\n\
+        Use Class.member dotted notation (one level only) to narrow to a specific class \
+        member. Module-qualified names (module.func) and nested paths (Outer.Inner.method) \
+        are not supported; using 2+ dots is a usage error.\n\n\
         When ty cannot resolve a type (e.g. missing third-party stubs), the signature \
         shows the literal source annotation instead of 'Unknown'; a symbol with no \
         annotation is marked '(unannotated)'.\n\n\
@@ -101,7 +103,7 @@ pub enum Commands {
         tyf show MyClass --file src/models.py # narrow to one file"
     )]
     Show {
-        /// Symbol name(s) to show. Use Class.method to narrow to a specific class.
+        /// Symbol name(s) to show. Use Class.member (one level) to narrow to a class member.
         #[arg(required = true, num_args = 1..)]
         symbols: Vec<String>,
 
@@ -133,7 +135,9 @@ pub enum Commands {
     /// Find where a symbol is defined by name (--fuzzy for partial matching)
     #[command(long_about = "Find where a function, class, or variable is defined. Searches the \
         whole project by name \u{2014} no need to know which file it's in.\n\n\
-        Use Class.method dotted notation to narrow to a specific class member.\n\
+        Use Class.member dotted notation (one level only) to narrow to a specific class \
+        member. Module-qualified names (module.func) and nested paths (Outer.Inner.method) \
+        are not supported; using 2+ dots is a usage error.\n\
         Use --fuzzy for partial/prefix matching (returns richer symbol information \
         including kind and container name).\n\n\
         Examples:\n  \
@@ -143,7 +147,7 @@ pub enum Commands {
         tyf find handler --file src/routes.py    # narrow to one file\n  \
         tyf find handle_ --fuzzy                 # fuzzy/prefix match")]
     Find {
-        /// Symbol name(s) to find. Use Class.method to narrow to a specific class.
+        /// Symbol name(s) to find. Use Class.member (one level) to narrow to a class member.
         #[arg(required = true, num_args = 1..)]
         symbols: Vec<String>,
 
@@ -161,7 +165,9 @@ pub enum Commands {
         name = "refs",
         long_about = "All usages of a symbol across the codebase. Useful before \
         renaming or removing code to understand the impact.\n\n\
-        Use Class.method dotted notation to narrow to a specific class member.\n\n\
+        Use Class.member dotted notation (one level only) to narrow to a specific class \
+        member. Module-qualified names (module.func) and nested paths (Outer.Inner.method) \
+        are not supported; using 2+ dots is a usage error.\n\n\
         Examples:\n  \
         tyf refs myfile.py -l 10 -c 5\n  \
         tyf refs my_func my_class\n  \

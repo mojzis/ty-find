@@ -58,6 +58,14 @@ async fn main() {
     }
 
     if let Err(e) = result {
+        // Usage errors (e.g. malformed dotted notation) print their message
+        // verbatim and exit with a distinct code so callers can tell a bad
+        // invocation apart from a clean "not found" (which exits 0).
+        if let Some(usage) = e.downcast_ref::<commands::UsageError>() {
+            eprintln!("{}", styler.error(&usage.0));
+            #[allow(clippy::exit)]
+            std::process::exit(2);
+        }
         eprintln!("{}", styler.error(&format!("Error: {}", format_error_chain(&e))));
         #[allow(clippy::exit)]
         std::process::exit(1);

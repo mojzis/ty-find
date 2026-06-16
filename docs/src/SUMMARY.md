@@ -6,6 +6,7 @@
 
 - [Setup with Claude Code](setup.md)
 - [How It Works](how-it-works.md)
+- [Relationship to ty](relationship-to-ty.md)
 
 # Commands
 

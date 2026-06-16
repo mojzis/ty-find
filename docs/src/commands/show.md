@@ -65,6 +65,15 @@ tyf show MyClass --all
 tyf inspect MyClass
 ```
 
+## Unresolved types
+
+The type/signature section shows the symbol's type. When ty cannot resolve an
+annotation (for example because third-party stubs aren't installed), tyf shows
+the **literal source annotation** instead of `Unknown` — so a method written as
+`-> pa.Table` displays `-> pa.Table` even when `pyarrow` isn't resolvable. A
+symbol with no annotation in source is marked `(unannotated)`. See
+[members](members.md#unresolved-types) for details.
+
 ## See also
 
 - [Commands Overview](overview.md)

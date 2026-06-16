@@ -101,6 +101,30 @@ pub struct OutputFormatter {
     s: Styler,
 }
 
+/// Replace a `Unknown` type with the source annotation at `location`.
+///
+/// When ty couldn't resolve an annotation it renders the type as `Unknown`; we
+/// recover the literal source annotation (or `(unannotated)`) from the cached
+/// file at the definition location. Falls back to `rendered` unchanged when no
+/// location/source is available.
+fn substitute_unknown_from_location(
+    rendered: &str,
+    location: Option<&Location>,
+    cache: &SourceCache,
+) -> String {
+    if let Some(location) = location {
+        let abs_path = location.uri.strip_prefix("file://").unwrap_or(&location.uri);
+        if let Some(source) = cache.get_content(abs_path) {
+            return crate::annotation::substitute_unknown(
+                rendered,
+                source,
+                location.range.start.line,
+            );
+        }
+    }
+    rendered.to_string()
+}
+
 /// Read a single line of source code from the cache (1-based line number).
 fn read_source_line(cache: &SourceCache, file_path: &str, line: u32) -> Option<String> {
     let content = cache.get_content(file_path)?;
@@ -894,7 +918,8 @@ impl OutputFormatter {
 
         // Non-class or source not readable: use hover type
         if let Some(hover) = hover {
-            output.push_str(&Self::extract_hover_type(&hover.contents));
+            let rendered = Self::extract_hover_type(&hover.contents);
+            output.push_str(&substitute_unknown_from_location(&rendered, location, cache));
             output.push('\n');
         } else {
             output.push_str(empty_label);
@@ -1163,13 +1188,13 @@ impl OutputFormatter {
         }
         match self.format {
             OutputFormat::Human => self.format_show_human(entry, 1, cache),
-            OutputFormat::Json => Self::format_show_json_single(entry),
+            OutputFormat::Json => Self::format_show_json_single(entry, cache),
             OutputFormat::Csv => self.format_show_csv_single(entry, false),
             OutputFormat::Paths => self.format_show_paths_single(entry),
         }
     }
 
-    fn format_show_json_single(entry: &ShowEntry<'_>) -> String {
+    fn format_show_json_single(entry: &ShowEntry<'_>, cache: &SourceCache) -> String {
         let refs_json: Vec<serde_json::Value> =
             entry.displayed_references.iter().map(Self::enriched_ref_to_json).collect();
 
@@ -1181,7 +1206,8 @@ impl OutputFormatter {
         let test_count = entry.test_references.as_ref().map_or(0, |t| t.total_count);
 
         let signature = entry.hover.as_ref().and_then(|h| {
-            let t = Self::extract_hover_type(&h.contents);
+            let rendered = Self::extract_hover_type(&h.contents);
+            let t = substitute_unknown_from_location(&rendered, entry.definitions.first(), cache);
             if t.is_empty() {
                 None
             } else {
@@ -1297,7 +1323,7 @@ impl OutputFormatter {
                 let grouped: Vec<serde_json::Value> = results
                     .iter()
                     .map(|entry| {
-                        serde_json::from_str(&Self::format_show_json_single(entry))
+                        serde_json::from_str(&Self::format_show_json_single(entry, cache))
                             .unwrap_or_default()
                     })
                     .collect();

@@ -1022,3 +1022,98 @@ async fn test_show_mixed_dotted_and_bare() {
         "mixed notation should find bare name, got:\n{stdout}"
     );
 }
+
+/// Write a throwaway project whose module imports an unresolvable third-party
+/// package, so ty widens the affected annotations to `Unknown`. Mirrors the
+/// real "missing stubs" case (e.g. `pyarrow`) without needing the package.
+fn write_unresolved_stub_project(dir: &std::path::Path) {
+    std::fs::write(
+        dir.join("pyproject.toml"),
+        "[project]\nname = \"unresolved\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("write pyproject.toml");
+    std::fs::write(
+        dir.join("store.py"),
+        "import nonexistent_pkg as ext\n\
+         \n\
+         \n\
+         class DataStore:\n    \
+             \"\"\"Holds data.\"\"\"\n\n    \
+             def get_table(self) -> ext.Table:\n        \
+                 return ext.make()\n\n    \
+             def untyped(self):\n        \
+                 return ext.make()\n\n    \
+             registry = ext.collection()\n",
+    )
+    .expect("write store.py");
+}
+
+/// When ty can't resolve an annotation (missing stubs), `members` must show the
+/// literal source annotation instead of `Unknown`, and `(unannotated)` for
+/// members with no source annotation at all.
+#[tokio::test]
+async fn test_members_unknown_substituted_with_source_annotation() {
+    common::require_ty();
+
+    let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
+    write_unresolved_stub_project(temp_dir.path());
+
+    let mut cmd = cargo_bin_cmd!("tyf");
+    cmd.arg("--workspace")
+        .arg(temp_dir.path())
+        .arg("members")
+        .arg("DataStore")
+        .arg("--all")
+        .arg("--file")
+        .arg(temp_dir.path().join("store.py"));
+
+    let output = cmd.output().expect("failed to run tyf");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "command failed: {stdout}");
+
+    // The annotated method shows the literal source annotation, not `Unknown`.
+    assert!(
+        predicate::str::contains("get_table(self) -> ext.Table").eval(&stdout),
+        "should recover source annotation `ext.Table`, got:\n{stdout}"
+    );
+    // The unannotated method is marked, not shown as `Unknown`.
+    assert!(
+        predicate::str::contains("untyped(self) -> (unannotated)").eval(&stdout),
+        "unannotated method should be marked `(unannotated)`, got:\n{stdout}"
+    );
+    // The unannotated class variable is marked too.
+    assert!(
+        predicate::str::contains("registry: (unannotated)").eval(&stdout),
+        "unannotated variable should be marked `(unannotated)`, got:\n{stdout}"
+    );
+    // `Unknown` must not leak anywhere in the output.
+    assert!(
+        !predicate::str::contains("Unknown").eval(&stdout),
+        "`Unknown` should never appear in members output, got:\n{stdout}"
+    );
+}
+
+/// The same substitution must apply to `show`'s type section.
+#[tokio::test]
+async fn test_show_unknown_substituted_with_source_annotation() {
+    common::require_ty();
+
+    let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
+    write_unresolved_stub_project(temp_dir.path());
+
+    let mut cmd = cargo_bin_cmd!("tyf");
+    cmd.arg("--workspace").arg(temp_dir.path()).arg("show").arg("DataStore.get_table");
+
+    let output = cmd.output().expect("failed to run tyf");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "command failed: {stdout}");
+
+    assert!(
+        predicate::str::contains("-> ext.Table").eval(&stdout),
+        "show should recover source annotation `ext.Table`, got:\n{stdout}"
+    );
+    assert!(
+        !predicate::str::contains("Unknown").eval(&stdout),
+        "`Unknown` should not appear in show output, got:\n{stdout}"
+    );
+}

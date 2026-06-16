@@ -604,6 +604,11 @@ impl DaemonServer {
             })
             .collect();
 
+        // Read the source once so we can recover annotations ty widened to
+        // `Unknown` (e.g. unresolved third-party stubs). Best-effort: if the
+        // file can't be read we fall back to ty's rendered signature.
+        let source = tokio::fs::read_to_string(&file_str).await.ok();
+
         // Get hover info for each member (N LSP calls — sequential, single pipe)
         let mut members = Vec::with_capacity(filtered.len());
         for child in &filtered {
@@ -611,8 +616,17 @@ impl DaemonServer {
             let hover_col = child.selection_range.start.character;
             let hover = Self::hover_with_warmup(&client, &file_str, hover_line, hover_col).await?;
 
-            let signature =
-                hover.as_ref().map(|h| Self::extract_member_signature(&h.contents, &child.name));
+            let signature = hover.as_ref().map(|h| {
+                let rendered = Self::extract_member_signature(&h.contents, &child.name);
+                match &source {
+                    Some(src) => crate::annotation::substitute_unknown(
+                        &rendered,
+                        src,
+                        child.selection_range.start.line,
+                    ),
+                    None => rendered,
+                }
+            });
 
             members.push(MemberInfo {
                 name: child.name.clone(),

@@ -65,6 +65,33 @@ MyClass (src/models.py:15:1)
 
 Line/col references on the right allow jumping to the source.
 
+## Unresolved types
+
+When ty cannot resolve an annotation — most often because third-party stubs
+aren't installed (e.g. a method annotated `-> pa.Table` where `pyarrow` isn't
+resolvable in the analyzed environment) — it would normally report the type as
+`Unknown`. That's useless to the caller, so tyf instead shows the **literal
+annotation as written in the source**:
+
+```
+DataStore (src/store.py:4:1)
+  Methods:
+    get_table(self) -> pa.Table                            :9:5    # source annotation, even with stubs missing
+    untyped(self) -> (unannotated)                         :12:5   # no annotation in source
+  Class variables:
+    registry: (unannotated)                                :15:5   # no annotation in source
+```
+
+- If the source has an annotation, that exact text is shown. Multi-line
+  signatures and `from __future__ import annotations` / stringized annotations
+  are handled.
+- If there is genuinely no annotation in source, the member is marked
+  `(unannotated)` rather than `Unknown`.
+
+This reads source only — it works without the analyzed project's dependencies
+or stubs installed. The same substitution applies to [show](show.md)'s type
+section.
+
 ## Limitations
 
 - Only shows members defined directly on the class, not inherited members (MRO traversal is not yet supported by ty's LSP)

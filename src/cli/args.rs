@@ -207,6 +207,9 @@ pub enum Commands {
         Excludes private (_prefixed) and dunder (__dunder__) members by default; \
         use --all to include everything.\n\n\
         Note: only shows members defined directly on the class, not inherited members.\n\n\
+        When a type cannot be resolved (e.g. missing third-party stubs), the literal \
+        source annotation is shown instead of 'Unknown'; '(unannotated)' marks a member \
+        with no annotation in source.\n\n\
         Examples:\n  \
         tyf members MyClass\n  \
         tyf members MyClass UserService        # multiple classes\n  \

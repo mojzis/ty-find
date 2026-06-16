@@ -967,6 +967,26 @@ async fn test_find_existing_symbol_still_works_with_rg() {
 async fn test_inspect_alias_matches_show() {
     common::require_ty();
 
+    // Warm-up run: the daemon's reference index must be populated before the two
+    // comparison runs, otherwise the first invocation can report "Refs: none"
+    // while the second (warm) one reports the real count — making the byte-for-byte
+    // comparison below flaky. This first call discards its output and only serves
+    // to warm the daemon for `hello_world`'s references.
+    let mut warmup_cmd = cargo_bin_cmd!("tyf");
+    warmup_cmd
+        .arg("--workspace")
+        .arg(workspace_root())
+        .arg("show")
+        .arg("hello_world")
+        .arg("--file")
+        .arg(fixture_path());
+    let warmup_output = warmup_cmd.output().expect("failed to run tyf warm-up");
+    assert!(
+        warmup_output.status.success(),
+        "warm-up command failed: {}",
+        String::from_utf8_lossy(&warmup_output.stdout)
+    );
+
     // Run with `show`
     let mut show_cmd = cargo_bin_cmd!("tyf");
     show_cmd

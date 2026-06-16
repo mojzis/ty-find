@@ -1,0 +1,10 @@
+{
+  "_README": "SINGLE SOURCE OF TRUTH for the ty versions tyf is tested against. The CI matrix (.github/workflows/ty-version-matrix.yml) and the docs (docs/dev/TY_VERSIONS.md, README.md) read from this file. Do NOT duplicate the version list anywhere else. The empirical floor and the gradient that justifies it are documented in docs/dev/TY_VERSIONS.md.",
+  "floor": "0.0.8",
+  "latest": "0.0.49",
+  "matrix": {
+    "_comment": "Curated subset run by CI on every push/PR (NOT the full sweep). 'blocking' = floor + middle versions; a regression here fails the PR. 'non_blocking' = latest; runs with continue-on-error so a fresh ty release pings us without blocking unrelated PRs. Promote a version from non_blocking to blocking once it is vetted.",
+    "blocking": ["0.0.8", "0.0.18", "0.0.33"],
+    "non_blocking": ["0.0.49"]
+  }
+}

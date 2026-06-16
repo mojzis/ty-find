@@ -488,6 +488,100 @@ async fn test_members_command_csv_format() {
     );
 }
 
+/// Path to the fixture with unresolvable annotations.
+fn unknown_types_fixture_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("unknown_types_example.py")
+}
+
+#[tokio::test]
+async fn test_members_substitutes_unknown_with_source_annotation() {
+    common::require_ty();
+
+    let mut cmd = cargo_bin_cmd!("tyf");
+    cmd.arg("--workspace")
+        .arg(workspace_root())
+        .arg("members")
+        .arg("Workshop")
+        .arg("--all")
+        .arg("--file")
+        .arg(unknown_types_fixture_path());
+
+    let output = cmd.output().expect("failed to run tyf");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "command failed: {stdout}");
+
+    // `ty` cannot resolve `Widget`, so without substitution these would render
+    // as `Unknown`. The literal source annotation must be shown instead. Assert
+    // on the rendered type tokens (`-> Unknown`, `: Unknown`) rather than the
+    // bare word, which can legitimately appear elsewhere (e.g. docstrings).
+    assert!(
+        !predicate::str::contains("-> Unknown").eval(&stdout),
+        "Unknown must not leak into a return type, got:\n{stdout}"
+    );
+    assert!(
+        !predicate::str::contains(": Unknown").eval(&stdout),
+        "Unknown must not leak into a variable type, got:\n{stdout}"
+    );
+
+    // Simple unresolvable return type.
+    assert!(
+        predicate::str::contains("build(self) -> Widget").eval(&stdout),
+        "should substitute return annotation, got:\n{stdout}"
+    );
+    // Generic over the unresolvable type.
+    assert!(
+        predicate::str::contains("build_many(self) -> list[Widget]").eval(&stdout),
+        "should substitute generic return annotation, got:\n{stdout}"
+    );
+    // Multi-line signature: collapsed, with substituted return type.
+    assert!(
+        predicate::str::contains("build_with_options(self, name: str, count: int = 1) -> Widget")
+            .eval(&stdout),
+        "should handle multi-line signature, got:\n{stdout}"
+    );
+    // Stringized annotation: shown without quotes.
+    assert!(
+        predicate::str::contains("build_lazy(self) -> Widget").eval(&stdout),
+        "should show stringized annotation contents, got:\n{stdout}"
+    );
+    // Class variable annotated with the unresolvable type.
+    assert!(
+        predicate::str::contains("default_widget: Widget").eval(&stdout),
+        "should substitute class-variable annotation, got:\n{stdout}"
+    );
+    // Normally-resolvable type is unchanged.
+    assert!(
+        predicate::str::contains("resolved(self) -> str").eval(&stdout),
+        "resolvable type must be unchanged, got:\n{stdout}"
+    );
+}
+
+#[tokio::test]
+async fn test_show_substitutes_unknown_with_source_annotation() {
+    common::require_ty();
+
+    let mut cmd = cargo_bin_cmd!("tyf");
+    cmd.arg("--workspace")
+        .arg(workspace_root())
+        .arg("show")
+        .arg("build")
+        .arg("--file")
+        .arg(unknown_types_fixture_path());
+
+    let output = cmd.output().expect("failed to run tyf");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "command failed: {stdout}");
+
+    assert!(
+        predicate::str::contains("-> Widget").eval(&stdout),
+        "show should surface source annotation, got:\n{stdout}"
+    );
+    assert!(
+        !predicate::str::contains("-> Unknown").eval(&stdout),
+        "Unknown must not leak into show output, got:\n{stdout}"
+    );
+}
+
 // ── Reference count and enrichment tests ───────────────────────────
 
 #[tokio::test]

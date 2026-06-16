@@ -894,10 +894,31 @@ impl OutputFormatter {
 
         // Non-class or source not readable: use hover type
         if let Some(hover) = hover {
-            output.push_str(&Self::extract_hover_type(&hover.contents));
+            let ty = Self::extract_hover_type(&hover.contents);
+            output.push_str(&Self::resolve_unknown_type(ty, location, cache));
             output.push('\n');
         } else {
             output.push_str(empty_label);
+        }
+    }
+
+    /// Replace a `ty`-reported `Unknown` type with the literal source annotation.
+    ///
+    /// When `ty` cannot resolve an annotation (typically missing third-party
+    /// stubs) it widens the type to `Unknown`, which is useless to the caller.
+    /// If we have the symbol's definition location and its source, recover the
+    /// annotation the developer actually wrote. Types without `Unknown`, or
+    /// where source is unavailable, are returned unchanged.
+    fn resolve_unknown_type(
+        ty: String,
+        location: Option<&Location>,
+        cache: &SourceCache,
+    ) -> String {
+        let Some(loc) = location else { return ty };
+        let abs_path = loc.uri.strip_prefix("file://").unwrap_or(&loc.uri);
+        match cache.get_content(abs_path) {
+            Some(src) => crate::annotation::substitute_unknown(&ty, src, loc.range.start.line),
+            None => ty,
         }
     }
 
@@ -1163,13 +1184,13 @@ impl OutputFormatter {
         }
         match self.format {
             OutputFormat::Human => self.format_show_human(entry, 1, cache),
-            OutputFormat::Json => Self::format_show_json_single(entry),
+            OutputFormat::Json => Self::format_show_json_single(entry, cache),
             OutputFormat::Csv => self.format_show_csv_single(entry, false),
             OutputFormat::Paths => self.format_show_paths_single(entry),
         }
     }
 
-    fn format_show_json_single(entry: &ShowEntry<'_>) -> String {
+    fn format_show_json_single(entry: &ShowEntry<'_>, cache: &SourceCache) -> String {
         let refs_json: Vec<serde_json::Value> =
             entry.displayed_references.iter().map(Self::enriched_ref_to_json).collect();
 
@@ -1182,6 +1203,7 @@ impl OutputFormatter {
 
         let signature = entry.hover.as_ref().and_then(|h| {
             let t = Self::extract_hover_type(&h.contents);
+            let t = Self::resolve_unknown_type(t, entry.definitions.first(), cache);
             if t.is_empty() {
                 None
             } else {
@@ -1297,7 +1319,7 @@ impl OutputFormatter {
                 let grouped: Vec<serde_json::Value> = results
                     .iter()
                     .map(|entry| {
-                        serde_json::from_str(&Self::format_show_json_single(entry))
+                        serde_json::from_str(&Self::format_show_json_single(entry, cache))
                             .unwrap_or_default()
                     })
                     .collect();

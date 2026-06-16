@@ -22,6 +22,11 @@ The most useful command. Given a symbol name, it shows:
 No file path needed — it searches the whole project by name.
 `inspect` still works as a hidden alias for backward compatibility.
 
+When ty cannot resolve a type (e.g. a third-party library's stubs are not
+installed), the `Signature` shows the literal source annotation the developer
+wrote instead of `Unknown`; a symbol with no annotation is marked
+`(unannotated)`.
+
 ```
 tyf show MyClass
 tyf show MyClass.get_data                # narrow to a specific class method
@@ -67,6 +72,11 @@ Shows the public interface of a class: methods with signatures, properties,
 and class variables with types. Like `list` scoped to a class, with type info.
 Excludes private/dunder members by default; `--all` includes everything.
 Only shows directly-defined members, not inherited ones.
+
+When ty cannot resolve a member's type (e.g. missing third-party stubs), the
+literal source annotation is shown instead of `Unknown` (read from source, so
+it works without the project's dependencies installed); a member with no
+annotation is marked `(unannotated)`.
 
 ```
 tyf members MyClass

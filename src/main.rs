@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+mod annotation;
 mod cli;
 mod commands;
 #[cfg(unix)]

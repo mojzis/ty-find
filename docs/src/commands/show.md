@@ -65,6 +65,16 @@ tyf show MyClass --all
 tyf inspect MyClass
 ```
 
+## Unresolved types
+
+The `Signature` section reports a symbol's type from ty's analysis. When ty
+cannot resolve a type — typically because a third-party library's stubs are not
+installed — it would normally report `Unknown`. Instead, `tyf` shows the literal
+type annotation as written in source (e.g. `def build(self) -> pa.Table`). Only
+the source file is read, so this works without the project's dependencies
+installed. A symbol with no source annotation is marked `(unannotated)` rather
+than `Unknown`.
+
 ## See also
 
 - [Commands Overview](overview.md)

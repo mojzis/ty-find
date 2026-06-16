@@ -604,6 +604,14 @@ impl DaemonServer {
             })
             .collect();
 
+        // Read the source once (for the whole class) so we can recover literal
+        // annotations for any member whose type `ty` reports as `Unknown` (e.g.
+        // missing stubs). The CLI-side `show` path reaches the same
+        // `annotation::substitute_unknown` via its `SourceCache`; the daemon has
+        // no such cache, so it reads from disk directly. A single one-shot read
+        // per `members` call is cheap relative to the N hover RPCs above.
+        let source = tokio::fs::read_to_string(&file_str).await.ok();
+
         // Get hover info for each member (N LSP calls — sequential, single pipe)
         let mut members = Vec::with_capacity(filtered.len());
         for child in &filtered {
@@ -611,8 +619,15 @@ impl DaemonServer {
             let hover_col = child.selection_range.start.character;
             let hover = Self::hover_with_warmup(&client, &file_str, hover_line, hover_col).await?;
 
-            let signature =
-                hover.as_ref().map(|h| Self::extract_member_signature(&h.contents, &child.name));
+            let signature = hover.as_ref().map(|h| {
+                let sig = Self::extract_member_signature(&h.contents, &child.name);
+                match source.as_deref() {
+                    Some(src) => {
+                        crate::annotation::substitute_unknown(&sig, src, child.range.start.line)
+                    }
+                    None => sig,
+                }
+            });
 
             members.push(MemberInfo {
                 name: child.name.clone(),

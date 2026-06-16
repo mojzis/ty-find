@@ -65,10 +65,30 @@ MyClass (src/models.py:15:1)
 
 Line/col references on the right allow jumping to the source.
 
+## Unresolved types
+
+When ty cannot resolve a type — most often because a third-party library's
+stubs are not installed in the analyzed environment — it would normally report
+the type as `Unknown`. Instead of surfacing that, `tyf` substitutes the literal
+type annotation as written in the source file:
+
+```
+Workshop (src/workshop.py:4:1)
+  Methods:
+    build(self) -> pa.Table                                :7:5     # source said `-> pa.Table`
+  Class variables:
+    default_table: pa.Table                                :5:5
+```
+
+This works without the analyzed project's dependencies or stubs installed —
+only the source file is read. If a member genuinely has no annotation in
+source, it is marked `(unannotated)` rather than `Unknown`.
+
 ## Limitations
 
 - Only shows members defined directly on the class, not inherited members (MRO traversal is not yet supported by ty's LSP)
 - Type signatures come from hover, so they require ty to have analyzed the file
+- When a type cannot be resolved, the literal source annotation is shown in place of `Unknown`; `(unannotated)` marks a member with no source annotation
 
 ## See also
 

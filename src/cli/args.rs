@@ -88,6 +88,9 @@ pub enum Commands {
         its type signature, and optionally all usages. Searches the whole project by name, \
         no file path needed.\n\n\
         Use Class.method dotted notation to narrow to a specific class member.\n\n\
+        When ty cannot resolve a type (e.g. missing third-party stubs), the signature \
+        shows the literal source annotation instead of 'Unknown'; a symbol with no \
+        annotation is marked '(unannotated)'.\n\n\
         Examples:\n  \
         tyf show MyClass\n  \
         tyf show MyClass.get_data             # narrow to a specific class method\n  \
@@ -207,6 +210,9 @@ pub enum Commands {
         Excludes private (_prefixed) and dunder (__dunder__) members by default; \
         use --all to include everything.\n\n\
         Note: only shows members defined directly on the class, not inherited members.\n\n\
+        When ty cannot resolve a member's type (e.g. missing third-party stubs), the \
+        literal source annotation is shown instead of 'Unknown'; a member with no \
+        annotation is marked '(unannotated)'.\n\n\
         Examples:\n  \
         tyf members MyClass\n  \
         tyf members MyClass UserService        # multiple classes\n  \

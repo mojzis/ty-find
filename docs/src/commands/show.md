@@ -4,7 +4,7 @@ Definition, type signature, and usages of a symbol — where it's defined, its t
 
 > **Backward compatibility:** `tyf inspect` still works as a hidden alias for `tyf show`.
 
-Use `Class.method` dotted notation to narrow to a specific class member.
+Use `Class.member` dotted notation (one level only) to narrow to a specific class member. Module-qualified names (`module.func`) and nested paths (`Outer.Inner.method`) are not supported; using 2+ dots is a usage error.
 
 Examples:
   tyf show MyClass
@@ -24,7 +24,7 @@ tyf show <SYMBOLS> [OPTIONS]
 ## Arguments
 
 **`<symbols>`** *(required)*
-: Symbol name(s) to show. Use `Class.method` to narrow to a specific class.
+: Symbol name(s) to show. Use `Class.member` (one level) to narrow to a class member.
 
 ## Options
 
@@ -64,6 +64,28 @@ tyf show MyClass --all
 # Using the backward-compatible alias
 tyf inspect MyClass
 ```
+
+## Dotted notation (`Class.member`)
+
+`Class.member` narrows a lookup to a member of a specific class — useful when
+the same method name (e.g. `get_data`) exists on several classes. The container
+is resolved first, then its members are searched, so `Database.get_data`
+resolves to `Database`'s member and never `Cache`'s same-named one.
+
+Limitations:
+
+- **One level only.** `Class.member` is supported; nested paths like
+  `Outer.Inner.method` are not.
+- **Module-qualified names are not supported.** `module.func` will not match —
+  dotted notation addresses *class members*, not module paths.
+- **Two or more dots is a usage error.** `tyf show a.b.c` prints a message to
+  stderr and exits nonzero (it does not attempt a lookup). The same applies to a
+  leading or trailing dot (`.foo`, `foo.`).
+- A valid dotted query that matches nothing (e.g. `Database.nope` or
+  `Nonesuch.get_data`) is a normal "not found" and exits 0 — there is no
+  fallback to the bare member or container name.
+- No inherited-member resolution: only members defined directly on the class are
+  matched (same limitation as [`members`](members.md)).
 
 ## Unresolved types
 

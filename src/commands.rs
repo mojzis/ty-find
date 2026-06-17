@@ -199,86 +199,198 @@ async fn find_name_column(file_path: &str, line_0: u32, name: &str) -> Option<(u
     None
 }
 
-/// Parse dotted notation like `Container.member` into `(container, symbol)`.
+/// Classification of a symbol token for dotted-notation handling.
 ///
-/// Splits on the **last** dot so that `A.B.method` yields `("A.B", "method")`.
-/// Returns `None` for bare names (no dot), meaning "search without container filter".
-fn parse_dotted_symbol(input: &str) -> Option<(&str, &str)> {
-    let dot = input.rfind('.')?;
-    let container = &input[..dot];
-    let symbol = &input[dot + 1..];
-    if container.is_empty() || symbol.is_empty() {
-        return None;
-    }
-    Some((container, symbol))
+/// Dotted notation is supported to exactly **one** level (`Class.member`).
+#[derive(Debug, PartialEq, Eq)]
+enum SymbolToken<'a> {
+    /// A plain symbol name with no dots — search the whole workspace by name.
+    Bare(&'a str),
+    /// One-level dotted notation `Container.member` (both parts non-empty).
+    Dotted { container: &'a str, member: &'a str },
+    /// Malformed (leading/trailing dot) or unsupported (2+ dots).
+    Invalid,
 }
 
-/// Search workspace symbols with dotted-notation support.
+/// Classify a symbol token into bare / one-level-dotted / invalid.
 ///
-/// If `symbol` contains a dot (e.g. `Class.method`), splits on the last dot,
-/// searches for the member name, then verifies each result is inside the
-/// expected container using the document symbol tree.
-/// Returns `(search_name, result)` where `search_name` is the symbol part
-/// actually searched for (the part after the last dot, or the full name).
+/// * 0 dots → [`SymbolToken::Bare`] (unchanged behaviour).
+/// * exactly 1 dot, both sides non-empty → [`SymbolToken::Dotted`].
+/// * exactly 1 dot with an empty side (`.x`, `x.`) → [`SymbolToken::Invalid`].
+/// * 2+ dots (`a.b.c`) → [`SymbolToken::Invalid`].
+fn classify_symbol(input: &str) -> SymbolToken<'_> {
+    match input.matches('.').count() {
+        0 => SymbolToken::Bare(input),
+        1 => {
+            let (container, member) = input.split_once('.').expect("one dot is present");
+            if container.is_empty() || member.is_empty() {
+                SymbolToken::Invalid
+            } else {
+                SymbolToken::Dotted { container, member }
+            }
+        }
+        _ => SymbolToken::Invalid,
+    }
+}
+
+/// The usage message printed for an unsupported/malformed dotted token.
+fn dotted_usage_message(token: &str) -> String {
+    format!(
+        "tyf: '{token}' — dotted notation supports one level only (Class.member); \
+         retry with a single dot"
+    )
+}
+
+/// A usage error: a malformed invocation (as opposed to a clean "not found").
+///
+/// `main` prints the message verbatim to stderr and exits with a distinct
+/// nonzero code, so callers can tell a bad invocation apart from a query that
+/// simply matched nothing (which exits 0).
+#[derive(Debug)]
+pub struct UsageError(pub String);
+
+impl std::fmt::Display for UsageError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for UsageError {}
+
+/// Reject symbol tokens that use unsupported or malformed dotted notation.
+///
+/// Bare names and one-level `Class.member` tokens pass; 2+ dots and
+/// leading/trailing dots produce a [`UsageError`]. `file:line:col` position
+/// tokens must be filtered out *before* calling this (they legitimately
+/// contain dots in the file path).
+pub fn validate_symbol_tokens(tokens: &[String]) -> Result<()> {
+    for token in tokens {
+        if matches!(classify_symbol(token), SymbolToken::Invalid) {
+            return Err(UsageError(dotted_usage_message(token)).into());
+        }
+    }
+    Ok(())
+}
+
+/// Search workspace symbols, resolving one-level dotted notation container-first.
+///
+/// For a bare name, this is a plain exact workspace-symbol search. For
+/// `Container.member`, it resolves the *container* class first (via
+/// `workspace/symbol`), then walks that class's `documentSymbol` tree for a
+/// direct child named `member`. This avoids depending on `containerName` (which
+/// ty does not populate) and is bounded: it inspects only the file(s) where a
+/// class named `container` lives, not every file containing a `member`.
+///
+/// Invalid dotted tokens (2+ dots, leading/trailing dot) are rejected upstream
+/// by [`validate_symbol_tokens`]; if one reaches here it falls back to a plain
+/// search (which matches nothing) rather than panicking.
 #[cfg(unix)]
 async fn workspace_symbols_dotted(
     client: &mut DaemonClient,
     workspace: PathBuf,
     symbol: &str,
-) -> Result<(String, crate::daemon::protocol::WorkspaceSymbolsResult)> {
-    if let Some((container, member)) = parse_dotted_symbol(symbol) {
-        let result =
-            client.execute_workspace_symbols_exact(workspace.clone(), member.to_string()).await?;
+) -> Result<crate::daemon::protocol::WorkspaceSymbolsResult> {
+    if let SymbolToken::Dotted { container, member } = classify_symbol(symbol) {
+        // Exact (non-fuzzy) member match for plain `find`/`show`/`refs`.
+        let symbols =
+            resolve_dotted_member(client, &workspace, container, member, MemberMatch::Exact)
+                .await?;
+        Ok(crate::daemon::protocol::WorkspaceSymbolsResult { symbols })
+    } else {
+        client.execute_workspace_symbols_exact(workspace, symbol.to_string()).await
+    }
+}
 
-        if result.symbols.is_empty() {
-            return Ok((member.to_string(), result));
+/// How the `member` part of a dotted query is matched against a class's members.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MemberMatch {
+    /// `name == member` (case-sensitive). Used by plain lookups.
+    Exact,
+    /// `name.starts_with(member)`. Used by `find --fuzzy`; the container stays
+    /// an exact match either way.
+    Prefix,
+}
+
+/// Resolve `Container.member` container-first: find the class(es) named
+/// `container`, then collect their direct members matching `member`.
+///
+/// Returns one [`SymbolInformation`] per matching member, with the location
+/// pointing at the member's *name* (its `selectionRange`). Multiple results are
+/// legitimate when a class named `container` is defined in more than one module
+/// (or, under [`MemberMatch::Prefix`], when several members share a prefix).
+#[cfg(unix)]
+async fn resolve_dotted_member(
+    client: &mut DaemonClient,
+    workspace: &Path,
+    container: &str,
+    member: &str,
+    member_match: MemberMatch,
+) -> Result<Vec<crate::lsp::protocol::SymbolInformation>> {
+    // Step 1: locate the container class(es) across the workspace.
+    let class_result = client
+        .execute_workspace_symbols_exact(workspace.to_path_buf(), container.to_string())
+        .await?;
+
+    // Step 2: for each unique file holding a class named `container`, walk its
+    // document-symbol tree and collect direct members matching `member`.
+    let mut matches = Vec::new();
+    let mut seen_files = HashSet::new();
+    for sym in &class_result.symbols {
+        if !matches!(sym.kind, crate::lsp::protocol::SymbolKind::Class) {
+            continue;
         }
+        let file_path =
+            sym.location.uri.strip_prefix("file://").unwrap_or(&sym.location.uri).to_string();
+        if !seen_files.insert(file_path.clone()) {
+            continue;
+        }
+        let doc_symbols = client
+            .execute_document_symbols(workspace.to_path_buf(), file_path.clone())
+            .await?
+            .symbols;
+        let uri = format!("file://{file_path}");
+        collect_class_members(&doc_symbols, container, member, member_match, &uri, &mut matches);
+    }
+    Ok(matches)
+}
 
-        // Filter symbols by checking the document symbol tree for each file.
-        // A symbol qualifies if find_enclosing_symbol returns a path starting
-        // with the container name (e.g. "Calculator.add" starts with "Calculator").
-        let mut doc_sym_cache: HashMap<String, Vec<DocumentSymbol>> = HashMap::new();
-        let mut filtered = Vec::new();
-
-        for sym_info in result.symbols {
-            let file_path = sym_info
-                .location
-                .uri
-                .strip_prefix("file://")
-                .unwrap_or(&sym_info.location.uri)
-                .to_string();
-
-            let doc_symbols = if let Some(cached) = doc_sym_cache.get(&file_path) {
-                cached
-            } else {
-                let ds = client
-                    .execute_document_symbols(workspace.clone(), file_path.clone())
-                    .await
-                    .map(|r| r.symbols)
-                    .unwrap_or_default();
-                doc_sym_cache.entry(file_path.clone()).or_insert(ds)
-            };
-
-            let line = sym_info.location.range.start.line;
-            let character = sym_info.location.range.start.character;
-            if let Some(enclosing) = find_enclosing_symbol(doc_symbols, line, character) {
-                // enclosing is like "Calculator.add"; container is "Calculator"
-                // Check that enclosing starts with container (exact segment match)
-                if enclosing == format!("{container}.{member}")
-                    || enclosing.starts_with(&format!("{container}."))
-                {
-                    filtered.push(sym_info);
+/// Walk a document-symbol tree, collecting direct children matching `member` of
+/// any class named `container`. Recurses so a class named `container` nested
+/// inside another scope is covered too (this is intentional and orthogonal to
+/// the "one dot" parsing limit, which rejects multi-segment *queries*).
+fn collect_class_members(
+    symbols: &[DocumentSymbol],
+    container: &str,
+    member: &str,
+    member_match: MemberMatch,
+    uri: &str,
+    out: &mut Vec<crate::lsp::protocol::SymbolInformation>,
+) {
+    let is_member = |name: &str| match member_match {
+        MemberMatch::Exact => name == member,
+        MemberMatch::Prefix => name.starts_with(member),
+    };
+    for sym in symbols {
+        if matches!(sym.kind, crate::lsp::protocol::SymbolKind::Class) && sym.name == container {
+            for child in sym.children.as_deref().unwrap_or(&[]) {
+                if is_member(&child.name) {
+                    out.push(crate::lsp::protocol::SymbolInformation {
+                        name: child.name.clone(),
+                        kind: child.kind.clone(),
+                        tags: None,
+                        deprecated: None,
+                        location: Location {
+                            uri: uri.to_string(),
+                            range: child.selection_range.clone(),
+                        },
+                        container_name: Some(container.to_string()),
+                    });
                 }
             }
         }
-
-        Ok((
-            member.to_string(),
-            crate::daemon::protocol::WorkspaceSymbolsResult { symbols: filtered },
-        ))
-    } else {
-        let result = client.execute_workspace_symbols_exact(workspace, symbol.to_string()).await?;
-        Ok((symbol.to_string(), result))
+        if let Some(children) = &sym.children {
+            collect_class_members(children, container, member, member_match, uri, out);
+        }
     }
 }
 
@@ -346,7 +458,7 @@ async fn resolve_symbols_to_queries(
     } else {
         let mut client = DaemonClient::connect_with_timeout(timeout).await?;
         for symbol in symbols {
-            let (_search_name, result) =
+            let result =
                 workspace_symbols_dotted(&mut client, workspace_root.to_path_buf(), symbol).await?;
 
             if result.symbols.is_empty() {
@@ -482,6 +594,11 @@ async fn classify_and_resolve(
             symbols.push(q.clone());
         }
     }
+
+    // Reject malformed/unsupported dotted notation among the symbol tokens.
+    // `file:line:col` positions were separated out above, so their dotted file
+    // paths are not subject to this check.
+    validate_symbol_tokens(&symbols)?;
 
     if !symbols.is_empty() {
         resolved.extend(resolve_symbols_to_queries(&symbols, file, workspace_root, timeout).await?);
@@ -693,6 +810,8 @@ pub async fn handle_find_command(
     timeout: Duration,
     debug_log: Option<Arc<DebugLog>>,
 ) -> Result<()> {
+    validate_symbol_tokens(symbols)?;
+
     // --fuzzy mode: use workspace/symbol pure fuzzy query
     if fuzzy {
         #[cfg(not(unix))]
@@ -709,9 +828,24 @@ pub async fn handle_find_command(
             let mut client = connect_daemon(timeout, debug_log.as_ref()).await?;
 
             for symbol in symbols {
-                let result = client
-                    .execute_workspace_symbols(workspace_root.to_path_buf(), symbol.clone())
-                    .await?;
+                // Dotted query: resolve the container exactly, then match the
+                // member by prefix (fuzzy). Bare query: ty's fuzzy workspace search.
+                let result =
+                    if let SymbolToken::Dotted { container, member } = classify_symbol(symbol) {
+                        let symbols = resolve_dotted_member(
+                            &mut client,
+                            workspace_root,
+                            container,
+                            member,
+                            MemberMatch::Prefix,
+                        )
+                        .await?;
+                        crate::daemon::protocol::WorkspaceSymbolsResult { symbols }
+                    } else {
+                        client
+                            .execute_workspace_symbols(workspace_root.to_path_buf(), symbol.clone())
+                            .await?
+                    };
 
                 if result.symbols.is_empty() {
                     if let Some(ref log) = debug_log {
@@ -837,9 +971,8 @@ async fn find_symbol_via_workspace(
     ensure_daemon_running().await?;
     let mut client = connect_daemon(timeout, debug_log).await?;
 
-    // Use exact_name filter (with optional container filter for dotted notation)
-    // so the daemon only returns symbols with matching names.
-    let (_search_name, result) =
+    // Resolve via exact name (bare) or container-first member lookup (dotted).
+    let result =
         workspace_symbols_dotted(&mut client, workspace_root.to_path_buf(), symbol).await?;
 
     // If exact matches found, use them; otherwise fall back to fuzzy search
@@ -848,7 +981,7 @@ async fn find_symbol_via_workspace(
         return Ok(result.symbols.into_iter().map(|s| s.location).collect());
     }
 
-    if parse_dotted_symbol(symbol).is_some() {
+    if matches!(classify_symbol(symbol), SymbolToken::Dotted { .. }) {
         // Dotted notation: no fallback to fuzzy search
         return Ok(Vec::new());
     }
@@ -873,6 +1006,7 @@ pub async fn handle_show_command(
     show_doc: bool,
     debug_log: Option<Arc<DebugLog>>,
 ) -> Result<()> {
+    validate_symbol_tokens(symbols)?;
     ensure_daemon_running().await?;
 
     let mut results: Vec<InspectResult> = Vec::new();
@@ -1075,9 +1209,9 @@ async fn inspect_single_symbol(
             // File-based search doesn't provide symbol kind
             (client, file_str.to_string(), first_line, first_col, all_definitions, None)
         } else {
-            // Use exact_name filter (with optional container for dotted notation)
+            // Resolve via exact name (bare) or container-first member lookup (dotted)
             let mut client = DaemonClient::connect_with_timeout(timeout).await?;
-            let (_search_name, result) =
+            let result =
                 workspace_symbols_dotted(&mut client, workspace_root.to_path_buf(), symbol).await?;
 
             let matched = &result.symbols;
@@ -1791,29 +1925,209 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_dotted_symbol_simple() {
-        assert_eq!(parse_dotted_symbol("Class.method"), Some(("Class", "method")));
+    fn test_classify_symbol_bare() {
+        // 0 dots → bare name, unchanged behaviour
+        assert_eq!(classify_symbol("my_function"), SymbolToken::Bare("my_function"));
+        assert_eq!(classify_symbol("MyClass"), SymbolToken::Bare("MyClass"));
+        // empty string has no dots → bare (resolves to nothing, not a usage error)
+        assert_eq!(classify_symbol(""), SymbolToken::Bare(""));
     }
 
     #[test]
-    fn test_parse_dotted_symbol_multiple_dots() {
-        // Split on last dot: A.B.method → ("A.B", "method")
-        assert_eq!(parse_dotted_symbol("A.B.method"), Some(("A.B", "method")));
+    fn test_classify_symbol_one_dot() {
+        assert_eq!(
+            classify_symbol("Class.method"),
+            SymbolToken::Dotted { container: "Class", member: "method" }
+        );
+        assert_eq!(
+            classify_symbol("Database.get_data"),
+            SymbolToken::Dotted { container: "Database", member: "get_data" }
+        );
     }
 
     #[test]
-    fn test_parse_dotted_symbol_bare_name() {
-        assert_eq!(parse_dotted_symbol("my_function"), None);
-        assert_eq!(parse_dotted_symbol("MyClass"), None);
+    fn test_classify_symbol_two_or_more_dots_invalid() {
+        // 2+ dots → unsupported
+        assert_eq!(classify_symbol("a.b.c"), SymbolToken::Invalid);
+        assert_eq!(classify_symbol("Outer.Inner.method"), SymbolToken::Invalid);
+        // 3 dots
+        assert_eq!(classify_symbol("a.b.c.d"), SymbolToken::Invalid);
     }
 
     #[test]
-    fn test_parse_dotted_symbol_edge_cases() {
+    fn test_classify_symbol_malformed_invalid() {
         // Leading dot → empty container
-        assert_eq!(parse_dotted_symbol(".method"), None);
-        // Trailing dot → empty symbol
-        assert_eq!(parse_dotted_symbol("Class."), None);
+        assert_eq!(classify_symbol(".method"), SymbolToken::Invalid);
+        // Trailing dot → empty member
+        assert_eq!(classify_symbol("Class."), SymbolToken::Invalid);
         // Just a dot
-        assert_eq!(parse_dotted_symbol("."), None);
+        assert_eq!(classify_symbol("."), SymbolToken::Invalid);
+    }
+
+    #[test]
+    fn test_validate_symbol_tokens_accepts_bare_and_one_dot() {
+        let tokens = vec!["MyClass".to_string(), "Calculator.add".to_string(), "hello".to_string()];
+        assert!(validate_symbol_tokens(&tokens).is_ok());
+    }
+
+    #[test]
+    fn test_validate_symbol_tokens_rejects_multi_dot() {
+        let tokens = vec!["Calculator.add".to_string(), "a.b.c".to_string()];
+        let err = validate_symbol_tokens(&tokens).unwrap_err();
+        let msg = err.downcast_ref::<UsageError>().expect("should be a UsageError").0.clone();
+        assert!(msg.contains("'a.b.c'"), "message should name the offending token: {msg}");
+        assert!(msg.contains("one level only"), "message should explain the limit: {msg}");
+        assert!(msg.contains("single dot"), "message should suggest the fix: {msg}");
+    }
+
+    #[test]
+    fn test_validate_symbol_tokens_rejects_malformed() {
+        assert!(validate_symbol_tokens(&[".foo".to_string()]).is_err());
+        assert!(validate_symbol_tokens(&["foo.".to_string()]).is_err());
+    }
+
+    #[test]
+    fn test_collect_class_members_disambiguates_by_container() {
+        use crate::lsp::protocol::{DocumentSymbol, Position, Range, SymbolKind};
+
+        let name_range = |line: u32| Range {
+            start: Position { line, character: 8 },
+            end: Position { line, character: 16 },
+        };
+        let full_range = |line: u32| Range {
+            start: Position { line, character: 4 },
+            end: Position { line: line + 1, character: 0 },
+        };
+        let method = |name: &str, line: u32| DocumentSymbol {
+            name: name.to_string(),
+            detail: None,
+            kind: SymbolKind::Method,
+            tags: None,
+            deprecated: None,
+            range: full_range(line),
+            selection_range: name_range(line),
+            children: None,
+        };
+        let class = |name: &str, line: u32, children: Vec<DocumentSymbol>| DocumentSymbol {
+            name: name.to_string(),
+            detail: None,
+            kind: SymbolKind::Class,
+            tags: None,
+            deprecated: None,
+            range: Range {
+                start: Position { line, character: 0 },
+                end: Position { line: line + 5, character: 0 },
+            },
+            selection_range: Range {
+                start: Position { line, character: 6 },
+                end: Position { line, character: 14 },
+            },
+            children: Some(children),
+        };
+
+        let tree = vec![
+            class("Database", 0, vec![method("get_data", 1), method("connect", 2)]),
+            class("Cache", 10, vec![method("get_data", 11)]),
+        ];
+
+        // Only Database.get_data should match — not Cache.get_data.
+        let mut out = Vec::new();
+        collect_class_members(
+            &tree,
+            "Database",
+            "get_data",
+            MemberMatch::Exact,
+            "file:///x.py",
+            &mut out,
+        );
+        assert_eq!(out.len(), 1, "exactly one member should match");
+        assert_eq!(out[0].name, "get_data");
+        assert_eq!(out[0].container_name.as_deref(), Some("Database"));
+        // Location points at the member name (selectionRange), line 1.
+        assert_eq!(out[0].location.range.start.line, 1);
+        assert_eq!(out[0].location.range.start.character, 8);
+
+        // A member that doesn't exist on the container yields nothing.
+        let mut none = Vec::new();
+        collect_class_members(
+            &tree,
+            "Database",
+            "nope",
+            MemberMatch::Exact,
+            "file:///x.py",
+            &mut none,
+        );
+        assert!(none.is_empty());
+
+        // A container that doesn't exist yields nothing.
+        let mut missing = Vec::new();
+        collect_class_members(
+            &tree,
+            "Nonesuch",
+            "get_data",
+            MemberMatch::Exact,
+            "file:///x.py",
+            &mut missing,
+        );
+        assert!(missing.is_empty());
+    }
+
+    #[test]
+    fn test_collect_class_members_prefix_match() {
+        use crate::lsp::protocol::{DocumentSymbol, Position, Range, SymbolKind};
+
+        let r = |l: u32, c: u32| Range {
+            start: Position { line: l, character: c },
+            end: Position { line: l, character: c + 1 },
+        };
+        let method = |name: &str, line: u32| DocumentSymbol {
+            name: name.to_string(),
+            detail: None,
+            kind: SymbolKind::Method,
+            tags: None,
+            deprecated: None,
+            range: r(line, 4),
+            selection_range: r(line, 8),
+            children: None,
+        };
+        let tree = vec![DocumentSymbol {
+            name: "Database".to_string(),
+            detail: None,
+            kind: SymbolKind::Class,
+            tags: None,
+            deprecated: None,
+            range: r(0, 0),
+            selection_range: r(0, 6),
+            children: Some(vec![
+                method("get_data", 1),
+                method("get_data_raw", 2),
+                method("connect", 3),
+            ]),
+        }];
+
+        // Prefix `get_` matches both get_data and get_data_raw, but not connect.
+        let mut out = Vec::new();
+        collect_class_members(
+            &tree,
+            "Database",
+            "get_",
+            MemberMatch::Prefix,
+            "file:///x.py",
+            &mut out,
+        );
+        let names: Vec<&str> = out.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, vec!["get_data", "get_data_raw"]);
+
+        // Same query under Exact matching finds nothing (no member is literally "get_").
+        let mut exact = Vec::new();
+        collect_class_members(
+            &tree,
+            "Database",
+            "get_",
+            MemberMatch::Exact,
+            "file:///x.py",
+            &mut exact,
+        );
+        assert!(exact.is_empty());
     }
 }

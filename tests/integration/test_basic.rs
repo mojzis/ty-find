@@ -967,6 +967,26 @@ async fn test_find_existing_symbol_still_works_with_rg() {
 async fn test_inspect_alias_matches_show() {
     common::require_ty();
 
+    // Warm-up run: the daemon's reference index must be populated before the two
+    // comparison runs, otherwise the first invocation can report "Refs: none"
+    // while the second (warm) one reports the real count — making the byte-for-byte
+    // comparison below flaky. This first call discards its output and only serves
+    // to warm the daemon for `hello_world`'s references.
+    let mut warmup_cmd = cargo_bin_cmd!("tyf");
+    warmup_cmd
+        .arg("--workspace")
+        .arg(workspace_root())
+        .arg("show")
+        .arg("hello_world")
+        .arg("--file")
+        .arg(fixture_path());
+    let warmup_output = warmup_cmd.output().expect("failed to run tyf warm-up");
+    assert!(
+        warmup_output.status.success(),
+        "warm-up command failed: {}",
+        String::from_utf8_lossy(&warmup_output.stdout)
+    );
+
     // Run with `show`
     let mut show_cmd = cargo_bin_cmd!("tyf");
     show_cmd
@@ -1115,4 +1135,155 @@ async fn test_show_mixed_dotted_and_bare() {
         predicate::str::contains("hello_world").eval(&stdout),
         "mixed notation should find bare name, got:\n{stdout}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// One-level dotted-notation matrix (Class.member) across show / find / refs.
+//
+// Uses `dotted_fixture.py`, which defines two classes (`Database`, `Cache`)
+// that each have a `get_data` method, so disambiguation can be verified.
+// ---------------------------------------------------------------------------
+
+/// `Database.get_data` and `Cache.get_data` live on these lines in the fixture.
+const DATABASE_GET_DATA_LINE: &str = "dotted_fixture.py:10:";
+const CACHE_GET_DATA_LINE: &str = "dotted_fixture.py:18:";
+
+/// Result of running `tyf <cmd> <token>`: exit code plus captured streams.
+struct DottedRun {
+    success: bool,
+    code: Option<i32>,
+    stdout: String,
+    stderr: String,
+}
+
+/// Run `tyf <cmd> <token>` against the workspace and capture its outcome.
+fn run_dotted(cmd_name: &str, token: &str) -> DottedRun {
+    let mut cmd = cargo_bin_cmd!("tyf");
+    cmd.arg("--workspace").arg(workspace_root()).arg(cmd_name).arg(token);
+    let output = cmd.output().expect("failed to run tyf");
+    DottedRun {
+        success: output.status.success(),
+        code: output.status.code(),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    }
+}
+
+#[tokio::test]
+async fn test_dotted_disambiguation_across_commands() {
+    common::require_ty();
+
+    // For show and refs the definition appears as `file:line:col`; for find as
+    // a numbered location. In every case Database.get_data must resolve to the
+    // Database member (line 10) and never the same-named Cache member (line 18).
+    for cmd_name in ["show", "find", "refs"] {
+        let run = run_dotted(cmd_name, "Database.get_data");
+        assert!(run.success, "`{cmd_name} Database.get_data` failed: {}{}", run.stdout, run.stderr);
+        assert!(
+            run.stdout.contains(DATABASE_GET_DATA_LINE),
+            "`{cmd_name} Database.get_data` should resolve Database's member (line 10):\n{}",
+            run.stdout
+        );
+        assert!(
+            !run.stdout.contains(CACHE_GET_DATA_LINE),
+            "`{cmd_name} Database.get_data` must NOT show Cache's same-named member (line 18):\n{}",
+            run.stdout
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_dotted_nonexistent_member_clean_miss() {
+    common::require_ty();
+
+    // Database.nope: valid container, missing member → clean miss, exit 0, no fallback.
+    for cmd_name in ["show", "find", "refs"] {
+        let run = run_dotted(cmd_name, "Database.nope");
+        assert!(
+            run.success,
+            "`{cmd_name} Database.nope` should exit 0 (clean miss), got:\n{}",
+            run.stdout
+        );
+        assert!(
+            !run.stdout.contains("dotted_fixture.py:"),
+            "`{cmd_name} Database.nope` should not resolve to any location:\n{}",
+            run.stdout
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_dotted_nonexistent_container_clean_miss() {
+    common::require_ty();
+
+    // Nonesuch.get_data: missing container → clean miss, exit 0, no fallback to
+    // the bare `get_data` that exists on Database/Cache.
+    for cmd_name in ["show", "find", "refs"] {
+        let run = run_dotted(cmd_name, "Nonesuch.get_data");
+        assert!(
+            run.success,
+            "`{cmd_name} Nonesuch.get_data` should exit 0 (clean miss), got:\n{}",
+            run.stdout
+        );
+        assert!(
+            !run.stdout.contains("dotted_fixture.py:"),
+            "`{cmd_name} Nonesuch.get_data` must not fall back to Database/Cache members:\n{}",
+            run.stdout
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_dotted_fuzzy_prefix_member_exact_container() {
+    common::require_ty();
+
+    // `find Calculator.mult --fuzzy`: container exact (Calculator), member by
+    // prefix (mult → multiply). Should resolve within example.py.
+    let mut cmd = cargo_bin_cmd!("tyf");
+    cmd.arg("--workspace").arg(workspace_root()).arg("find").arg("Calculator.mult").arg("--fuzzy");
+    let output = cmd.output().expect("failed to run tyf");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "fuzzy dotted find failed: {stdout}");
+    assert!(
+        predicate::str::contains("multiply").eval(&stdout),
+        "fuzzy dotted find should prefix-match the member 'mult' → 'multiply', got:\n{stdout}"
+    );
+}
+
+#[tokio::test]
+async fn test_dotted_multi_dot_unsupported() {
+    common::require_ty();
+
+    // 2+ dots → usage error: a distinct nonzero exit code (2) + exact stderr message.
+    for cmd_name in ["show", "find", "refs"] {
+        let run = run_dotted(cmd_name, "a.b.c");
+        assert!(!run.success, "`{cmd_name} a.b.c` should exit nonzero");
+        assert_eq!(
+            run.code,
+            Some(2),
+            "`{cmd_name} a.b.c` should use the distinct usage-error exit code 2 (not 1, not 0)"
+        );
+        assert!(
+            run.stderr.contains("a.b.c") && run.stderr.contains("one level only"),
+            "`{cmd_name} a.b.c` should print the usage message to stderr, got:\n{}",
+            run.stderr
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_dotted_malformed_leading_trailing_dot() {
+    common::require_ty();
+
+    // Leading/trailing dots are malformed → same usage-error path as 2+ dots.
+    for token in [".foo", "foo."] {
+        let run = run_dotted("show", token);
+        assert!(!run.success, "`show {token}` should exit nonzero");
+        assert_eq!(run.code, Some(2), "`show {token}` should use usage-error exit code 2");
+        assert!(
+            run.stderr.contains("one level only"),
+            "`show {token}` should print the usage message, got:\n{}",
+            run.stderr
+        );
+    }
 }

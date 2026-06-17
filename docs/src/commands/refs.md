@@ -2,7 +2,7 @@
 
 All usages of a symbol across the codebase. Useful before renaming or removing code to understand the impact.
 
-Use `Class.method` dotted notation to narrow to a specific class member.
+Use `Class.member` dotted notation (one level only) to narrow to a specific class member. Module-qualified names (`module.func`) and nested paths (`Outer.Inner.method`) are not supported; using 2+ dots is a usage error.
 
 ## Usage
 
@@ -64,6 +64,22 @@ tyf list file.py --format csv \
   | tail -n+2 | cut -d, -f1 \
   | tyf refs --stdin
 ```
+
+## Dotted notation (`Class.member`)
+
+In symbol mode, `Class.member` narrows references to a member of a specific
+class (the container is resolved first, then its members), disambiguating a
+method name that exists on several classes.
+
+Limitations:
+
+- **One level only** — `Outer.Inner.method` is not supported.
+- **Module-qualified names (`module.func`) are not supported.**
+- **2+ dots is a usage error** (stderr message + nonzero exit); so is a leading
+  or trailing dot (`.foo`, `foo.`). `file:line:col` positions are unaffected —
+  dots in a file path are not treated as dotted notation.
+- A valid dotted query matching nothing exits 0 (normal "not found") with no
+  fallback.
 
 ## See also
 

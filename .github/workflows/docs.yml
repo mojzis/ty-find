@@ -40,6 +40,9 @@ jobs:
           curl -sSL https://github.com/badboy/mdbook-mermaid/releases/download/v0.17.0/mdbook-mermaid-v0.17.0-x86_64-unknown-linux-gnu.tar.gz | tar -xz --directory=bin
           echo "$PWD/bin" >> $GITHUB_PATH
 
+      - name: Sync docs version badge with Cargo.toml
+        run: bash docs/gen-version.sh
+
       - name: Build book
         run: mdbook build docs
 

@@ -223,6 +223,17 @@ html #mdbook-menu-bar {
   border-bottom: 1px solid rgba(128, 128, 128, 0.15) !important;
 }
 
+/* Version badge beside the title — small, dimmed */
+html .menu-title .version-badge {
+  font-size: 0.62em;
+  font-weight: 400;
+  opacity: 0.55;
+  margin-left: 0.5em;
+  letter-spacing: 0.02em;
+  vertical-align: middle;
+  font-variant-numeric: tabular-nums;
+}
+
 html #mdbook-menu-bar .icon-button {
   transition: color 0.15s ease;
 }

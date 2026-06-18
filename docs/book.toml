@@ -15,7 +15,7 @@ edit-url-template = "https://github.com/mojzis/ty-find/edit/main/docs/{path}"
 default-theme = "navy"
 preferred-dark-theme = "navy"
 additional-css = ["custom.css"]
-additional-js = ["mermaid.min.js", "mermaid-init.js"]
+additional-js = ["mermaid.min.js", "mermaid-init.js", "version.js"]
 
 [preprocessor]
 

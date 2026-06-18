@@ -72,6 +72,7 @@ lint-mermaid:
 docs:
 	@echo "📖 Building documentation..."
 	@if command -v mdbook > /dev/null 2>&1; then \
+		bash docs/gen-version.sh; \
 		mdbook build docs; \
 		bash docs/generate-llms-txt.sh; \
 		echo "Docs built at docs/book/html/index.html"; \

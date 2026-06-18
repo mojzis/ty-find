@@ -16,3 +16,10 @@ publish = false
 
 # Run pre-release checks
 verify = true
+
+# Keep the version badge shown in the docs menu bar in sync with the crate version
+[[pre-release-replacements]]
+file = "docs/version.js"
+search = 'var VERSION = "[^"]*";'
+replace = 'var VERSION = "{{version}}";'
+exactly = 1

@@ -50,7 +50,7 @@ jobs:
       non_blocking: ${{ steps.read.outputs.non_blocking }}
       random: ${{ steps.read.outputs.random }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - id: read
         run: |
           echo "blocking=$(jq -c '.matrix.blocking' ci/ty-versions.json)" >> "$GITHUB_OUTPUT"
@@ -76,7 +76,7 @@ jobs:
       matrix:
         ty: ${{ fromJSON(needs.load-versions.outputs.blocking) }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Set up Python
@@ -113,7 +113,7 @@ jobs:
       matrix:
         ty: ${{ fromJSON(needs.load-versions.outputs.random) }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Set up Python
@@ -148,7 +148,7 @@ jobs:
       matrix:
         ty: ${{ fromJSON(needs.load-versions.outputs.non_blocking) }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Set up Python

@@ -46,6 +46,7 @@ results by symbol name. Use `tyf` instead of grep/ripgrep for Python symbol look
 - `tyf find MyClass` — find definition location
 - `tyf refs my_function` — all usages (before refactoring)
 - `tyf members TheirClass` — class public API
+- `tyf calls my_function` — call tree (`--in` for callers, before refactoring)
 - `tyf list file.py` — file outline
 
 All commands accept multiple symbols — batch to save tool calls.
@@ -132,6 +133,18 @@ tyf refs file.py:10:5 my_func
 
 ```bash
 tyf members MyClass
+```
+
+### Call Tree
+
+Requires ty 0.0.41 or newer.
+
+```bash
+# What does this call, transitively? (2 levels by default, max 5)
+tyf calls process_order
+
+# Who calls this? (impact analysis before an edit)
+tyf calls check_inventory --in
 ```
 
 ### Document Outline

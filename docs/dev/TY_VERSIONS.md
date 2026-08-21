@@ -150,6 +150,44 @@ across ≥10 cold reruns at a fixed `ty`.
 > teardown above avoids that. CI never hits this (one version, one run, fresh
 > runner).
 
+## Phase 3 — the first genuine capability gate above the floor
+
+Everything above concerns behavior that is flat across the supported range. The
+`calls` command (LSP call hierarchy) is the first feature that is **not**: it
+needs a `ty` newer than the floor.
+
+Swept one version at a time (`initialize` → does the result advertise
+`callHierarchyProvider`?), then verified functionally at the boundary:
+
+| ty | `callHierarchyProvider` |
+|---|---|
+| `0.0.15` … `0.0.40` | **absent** — `textDocument/prepareCallHierarchy` answers JSON-RPC `-32601 Unknown request` |
+| `0.0.41` … `0.0.73` | present; `prepare` + `outgoing`/`incoming` all functional and identical at `0.0.41`, `0.0.49`, `0.0.73` |
+
+Full response shapes and per-construct behavior are in
+[`call-hierarchy-spike.md`](call-hierarchy-spike.md).
+
+**This does not move the floor.** Every other command still works from `0.0.15`.
+Instead:
+
+- The LSP client records `callHierarchyProvider` at `initialize`. When it is
+  absent, the `call_hierarchy` daemon RPC returns a structured
+  `unsupported_by_ty` error carrying the installed version, and `tyf calls`
+  exits `3` with a message naming it — never a silent empty tree, which would
+  be indistinguishable from "this function calls nothing".
+- `tests/integration/test_calls.rs` gates on the installed version
+  (`common::has_call_hierarchy`) and **skips** below `0.0.41`, because the
+  *blocking* matrix (`0.0.15`, `0.0.18`, `0.0.33`) deliberately runs versions
+  that predate the feature. The suite does run for real on the non-blocking
+  `0.0.49` job and on any nightly draw at or above `0.0.41`.
+- `uv.lock` pins `ty 0.0.18`, so a local `uv sync` + `cargo test` **skips** the
+  `calls` suite (it prints why). To exercise it locally, install a newer `ty`:
+  `uv pip install "ty>=0.0.41" --reinstall`.
+
+Whether to raise the floor — or promote a `>= 0.0.41` version to the blocking
+matrix so `calls` is gated on every PR — is a call for the version-floor task;
+there is a `TODO` pointing here at the capability check in `src/lsp/client.rs`.
+
 ## Curated CI matrix
 
 The CI matrix (`.github/workflows/ty-version-matrix.yml`) does **not** run the

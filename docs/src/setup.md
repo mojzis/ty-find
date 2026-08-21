@@ -17,6 +17,7 @@ results by symbol name. Use `tyf` instead of grep/ripgrep for Python symbol look
 - `tyf find MyClass` — find definition location
 - `tyf refs my_function` — all usages (before refactoring)
 - `tyf members TheirClass` — class public API
+- `tyf calls my_function` — call tree (`--in` for callers, before refactoring)
 - `tyf list file.py` — file outline
 
 All commands accept multiple symbols — batch to save tool calls.

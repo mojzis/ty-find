@@ -30,6 +30,7 @@ Symbol Lookup:
   find         Find where a symbol is defined by name (--fuzzy for partial matching)
   refs         All usages of a symbol across the codebase (by name or file:line:col)
   members      Public interface of a class: methods, properties, and class variables
+  calls        Call tree of a symbol: what it calls, or what calls it
 
 Browsing:
   list         All functions, classes, and variables defined in a file
@@ -239,6 +240,56 @@ pub enum Commands {
         all: bool,
     },
 
+    /// Call tree of a symbol: what it calls, or what calls it
+    #[command(
+        name = "calls",
+        long_about = "Call tree of a symbol \u{2014} recursively, as a tree.\n\n\
+        Outgoing (the default) answers \"what does this do, transitively\" in one \
+        call instead of a chain of file reads. Incoming (--in) answers \"who calls \
+        this\" \u{2014} impact analysis before an edit, with caller identity rather than \
+        the raw text ranges 'refs' returns.\n\n\
+        Use Class.member dotted notation (one level only) to narrow to a specific class \
+        member. Module-qualified names (module.func) and nested paths (Outer.Inner.method) \
+        are not supported; using 2+ dots is a usage error.\n\n\
+        A callee already expanded elsewhere in the tree is marked with an up-arrow \
+        instead of being repeated; a call that re-enters the current path is marked \
+        (cycle). Code outside the workspace (stdlib, site-packages) is shown as a \
+        single (external) line and is never expanded.\n\n\
+        Requires a ty with call-hierarchy support (ty 0.0.41 or newer).\n\n\
+        Examples:\n  \
+        tyf calls process_order                 # what it calls, 2 levels deep\n  \
+        tyf calls process_order --depth 3       # deeper\n  \
+        tyf calls check_inventory --in          # who calls it\n  \
+        tyf calls OrderPipeline.run             # a specific class method\n  \
+        tyf calls a b c                         # several symbols at once\n  \
+        tyf calls process_order --external      # locate stdlib callees too"
+    )]
+    Calls {
+        /// Symbol name(s). Use Class.member (one level) to narrow to a class member.
+        #[arg(required = true, num_args = 1..)]
+        symbols: Vec<String>,
+
+        /// Incoming calls: who calls this symbol
+        #[arg(long = "in", default_value_t = false, conflicts_with = "outgoing")]
+        incoming: bool,
+
+        /// Outgoing calls: what this symbol calls (the default)
+        #[arg(long = "out", default_value_t = false)]
+        outgoing: bool,
+
+        /// Recursion depth (max 5; larger values are clamped)
+        #[arg(long, default_value_t = 2)]
+        depth: u32,
+
+        /// Show locations for out-of-workspace callees (still never expanded)
+        #[arg(long, default_value_t = false)]
+        external: bool,
+
+        /// Narrow the initial symbol lookup to a specific file
+        #[arg(short, long)]
+        file: Option<PathBuf>,
+    },
+
     // -- Browsing --
     /// All functions, classes, and variables defined in a file
     #[command(
@@ -433,6 +484,95 @@ mod tests {
         }
     }
 
+    #[test]
+    fn calls_defaults_to_outgoing_depth_two() {
+        let cli = Cli::try_parse_from(["tyf", "calls", "my_func"]).unwrap();
+        match cli.command {
+            Commands::Calls { symbols, incoming, outgoing, depth, external, file } => {
+                assert_eq!(symbols, vec!["my_func"]);
+                assert!(!incoming, "outgoing is the default direction");
+                assert!(!outgoing, "the explicit --out flag defaults off");
+                assert_eq!(depth, 2);
+                assert!(!external);
+                assert!(file.is_none());
+            }
+            _ => panic!("expected Calls"),
+        }
+    }
+
+    #[test]
+    fn calls_accepts_in_flag() {
+        let cli = Cli::try_parse_from(["tyf", "calls", "my_func", "--in"]).unwrap();
+        match cli.command {
+            Commands::Calls { incoming, .. } => assert!(incoming),
+            _ => panic!("expected Calls"),
+        }
+    }
+
+    #[test]
+    fn calls_accepts_out_flag() {
+        let cli = Cli::try_parse_from(["tyf", "calls", "my_func", "--out"]).unwrap();
+        match cli.command {
+            Commands::Calls { outgoing, incoming, .. } => {
+                assert!(outgoing);
+                assert!(!incoming);
+            }
+            _ => panic!("expected Calls"),
+        }
+    }
+
+    /// `--in` and `--out` are mutually exclusive: asking for both is a usage
+    /// error, not a silent win for one of them.
+    #[test]
+    fn calls_rejects_both_directions() {
+        let Err(err) = Cli::try_parse_from(["tyf", "calls", "my_func", "--in", "--out"]) else {
+            panic!("--in and --out must conflict");
+        };
+        assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn calls_accepts_depth_and_external_and_file() {
+        let cli = Cli::try_parse_from([
+            "tyf",
+            "calls",
+            "my_func",
+            "--depth",
+            "4",
+            "--external",
+            "--file",
+            "src/a.py",
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::Calls { depth, external, file, .. } => {
+                assert_eq!(depth, 4);
+                assert!(external);
+                assert_eq!(file, Some(PathBuf::from("src/a.py")));
+            }
+            _ => panic!("expected Calls"),
+        }
+    }
+
+    /// An out-of-range depth is clamped by the daemon, not rejected here, so
+    /// parsing must accept it.
+    #[test]
+    fn calls_accepts_out_of_range_depth_without_erroring() {
+        let cli = Cli::try_parse_from(["tyf", "calls", "my_func", "--depth", "99"]).unwrap();
+        match cli.command {
+            Commands::Calls { depth, .. } => assert_eq!(depth, 99),
+            _ => panic!("expected Calls"),
+        }
+    }
+
+    #[test]
+    fn calls_requires_at_least_one_symbol() {
+        let Err(err) = Cli::try_parse_from(["tyf", "calls"]) else {
+            panic!("calls needs at least one symbol");
+        };
+        assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
+    }
+
     /// Verify that all subcommands appear in help (except hidden ones like generate-docs).
     #[test]
     fn help_shows_all_subcommands() {
@@ -441,7 +581,7 @@ mod tests {
         cmd.write_help(&mut buf).unwrap();
         let help = String::from_utf8(buf).unwrap();
 
-        let expected_subcommands = &["show", "find", "refs", "members", "list", "daemon"];
+        let expected_subcommands = &["show", "find", "refs", "members", "calls", "list", "daemon"];
 
         for subcmd in expected_subcommands {
             assert!(

@@ -21,11 +21,12 @@ use super::pidfile::{self, PidfileData};
 use crate::debug::DebugLog;
 
 use super::protocol::{
-    BatchReferencesParams, BatchReferencesQuery, BatchReferencesResult, DaemonRequest,
-    DaemonResponse, DefinitionParams, DefinitionResult, DocumentSymbolsParams,
-    DocumentSymbolsResult, HoverParams, HoverResult, InspectParams, InspectResult, MembersParams,
-    MembersResult, Method, PingParams, PingResult, ReferencesParams, ReferencesResult,
-    ShutdownParams, ShutdownResult, WorkspaceSymbolsParams, WorkspaceSymbolsResult,
+    BatchReferencesParams, BatchReferencesQuery, BatchReferencesResult, CallDirection,
+    CallHierarchyParams, CallHierarchyQuery, CallHierarchyResult, DaemonRequest, DaemonResponse,
+    DefinitionParams, DefinitionResult, DocumentSymbolsParams, DocumentSymbolsResult, HoverParams,
+    HoverResult, InspectParams, InspectResult, MembersParams, MembersResult, Method, PingParams,
+    PingResult, ReferencesParams, ReferencesResult, ShutdownParams, ShutdownResult,
+    UnsupportedByTy, WorkspaceSymbolsParams, WorkspaceSymbolsResult,
 };
 
 /// Default timeout for daemon operations (30 seconds).
@@ -421,6 +422,38 @@ impl DaemonClient {
         self.execute(Method::Members, params).await
     }
 
+    /// Execute a call-hierarchy request: the daemon walks the whole tree and
+    /// returns it finished.
+    ///
+    /// Unlike the other `execute_*` helpers this does not go through
+    /// [`Self::execute`], because the `unsupported_by_ty` error must survive as
+    /// a typed error rather than collapsing into a generic daemon-error string
+    /// — the CLI needs the `ty` version out of it.
+    pub async fn execute_call_hierarchy(
+        &mut self,
+        workspace: PathBuf,
+        queries: Vec<CallHierarchyQuery>,
+        direction: CallDirection,
+        depth: u32,
+        include_external: bool,
+    ) -> Result<CallHierarchyResult> {
+        let params = CallHierarchyParams { workspace, queries, direction, depth, include_external };
+        let params_value =
+            serde_json::to_value(params).context("Failed to serialize call_hierarchy params")?;
+
+        let response = self.send_request(Method::CallHierarchy, params_value).await?;
+
+        if let Some(error) = response.error {
+            if let Some((feature, ty_version)) = error.as_unsupported_by_ty() {
+                return Err(UnsupportedByTy::from_slug(feature, ty_version).into());
+            }
+            anyhow::bail!("Daemon error: {}", error.message);
+        }
+
+        let result = response.result.context("Response missing result field")?;
+        serde_json::from_value(result).context("Failed to deserialize call_hierarchy result")
+    }
+
     /// Send a ping request to check daemon health.
     pub async fn ping(&mut self) -> Result<PingResult> {
         self.execute(Method::Ping, PingParams {}).await
@@ -715,6 +748,273 @@ mod tests {
 
         let ping = client.ping().await.expect("ping should succeed");
         assert_eq!(ping.status, "running");
+
+        handle.await.expect("server task");
+    }
+
+    /// Helper: spin up a TCP listener that answers one request with `response`
+    /// and hand back a pidfile pointing at it.
+    ///
+    /// Used to exercise wire-level error handling without a real daemon or a
+    /// real `ty` — in particular the `unsupported_by_ty` path, which would
+    /// otherwise need an old `ty` installed in CI.
+    async fn spawn_daemon_returning(
+        response: serde_json::Value,
+    ) -> (tokio::task::JoinHandle<()>, PidfileData) {
+        let listener =
+            tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind should succeed");
+        let port = listener.local_addr().expect("addr").port();
+
+        let handle = tokio::spawn(async move {
+            use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
+
+            let (mut stream, _) = listener.accept().await.expect("accept");
+            let mut buf_reader = tokio::io::BufReader::new(&mut stream);
+
+            let mut header = String::new();
+            buf_reader.read_line(&mut header).await.expect("read header");
+            let len: usize = header
+                .trim()
+                .strip_prefix("Content-Length: ")
+                .expect("header")
+                .parse()
+                .expect("parse");
+            let mut empty = String::new();
+            buf_reader.read_line(&mut empty).await.expect("read sep");
+            let mut body = vec![0u8; len];
+            buf_reader.read_exact(&mut body).await.expect("read body");
+
+            let request: serde_json::Value =
+                serde_json::from_slice(&body).expect("request should be JSON");
+            let mut resp = response;
+            resp["id"] = request["id"].clone();
+
+            let resp_str = serde_json::to_string(&resp).expect("serialize");
+            let framed = format!("Content-Length: {}\r\n\r\n{resp_str}", resp_str.len());
+            stream.write_all(framed.as_bytes()).await.expect("write");
+            stream.flush().await.expect("flush");
+        });
+
+        let data = PidfileData {
+            pid: std::process::id(),
+            socket: PathBuf::from("/tmp/nonexistent-ty-find-caps-test.sock"),
+            tcp_port: port,
+            version: env!("CARGO_PKG_VERSION").to_string(),
+        };
+        (handle, data)
+    }
+
+    fn sample_call_query() -> CallHierarchyQuery {
+        CallHierarchyQuery {
+            label: "process_order".to_string(),
+            file: PathBuf::from("orders.py"),
+            line: 40,
+            column: 4,
+        }
+    }
+
+    /// A daemon that reports the capability missing must surface as the typed
+    /// [`UnsupportedByTy`] error carrying the ty version — not as a generic
+    /// "Daemon error" string, and not as an empty tree (which would be
+    /// indistinguishable from "this function calls nothing").
+    #[tokio::test]
+    async fn call_hierarchy_unsupported_surfaces_typed_error_with_version() {
+        let (handle, data) = spawn_daemon_returning(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "error": {
+                "code": -32005,
+                "message": "unsupported_by_ty",
+                "data": { "feature": "call_hierarchy", "ty_version": "0.0.18" }
+            }
+        }))
+        .await;
+
+        let mut client = DaemonClient::connect_with_pidfile(&data, DEFAULT_TIMEOUT)
+            .await
+            .expect("should connect via TCP fallback");
+
+        let err = client
+            .execute_call_hierarchy(
+                PathBuf::from("/workspace"),
+                vec![sample_call_query()],
+                CallDirection::Outgoing,
+                2,
+                false,
+            )
+            .await
+            .expect_err("missing capability must be an error");
+
+        let unsupported =
+            err.downcast_ref::<UnsupportedByTy>().expect("should be a typed UnsupportedByTy error");
+        assert_eq!(unsupported.ty_version, "0.0.18");
+        assert_eq!(unsupported.feature, "call hierarchy");
+        assert_eq!(unsupported.min_version, "0.0.41");
+
+        let rendered = unsupported.to_string();
+        assert!(rendered.contains("0.0.18"), "message must name the installed version: {rendered}");
+        assert!(rendered.contains("0.0.41"), "message must name the required version: {rendered}");
+
+        handle.await.expect("server task");
+    }
+
+    /// A slug this CLI does not recognise (a newer daemon gating a feature it
+    /// has not heard of) must still render a usable message rather than being
+    /// dropped or rendered blank.
+    #[tokio::test]
+    async fn call_hierarchy_unknown_feature_slug_still_renders() {
+        let (handle, data) = spawn_daemon_returning(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "error": {
+                "code": -32005,
+                "message": "Feature not supported by the installed ty",
+                "data": { "feature": "type_hierarchy", "ty_version": "0.0.30" }
+            }
+        }))
+        .await;
+
+        let mut client = DaemonClient::connect_with_pidfile(&data, DEFAULT_TIMEOUT)
+            .await
+            .expect("should connect via TCP fallback");
+
+        let err = client
+            .execute_call_hierarchy(
+                PathBuf::from("/workspace"),
+                vec![sample_call_query()],
+                CallDirection::Outgoing,
+                2,
+                false,
+            )
+            .await
+            .expect_err("missing capability must be an error");
+
+        let unsupported = err.downcast_ref::<UnsupportedByTy>().expect("still a typed error");
+        assert_eq!(unsupported.feature, "type_hierarchy");
+        let rendered = unsupported.to_string();
+        assert!(rendered.contains("type_hierarchy"), "got: {rendered}");
+        assert!(rendered.contains("0.0.30"), "got: {rendered}");
+
+        handle.await.expect("server task");
+    }
+
+    /// The wire message is a sentence, not the machine slug: a caller that does
+    /// not special-case -32005 prints `message` verbatim.
+    #[test]
+    fn unsupported_by_ty_error_message_is_human_readable() {
+        let error =
+            crate::daemon::protocol::DaemonError::unsupported_by_ty("call_hierarchy", "0.0.18");
+        assert_eq!(error.code, -32005);
+        assert_eq!(error.message, "Feature not supported by the installed ty");
+        assert_eq!(error.as_unsupported_by_ty(), Some(("call_hierarchy", "0.0.18")));
+    }
+
+    /// Any other error code is not an unsupported-capability error.
+    #[test]
+    fn other_error_codes_are_not_unsupported_by_ty() {
+        let error = crate::daemon::protocol::DaemonError::symbol_not_found("foo");
+        assert_eq!(error.as_unsupported_by_ty(), None);
+    }
+
+    /// Any other daemon error keeps the generic path — the capability gate must
+    /// not swallow unrelated failures.
+    #[tokio::test]
+    async fn call_hierarchy_other_errors_are_not_treated_as_unsupported() {
+        let (handle, data) = spawn_daemon_returning(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "error": { "code": -32603, "message": "Internal error: boom" }
+        }))
+        .await;
+
+        let mut client = DaemonClient::connect_with_pidfile(&data, DEFAULT_TIMEOUT)
+            .await
+            .expect("should connect via TCP fallback");
+
+        let err = client
+            .execute_call_hierarchy(
+                PathBuf::from("/workspace"),
+                vec![sample_call_query()],
+                CallDirection::Outgoing,
+                2,
+                false,
+            )
+            .await
+            .expect_err("internal error must propagate");
+
+        assert!(err.downcast_ref::<UnsupportedByTy>().is_none());
+        assert!(err.to_string().contains("boom"), "got: {err}");
+
+        handle.await.expect("server task");
+    }
+
+    /// A successful walk deserializes into the tree the formatter renders,
+    /// markers included.
+    #[tokio::test]
+    async fn call_hierarchy_success_deserializes_tree_with_markers() {
+        let (handle, data) = spawn_daemon_returning(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+                "direction": "outgoing",
+                "depth": 2,
+                "entries": [{
+                    "label": "process_order",
+                    "roots": [{
+                        "name": "process_order", "kind": 12, "detail": "orders",
+                        "uri": "file:///w/orders.py", "line": 40, "column": 4,
+                        "external": false, "cycle": false, "deduped": false,
+                        "children": [
+                            {
+                                "name": "check_inventory", "kind": 12, "detail": "inventory",
+                                "uri": "file:///w/inventory.py", "line": 11, "column": 4,
+                                "call_sites": [42],
+                                "external": false, "cycle": false, "deduped": true
+                            },
+                            {
+                                "name": "floor", "kind": 12, "detail": "math",
+                                "external": true, "cycle": false, "deduped": false
+                            }
+                        ]
+                    }]
+                }]
+            }
+        }))
+        .await;
+
+        let mut client = DaemonClient::connect_with_pidfile(&data, DEFAULT_TIMEOUT)
+            .await
+            .expect("should connect via TCP fallback");
+
+        let result = client
+            .execute_call_hierarchy(
+                PathBuf::from("/workspace"),
+                vec![sample_call_query()],
+                CallDirection::Outgoing,
+                2,
+                false,
+            )
+            .await
+            .expect("walk should succeed");
+
+        assert_eq!(result.direction, CallDirection::Outgoing);
+        assert_eq!(result.depth, 2);
+        assert_eq!(result.entries.len(), 1);
+
+        let root = &result.entries[0].roots[0];
+        assert_eq!(root.name, "process_order");
+        assert_eq!(root.children.len(), 2);
+        assert!(root.children[0].deduped, "dedup flag must survive the wire");
+        assert_eq!(root.children[0].call_sites, vec![42]);
+        assert!(root.children[1].external);
+        assert!(
+            root.children[1].uri.is_none(),
+            "an external node carries no location unless --external"
+        );
+        assert!(
+            root.children[1].line.is_none() && root.children[1].column.is_none(),
+            "and no position either \u{2014} coordinates with no file resolve to nothing"
+        );
 
         handle.await.expect("server task");
     }

@@ -28,6 +28,15 @@ tyf [OPTIONS] <COMMAND>
 **`--color`**
 : When to use colored output: auto (default), always, or never. Respects the `NO_COLOR` environment variable.
 
+## Exit codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | Success — including a well-formed query that matched nothing ("not found" is a normal result, not an error) |
+| `1` | Runtime error (daemon unreachable, unreadable file, `ty` not installed) |
+| `2` | Usage error (malformed invocation, e.g. 2+ dots in a dotted symbol) |
+| `3` | The installed `ty` lacks a capability the command needs (see [calls](calls.md)) |
+
 ## Commands
 
 **[show](show.md)**
@@ -41,6 +50,9 @@ tyf [OPTIONS] <COMMAND>
 
 **[members](members.md)**
 : Public interface of a class: methods, properties, and class variables
+
+**[calls](calls.md)**
+: Call tree of a symbol: what it calls (`--in` for what calls it)
 
 **[list](list.md)**
 : All functions, classes, and variables defined in a file

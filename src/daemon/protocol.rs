@@ -12,7 +12,9 @@ use serde_repr::{Deserialize_repr, Serialize_repr};
 use std::path::PathBuf;
 
 // Re-export LSP types that are used in responses
-pub use crate::lsp::protocol::{DocumentSymbol, Hover, Location, Range, SymbolInformation};
+pub use crate::lsp::protocol::{
+    CallDirection, DocumentSymbol, Hover, Location, Range, SymbolInformation, SymbolKind,
+};
 
 /// JSON-RPC 2.0 request from CLI to daemon.
 ///
@@ -265,6 +267,38 @@ impl DaemonError {
         let symbol = symbol.into();
         Self::with_data(-32004, "Symbol not found", serde_json::json!({"symbol": symbol}))
     }
+
+    /// The installed `ty` does not support a feature tyf needs (-32005).
+    ///
+    /// Distinct from a query that simply matched nothing: this means `ty`
+    /// never advertised the capability, so no amount of retrying will help.
+    /// The `data` carries the installed version so the CLI can name it.
+    pub fn unsupported_by_ty(feature: impl Into<String>, ty_version: impl Into<String>) -> Self {
+        // The message is a sentence, like every other DaemonError: a caller
+        // that does not special-case -32005 falls back to printing it verbatim,
+        // and "unsupported_by_ty" is a slug, not an explanation. The slug lives
+        // in `data.feature` where a machine can read it.
+        Self::with_data(
+            -32005,
+            "Feature not supported by the installed ty",
+            serde_json::json!({
+                "feature": feature.into(),
+                "ty_version": ty_version.into(),
+            }),
+        )
+    }
+
+    /// Whether this is an [`Self::unsupported_by_ty`] error, and if so the
+    /// feature slug and the `ty` version it reported.
+    pub fn as_unsupported_by_ty(&self) -> Option<(&str, &str)> {
+        if self.code != -32005 {
+            return None;
+        }
+        let data = self.data.as_ref()?;
+        let feature = data.get("feature")?.as_str()?;
+        let ty_version = data.get("ty_version")?.as_str()?;
+        Some((feature, ty_version))
+    }
 }
 
 /// Supported daemon methods.
@@ -297,6 +331,9 @@ pub enum Method {
     /// Get class members (methods, properties, class variables) with type signatures
     Members,
 
+    /// Walk the call hierarchy from one or more positions, recursively
+    CallHierarchy,
+
     /// Get diagnostics (type errors, warnings) for a file
     Diagnostics,
 
@@ -319,6 +356,7 @@ impl Method {
             Self::BatchReferences => "batch_references",
             Self::Inspect => "inspect",
             Self::Members => "members",
+            Self::CallHierarchy => "call_hierarchy",
             Self::Diagnostics => "diagnostics",
             Self::Ping => "ping",
             Self::Shutdown => "shutdown",
@@ -500,6 +538,190 @@ pub struct MembersParams {
     /// Include dunder methods (default: exclude `__*__` and `_*` members)
     #[serde(default)]
     pub include_all: bool,
+}
+
+/// The `ty` version that first advertises `callHierarchyProvider`.
+///
+/// Established empirically: `0.0.40` does not, `0.0.41` does. See
+/// `docs/dev/call-hierarchy-spike.md`.
+///
+/// Mirrors `capabilities.call_hierarchy` in `ci/ty-versions.json`, the single
+/// source of truth for ty version data; change both together.
+pub const CALL_HIERARCHY_MIN_TY: &str = "0.0.41";
+
+/// The installed `ty` lacks a capability tyf needs.
+///
+/// Surfaced by the daemon as the `unsupported_by_ty` error and re-typed here so
+/// the CLI can print an actionable message naming the version, rather than a
+/// generic daemon failure. Distinct from "symbol not found", which is a normal
+/// empty result and exits 0.
+#[derive(Debug)]
+pub struct UnsupportedByTy {
+    /// Human-readable feature name (e.g. `"call hierarchy"`)
+    pub feature: String,
+    /// The `ty` version that first provides it
+    pub min_version: String,
+    /// The `ty` version actually installed
+    pub ty_version: String,
+}
+
+impl UnsupportedByTy {
+    /// Build the error for a feature slug as the daemon reports it.
+    ///
+    /// Unknown slugs still produce a usable message rather than being dropped —
+    /// a newer daemon gating a feature this CLI has not heard of should not
+    /// degrade to a blank error.
+    pub fn from_slug(slug: &str, ty_version: impl Into<String>) -> Self {
+        let (feature, min_version) = match slug {
+            "call_hierarchy" => ("call hierarchy", CALL_HIERARCHY_MIN_TY),
+            other => (other, "a newer version"),
+        };
+        Self {
+            feature: feature.to_string(),
+            min_version: min_version.to_string(),
+            ty_version: ty_version.into(),
+        }
+    }
+}
+
+impl std::fmt::Display for UnsupportedByTy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "tyf: {} requires a newer ty \u{2014} the installed ty is {}.\n\
+             It first appears in ty {}; upgrade with: uv add --dev --upgrade ty",
+            self.feature, self.ty_version, self.min_version
+        )
+    }
+}
+
+impl std::error::Error for UnsupportedByTy {}
+
+/// Hard ceiling on call-hierarchy recursion depth.
+///
+/// Enforced by the daemon, not the CLI: a client asking for more is clamped,
+/// not rejected. Each extra level multiplies both LSP round-trips and output
+/// size, and the command exists to *save* an agent tokens.
+pub const MAX_CALL_DEPTH: u32 = 5;
+
+/// One resolved starting point for a call-hierarchy walk.
+///
+/// `line`/`column` are 0-based and must already point at the symbol's **name
+/// token** — `ty` returns nothing for the `def`/`class` keyword. The CLI
+/// resolves this with the same `find_name_column` adjustment `show` and `refs`
+/// use.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct CallHierarchyQuery {
+    /// Display label for output grouping (the symbol as the user typed it)
+    pub label: String,
+
+    /// File containing the starting position
+    pub file: PathBuf,
+
+    /// 0-based line
+    pub line: u32,
+
+    /// 0-based column, on the name token
+    pub column: u32,
+}
+
+/// Parameters for a call-hierarchy request.
+///
+/// The daemon performs the entire recursive walk and returns a finished tree —
+/// the CLI never issues per-level requests.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct CallHierarchyParams {
+    /// Workspace root directory
+    pub workspace: PathBuf,
+
+    /// Starting points, resolved by the CLI
+    pub queries: Vec<CallHierarchyQuery>,
+
+    /// Which way to walk
+    pub direction: CallDirection,
+
+    /// Requested recursion depth. Clamped to [`MAX_CALL_DEPTH`] by the daemon.
+    pub depth: u32,
+
+    /// Include locations for out-of-workspace nodes. They are never expanded
+    /// either way.
+    #[serde(default)]
+    pub include_external: bool,
+}
+
+/// One node in the returned call tree.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct CallNode {
+    /// Symbol name
+    pub name: String,
+
+    /// LSP symbol kind (`Function`, `Method`, and — for module-level callers —
+    /// `Module`)
+    pub kind: SymbolKind,
+
+    /// Module name as `ty` reports it. `null` for module-level callers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+
+    /// `file://` URI of the definition. `None` for an external node unless
+    /// `include_external` was set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub uri: Option<String>,
+
+    /// 0-based line of the name token. `None` whenever `uri` is `None` — a
+    /// position with no file to resolve it against means nothing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub line: Option<u32>,
+
+    /// 0-based column of the name token. `None` whenever `uri` is `None`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub column: Option<u32>,
+
+    /// 0-based lines of the call sites that produced this edge, from
+    /// `fromRanges`. Empty for a root. Shown by `--detail full`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub call_sites: Vec<u32>,
+
+    /// Defined outside the workspace root (stdlib, site-packages). Never
+    /// expanded, under any flag.
+    pub external: bool,
+
+    /// This node re-enters a definition already on the path from the root — a
+    /// cycle back-reference. Not expanded.
+    pub cycle: bool,
+
+    /// This node was already expanded elsewhere in **this** tree (dedup is
+    /// scoped per requested symbol); the subtree is shown at its first
+    /// occurrence. Not expanded again.
+    pub deduped: bool,
+
+    /// Expanded children. Always empty when `cycle`, `deduped`, or `external`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub children: Vec<Self>,
+}
+
+/// The tree(s) for one requested symbol.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct CallHierarchyEntry {
+    /// The symbol as the user typed it
+    pub label: String,
+
+    /// One root per position the label resolved to (usually exactly one).
+    /// Empty when the symbol resolved but `ty` reported nothing callable there.
+    pub roots: Vec<CallNode>,
+}
+
+/// Result of a call-hierarchy request.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct CallHierarchyResult {
+    /// The direction actually walked
+    pub direction: CallDirection,
+
+    /// The depth actually used, after clamping to [`MAX_CALL_DEPTH`]
+    pub depth: u32,
+
+    /// One entry per requested symbol, in request order
+    pub entries: Vec<CallHierarchyEntry>,
 }
 
 /// Parameters for diagnostics request.

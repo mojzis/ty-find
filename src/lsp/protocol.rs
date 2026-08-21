@@ -180,6 +180,95 @@ pub enum SymbolTag {
     Deprecated = 1,
 }
 
+// Call hierarchy support
+//
+// Shapes verified empirically against a real `ty server`; see
+// `docs/dev/call-hierarchy-spike.md` for the observed responses.
+
+/// A node in the call hierarchy: a callable that can be expanded in either
+/// direction.
+///
+/// `extra` captures any field the server sends that is not modelled here (the
+/// LSP spec allows an opaque `data` field a server may require back verbatim).
+/// `ty` was not observed to send one, but round-tripping unknown fields costs
+/// nothing and keeps the item valid if a future `ty` starts using it.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct CallHierarchyItem {
+    pub name: String,
+    pub kind: SymbolKind,
+    /// Module name (e.g. `"models"`), not a signature. `ty` leaves this `null`
+    /// for module-level callers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    pub uri: String,
+    /// The full definition range. For a decorated function this starts at the
+    /// first decorator line, not at `def`.
+    pub range: Range,
+    /// The name token. Used as the reported location and the identity key.
+    #[serde(rename = "selectionRange")]
+    pub selection_range: Range,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tags: Option<Vec<SymbolTag>>,
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
+}
+
+/// One outgoing edge: `to` is the callee, `from_ranges` are the call sites
+/// inside the *caller*.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct CallHierarchyOutgoingCall {
+    pub to: CallHierarchyItem,
+    #[serde(rename = "fromRanges")]
+    pub from_ranges: Vec<Range>,
+}
+
+/// One incoming edge: `from` is the caller, `from_ranges` are the call sites
+/// inside that caller.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct CallHierarchyIncomingCall {
+    pub from: CallHierarchyItem,
+    #[serde(rename = "fromRanges")]
+    pub from_ranges: Vec<Range>,
+}
+
+/// Which way to walk the call graph.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum CallDirection {
+    /// What this symbol calls.
+    #[default]
+    Outgoing,
+    /// What calls this symbol.
+    Incoming,
+}
+
+impl CallDirection {
+    /// The LSP method name for this direction.
+    pub fn lsp_method(self) -> &'static str {
+        match self {
+            Self::Outgoing => "callHierarchy/outgoingCalls",
+            Self::Incoming => "callHierarchy/incomingCalls",
+        }
+    }
+
+    /// Human-readable label used in output and error messages.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Outgoing => "outgoing",
+            Self::Incoming => "incoming",
+        }
+    }
+}
+
+/// Params for `textDocument/prepareCallHierarchy`.
+#[derive(Serialize, Deserialize)]
+pub struct CallHierarchyPrepareParams {
+    #[serde(flatten)]
+    pub text_document_position_params: TextDocumentPositionParams,
+    #[serde(rename = "workDoneToken", skip_serializing_if = "Option::is_none")]
+    pub work_done_token: Option<String>,
+}
+
 // Hover request params
 #[derive(Serialize, Deserialize)]
 pub struct HoverParams {

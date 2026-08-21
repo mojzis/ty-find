@@ -12,6 +12,7 @@
 
 use anyhow::{Context, Result};
 use serde_json::Value;
+use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -23,14 +24,17 @@ use tokio::sync::broadcast;
 use crate::daemon::pidfile::{self, PidfileData};
 use crate::daemon::pool::LspClientPool;
 use crate::daemon::protocol::{
-    BatchReferencesEntry, BatchReferencesParams, BatchReferencesResult, DaemonError, DaemonRequest,
-    DaemonResponse, DefinitionParams, DefinitionResult, DiagnosticsResult, DocumentSymbolsParams,
+    BatchReferencesEntry, BatchReferencesParams, BatchReferencesResult, CallHierarchyEntry,
+    CallHierarchyParams, CallHierarchyResult, CallNode, DaemonError, DaemonRequest, DaemonResponse,
+    DefinitionParams, DefinitionResult, DiagnosticsResult, DocumentSymbolsParams,
     DocumentSymbolsResult, HoverParams, HoverResult, InspectParams, InspectResult, MemberInfo,
     MembersParams, MembersResult, Method, PingResult, ReferencesParams, ReferencesResult,
-    ShutdownResult, WorkspaceSymbolsParams, WorkspaceSymbolsResult,
+    ShutdownResult, WorkspaceSymbolsParams, WorkspaceSymbolsResult, MAX_CALL_DEPTH,
 };
 use crate::lsp::client::TyLspClient;
-use crate::lsp::protocol::{DocumentSymbol, Hover, Location, SymbolKind};
+use crate::lsp::protocol::{
+    CallDirection, CallHierarchyItem, DocumentSymbol, Hover, Location, SymbolKind,
+};
 
 /// Default warmup delays (ms) for LSP operations that may return empty on cold start.
 /// Total: 100 + 200 + 400 + 800 = 1500ms.
@@ -311,6 +315,7 @@ impl DaemonServer {
             Method::BatchReferences => self.handle_batch_references(request.params).await,
             Method::Inspect => self.handle_inspect(request.params).await,
             Method::Members => self.handle_members(request.params).await,
+            Method::CallHierarchy => self.handle_call_hierarchy(request.params).await,
             Method::Diagnostics => self.handle_diagnostics(request.params).await,
             Method::Ping => self.handle_ping(request.params).await,
             Method::Shutdown => self.handle_shutdown(request.params).await,
@@ -334,7 +339,18 @@ impl DaemonServer {
 
         let response = match result {
             Ok(value) => DaemonResponse::success(request.id, value),
-            Err(e) => DaemonResponse::error(request.id, DaemonError::internal_error(e.to_string())),
+            // A missing ty capability is not an internal failure — it is a
+            // permanent, actionable condition, so it gets its own error code
+            // and carries the version the CLI should name.
+            Err(e) => {
+                let error = match e.downcast_ref::<CallHierarchyUnsupported>() {
+                    Some(unsupported) => {
+                        DaemonError::unsupported_by_ty("call_hierarchy", &unsupported.0)
+                    }
+                    None => DaemonError::internal_error(e.to_string()),
+                };
+                DaemonResponse::error(request.id, error)
+            }
         };
         response.with_debug_trace(debug_trace)
     }
@@ -363,6 +379,9 @@ impl DaemonServer {
             Method::DocumentSymbols => Some("textDocument/documentSymbol"),
             Method::Inspect => Some("textDocument/hover + textDocument/references"),
             Method::Members => Some("textDocument/documentSymbol + textDocument/hover"),
+            Method::CallHierarchy => {
+                Some("textDocument/prepareCallHierarchy + callHierarchy/*Calls")
+            }
             Method::Ping | Method::Shutdown | Method::Diagnostics => None,
         }
     }
@@ -672,6 +691,80 @@ impl DaemonServer {
         Ok(serde_json::to_value(result)?)
     }
 
+    /// Handle a call-hierarchy request: resolve each starting position, then
+    /// walk the graph breadth-first to the requested depth.
+    ///
+    /// The whole walk happens here rather than in the CLI so a client makes one
+    /// RPC and gets a finished tree, matching how `batch_references` and
+    /// `inspect` already work.
+    async fn handle_call_hierarchy(&self, params: Value) -> Result<Value> {
+        let params: CallHierarchyParams =
+            serde_json::from_value(params).context("Invalid call hierarchy parameters")?;
+
+        let client = self.lsp_pool.get_or_create(params.workspace.clone()).await?;
+
+        // Capability gate. `ty` only gained call hierarchy in 0.0.41; on
+        // anything older `prepareCallHierarchy` is an unknown method. Report
+        // that as a structured error rather than an empty tree, which would be
+        // indistinguishable from "this function calls nothing".
+        if !client.supports_call_hierarchy() {
+            return Err(CallHierarchyUnsupported(client.ty_version().to_string()).into());
+        }
+
+        // Clamped at both ends: `--depth 0` would render a bare root and the
+        // formatter would report "no calls" for a function that has some. The
+        // upper bound is clamped rather than rejected, so the lower one is too.
+        let depth = params.depth.clamp(1, MAX_CALL_DEPTH);
+        let workspace_uri_prefix = Self::workspace_uri_prefix(&params.workspace);
+
+        let mut walker = CallWalker {
+            client: &client,
+            direction: params.direction,
+            depth,
+            include_external: params.include_external,
+            workspace_uri_prefix,
+            expanded: HashMap::new(),
+        };
+
+        let mut entries = Vec::with_capacity(params.queries.len());
+        for query in &params.queries {
+            let resolved = Self::resolve_file(&params.workspace, query.file.clone());
+            let file_str = resolved.to_string_lossy().to_string();
+            walker.client.open_document(&file_str).await?;
+
+            // Cold start returns null here exactly like every other query path,
+            // so an empty result is retried before being believed.
+            let items = with_warmup(
+                "prepare call hierarchy",
+                &WARMUP_DELAYS,
+                |items: &Vec<CallHierarchyItem>| !items.is_empty(),
+                || walker.client.prepare_call_hierarchy(&file_str, query.line, query.column),
+                None,
+            )
+            .await?;
+
+            let mut roots = Vec::with_capacity(items.len());
+            for item in &items {
+                roots.push(walker.walk_root(item).await?);
+            }
+
+            entries.push(CallHierarchyEntry { label: query.label.clone(), roots });
+        }
+
+        let result = CallHierarchyResult { direction: params.direction, depth, entries };
+        Ok(serde_json::to_value(result)?)
+    }
+
+    /// The `file://` URI prefix that marks a definition as inside the workspace.
+    ///
+    /// Canonicalized so a symlinked or relative workspace path still matches the
+    /// absolute URIs `ty` returns; falls back to the path as given if the
+    /// workspace cannot be canonicalized.
+    fn workspace_uri_prefix(workspace: &std::path::Path) -> String {
+        let root = workspace.canonicalize().unwrap_or_else(|_| workspace.to_path_buf());
+        format!("file://{}/", root.display())
+    }
+
     /// Recursively search document symbols for a symbol with the given name.
     ///
     /// `document_symbols` returns a hierarchical tree — classes nested inside
@@ -935,6 +1028,190 @@ impl DaemonServer {
         pidfile::remove_pidfile(&self.pidfile_path);
 
         Ok(())
+    }
+}
+
+/// Marker error the call-hierarchy handler returns when `ty` never advertised
+/// `callHierarchyProvider`.
+///
+/// Carries the installed `ty` version so the response can name it. The request
+/// router turns this into a structured `unsupported_by_ty` error instead of the
+/// generic internal error every other failure maps to.
+#[derive(Debug)]
+struct CallHierarchyUnsupported(String);
+
+impl std::fmt::Display for CallHierarchyUnsupported {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ty {} does not support call hierarchy", self.0)
+    }
+}
+
+impl std::error::Error for CallHierarchyUnsupported {}
+
+/// Identity of a definition: `(uri, selectionRange.start)`.
+///
+/// `selectionRange` (the name token) rather than `range`, because `range`
+/// starts at the first decorator line and would make a decorated function look
+/// like a different node depending on how it was reached.
+type NodeKey = (String, u32, u32);
+
+/// Breadth-first walker over the call graph.
+///
+/// Two separate suppression rules keep the output bounded, and they mean
+/// different things:
+///
+/// * **cycle** — the node is already on the path from the root back to here.
+///   Expanding would not terminate. Marked `(cycle)`.
+/// * **deduped** — the node was already expanded *somewhere* in this tree, on
+///   a different branch, **with at least as much depth budget as here**.
+///   Expanding again would repeat a subtree the reader has already seen.
+///   Marked `↑`.
+///
+/// A diamond hits the second rule, direct and mutual recursion hit the first.
+struct CallWalker<'a> {
+    client: &'a TyLspClient,
+    direction: CallDirection,
+    depth: u32,
+    include_external: bool,
+    /// `file://` prefix of the workspace root, with a trailing slash.
+    workspace_uri_prefix: String,
+    /// Every node expanded so far in this tree, mapped to the depth budget it
+    /// was expanded with (`depth - level`). Drives the `deduped` marker.
+    ///
+    /// The budget matters: a node first met at the depth cap is expanded with
+    /// nothing left, so its children are absent. Suppressing a later, shallower
+    /// occurrence would point `↑` at a subtree that was never printed,
+    /// silently dropping nodes that were inside the requested depth.
+    expanded: HashMap<NodeKey, u32>,
+}
+
+impl CallWalker<'_> {
+    fn key(item: &CallHierarchyItem) -> NodeKey {
+        (item.uri.clone(), item.selection_range.start.line, item.selection_range.start.character)
+    }
+
+    /// Whether a definition lives outside the workspace root (stdlib,
+    /// site-packages, vendored typeshed).
+    fn is_external(&self, item: &CallHierarchyItem) -> bool {
+        !item.uri.starts_with(&self.workspace_uri_prefix)
+    }
+
+    /// Build a node for `item`, without children.
+    fn leaf(&self, item: &CallHierarchyItem, call_sites: Vec<u32>) -> CallNode {
+        let external = self.is_external(item);
+        // An external node carries no location unless asked for: the point of
+        // the default is one unexpandable line per stdlib callee. The position
+        // travels with the URI — coordinates without a file resolve to nothing.
+        let located = !external || self.include_external;
+        CallNode {
+            name: item.name.clone(),
+            kind: item.kind.clone(),
+            detail: item.detail.clone(),
+            uri: located.then(|| item.uri.clone()),
+            line: located.then_some(item.selection_range.start.line),
+            column: located.then_some(item.selection_range.start.character),
+            call_sites,
+            external,
+            cycle: false,
+            deduped: false,
+            children: Vec::new(),
+        }
+    }
+
+    /// Walk from a root item to the configured depth.
+    async fn walk_root(&mut self, item: &CallHierarchyItem) -> Result<CallNode> {
+        // Dedup is scoped to one tree: a `↑` in one symbol's output must never
+        // point into another symbol's output, since each tree has to be
+        // readable on its own.
+        self.expanded.clear();
+
+        let mut root = self.leaf(item, Vec::new());
+        let key = Self::key(item);
+        self.expanded.insert(key.clone(), self.depth);
+        root.children = self.expand(item, &[key], 0).await?;
+        Ok(root)
+    }
+
+    /// One hop from `item`, then recurse.
+    ///
+    /// `path` is the chain of keys from the root down to (and including)
+    /// `item`, used for cycle detection. It is a slice rather than a set
+    /// because a call chain never gets deep enough for the linear scan to
+    /// matter (max 5) and the order aids debugging.
+    ///
+    /// Recursion is boxed because this is an `async fn` calling itself.
+    fn expand<'s>(
+        &'s mut self,
+        item: &'s CallHierarchyItem,
+        path: &'s [NodeKey],
+        level: u32,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<CallNode>>> + Send + 's>>
+    {
+        Box::pin(async move {
+            if level >= self.depth {
+                return Ok(Vec::new());
+            }
+
+            // No warm-up retry here, deliberately. An empty result is the
+            // *normal* answer for a leaf function or an entry point, not a
+            // cold-start miss — and the root's `prepareCallHierarchy` already
+            // retried and came back non-empty, which proves the server is warm.
+            // Retrying every empty result cost the full back-off ladder
+            // (~1.5 s) per childless node: an 8-way fan-out took 12 s and a
+            // 24-way one blew the request timeout, at the default depth.
+            let calls = self.client.call_hierarchy_calls(item, self.direction).await?;
+
+            let mut children: Vec<CallNode> = Vec::with_capacity(calls.len());
+            // External callees are collapsed by name: `ty` reports one entry
+            // per `@overload`, so `math.floor` arrives twice and `print` twice.
+            // They are never expanded and carry no distinguishing detail, so
+            // rendering them once is the honest shape.
+            // (Spike finding 2 — docs/dev/call-hierarchy-spike.md.)
+            let mut seen_external: HashSet<String> = HashSet::new();
+
+            for (child_item, from_ranges) in &calls {
+                let call_sites: Vec<u32> = from_ranges.iter().map(|r| r.start.line).collect();
+
+                if self.is_external(child_item) {
+                    if seen_external.insert(child_item.name.clone()) {
+                        children.push(self.leaf(child_item, call_sites));
+                    }
+                    continue;
+                }
+
+                let child_key = Self::key(child_item);
+
+                if path.contains(&child_key) {
+                    let mut node = self.leaf(child_item, call_sites);
+                    node.cycle = true;
+                    children.push(node);
+                    continue;
+                }
+
+                // Suppress only when the earlier expansion had at least as much
+                // budget as this one — otherwise its subtree is a truncated
+                // version of what belongs here, and pointing at it would hide
+                // nodes that are inside the requested depth.
+                let budget = self.depth - level - 1;
+                match self.expanded.get(&child_key) {
+                    Some(&previous) if previous >= budget => {
+                        let mut node = self.leaf(child_item, call_sites);
+                        node.deduped = true;
+                        children.push(node);
+                        continue;
+                    }
+                    _ => self.expanded.insert(child_key.clone(), budget),
+                };
+
+                let mut node = self.leaf(child_item, call_sites);
+                let mut child_path = path.to_vec();
+                child_path.push(child_key);
+                node.children = self.expand(child_item, &child_path, level + 1).await?;
+                children.push(node);
+            }
+
+            Ok(children)
+        })
     }
 }
 

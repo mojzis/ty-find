@@ -1,7 +1,7 @@
 use crate::cli::args::{OutputDetail, OutputFormat};
 use crate::cli::style::Styler;
 #[cfg(unix)]
-use crate::daemon::protocol::{MemberInfo, MembersResult};
+use crate::daemon::protocol::{CallHierarchyResult, CallNode, MemberInfo, MembersResult};
 use crate::lsp::protocol::{
     DocumentSymbol, Hover, HoverContents, Location, MarkedStringOrString, SymbolInformation,
     SymbolKind,
@@ -1447,7 +1447,184 @@ fn format_members_human(result: &MembersResult, file_path: &str, s: Styler) -> S
     output
 }
 
+/// Marker appended to a node whose subtree was already printed elsewhere.
 #[cfg(unix)]
+const DEDUP_MARKER: &str = "\u{2191}";
+
+#[cfg(unix)]
+impl OutputFormatter {
+    /// Render a call tree.
+    ///
+    /// Condensed (the default) is a 2-space-indented tree, one node per line —
+    /// the shape this command exists to produce, since the whole point is
+    /// costing an agent fewer tokens than reading each file in the chain.
+    /// `--detail full` adds the call-site lines from `fromRanges`.
+    pub fn format_call_hierarchy(&self, result: &CallHierarchyResult) -> String {
+        match self.format {
+            OutputFormat::Human => self.format_call_hierarchy_human(result),
+            OutputFormat::Json => {
+                serde_json::to_string_pretty(result).unwrap_or_else(|_| "{}".to_string())
+            }
+            OutputFormat::Csv => self.format_call_hierarchy_csv(result),
+            OutputFormat::Paths => self.format_call_hierarchy_paths(result),
+        }
+    }
+
+    fn format_call_hierarchy_human(&self, result: &CallHierarchyResult) -> String {
+        if result.entries.is_empty() {
+            return self.s.error("No results found");
+        }
+
+        let mut out = String::new();
+        for (i, entry) in result.entries.iter().enumerate() {
+            if i > 0 {
+                out.push('\n');
+            }
+            if entry.roots.is_empty() {
+                let _ = writeln!(
+                    out,
+                    "{}",
+                    self.s.error(&format!("No symbol found for: {}", entry.label))
+                );
+                continue;
+            }
+            for root in &entry.roots {
+                self.write_call_node(&mut out, root, 0);
+                // A root with no children is a real answer, not a failure:
+                // say so rather than leaving a bare line the reader has to
+                // interpret.
+                if root.children.is_empty() {
+                    let _ = writeln!(
+                        out,
+                        "  {}",
+                        self.s.dim(&format!("(no {} calls)", result.direction.label()))
+                    );
+                }
+            }
+        }
+        out.trim_end().to_string()
+    }
+
+    /// Render a node's location as `path:line:col`, or `None` when it has no
+    /// location (an external node without `--external`).
+    ///
+    /// `line`/`column` travel with `uri`, so all three are present or none are;
+    /// a missing coordinate alongside a URI would be a daemon bug, and falling
+    /// back to line 1 would be a plausible-looking lie.
+    fn call_node_location(&self, node: &CallNode) -> Option<String> {
+        let uri = node.uri.as_ref()?;
+        Some(self.s.file_location(&self.uri_to_path(uri), node.line? + 1, node.column? + 1))
+    }
+
+    /// Write one node and its subtree, 2 spaces per level.
+    fn write_call_node(&self, out: &mut String, node: &CallNode, level: usize) {
+        let indent = "  ".repeat(level);
+        let name = self.s.symbol(&node.name);
+
+        let suffix = if node.cycle {
+            format!(" {}", self.s.dim("(cycle)"))
+        } else if node.deduped {
+            format!(" {DEDUP_MARKER}")
+        } else if node.external {
+            // --external adds the location but still never expands.
+            match self.call_node_location(node) {
+                Some(loc) => format!(" ({loc}) {}", self.s.dim("(external)")),
+                None => format!(" {}", self.s.dim("(external)")),
+            }
+        } else {
+            String::new()
+        };
+
+        // A cycle/dedup/external node's location lives in `suffix` (or is
+        // deliberately absent), so it is not repeated here.
+        let location = if node.cycle || node.deduped || node.external {
+            String::new()
+        } else {
+            self.call_node_location(node).map_or_else(String::new, |loc| format!(" ({loc})"))
+        };
+
+        // Call sites go inline rather than on their own line: on its own line
+        // at child indent it reads as if it belonged to the first child.
+        let call_sites = if matches!(self.detail, OutputDetail::Full) && !node.call_sites.is_empty()
+        {
+            let sites: Vec<String> = node.call_sites.iter().map(|l| (l + 1).to_string()).collect();
+            format!(" {}", self.s.dim(&format!("[called at {}]", sites.join(", "))))
+        } else {
+            String::new()
+        };
+
+        let _ = writeln!(out, "{indent}{name}{location}{suffix}{call_sites}");
+
+        for child in &node.children {
+            self.write_call_node(out, child, level + 1);
+        }
+    }
+
+    fn format_call_hierarchy_csv(&self, result: &CallHierarchyResult) -> String {
+        let mut out = String::from("symbol,depth,name,file,line,column,flag\n");
+        for entry in &result.entries {
+            for root in &entry.roots {
+                self.write_call_csv_rows(&mut out, &entry.label, root, 0);
+            }
+        }
+        out
+    }
+
+    fn write_call_csv_rows(&self, out: &mut String, label: &str, node: &CallNode, depth: usize) {
+        let file = node.uri.as_ref().map_or_else(String::new, |u| self.uri_to_path(u));
+        let line = node.line.map_or_else(String::new, |l| (l + 1).to_string());
+        let column = node.column.map_or_else(String::new, |c| (c + 1).to_string());
+        let _ = writeln!(
+            out,
+            "{label},{depth},{},{file},{line},{column},{}",
+            node.name,
+            Self::call_node_flag(node)
+        );
+        for child in &node.children {
+            self.write_call_csv_rows(out, label, child, depth + 1);
+        }
+    }
+
+    /// The single flag describing why a node was not expanded, if any.
+    ///
+    /// The three are mutually exclusive in the order the walker applies them:
+    /// external nodes are filtered before cycle/dedup ever apply.
+    fn call_node_flag(node: &CallNode) -> &'static str {
+        if node.cycle {
+            "cycle"
+        } else if node.deduped {
+            "deduped"
+        } else if node.external {
+            "external"
+        } else {
+            ""
+        }
+    }
+
+    fn format_call_hierarchy_paths(&self, result: &CallHierarchyResult) -> String {
+        let mut paths: Vec<String> = Vec::new();
+        for entry in &result.entries {
+            for root in &entry.roots {
+                self.collect_call_paths(root, &mut paths);
+            }
+        }
+        // sort + dedup, like every other paths formatter: `dedup` alone only
+        // drops *consecutive* duplicates.
+        paths.sort();
+        paths.dedup();
+        paths.join("\n")
+    }
+
+    fn collect_call_paths(&self, node: &CallNode, out: &mut Vec<String>) {
+        if let Some(uri) = &node.uri {
+            out.push(self.uri_to_path(uri));
+        }
+        for child in &node.children {
+            self.collect_call_paths(child, out);
+        }
+    }
+}
+
 impl OutputFormatter {
     /// Format a single class members result.
     pub fn format_members_result(&self, result: &MembersResult) -> String {
@@ -3507,5 +3684,234 @@ def complex_decorated(x: int) -> int:
 
         let ctx = read_definition_context(&cache, path, 0);
         assert!(ctx.is_none(), "all decorator lines with nothing after should return None");
+    }
+}
+
+#[cfg(all(test, unix))]
+mod call_hierarchy_tests {
+    use super::*;
+    use crate::daemon::protocol::{CallHierarchyEntry, CallHierarchyResult, CallNode};
+    use crate::lsp::protocol::CallDirection;
+
+    fn node(name: &str, line: u32) -> CallNode {
+        CallNode {
+            name: name.to_string(),
+            kind: SymbolKind::Function,
+            detail: Some("orders".to_string()),
+            uri: Some(format!("file:///w/{name}.py")),
+            line: Some(line),
+            column: Some(4),
+            call_sites: Vec::new(),
+            external: false,
+            cycle: false,
+            deduped: false,
+            children: Vec::new(),
+        }
+    }
+
+    /// An external node as the walker builds it by default: no URI, and no
+    /// position either — coordinates with no file resolve to nothing.
+    fn external_node(name: &str) -> CallNode {
+        CallNode { external: true, uri: None, line: None, column: None, ..node(name, 0) }
+    }
+
+    fn result(root: CallNode, direction: CallDirection) -> CallHierarchyResult {
+        CallHierarchyResult {
+            direction,
+            depth: 2,
+            entries: vec![CallHierarchyEntry { label: root.name.clone(), roots: vec![root] }],
+        }
+    }
+
+    /// The condensed tree is the command's whole reason to exist: 2-space
+    /// indent per level, one line per node, location on each.
+    #[test]
+    fn renders_condensed_tree_with_two_space_indent() {
+        let mut root = node("process_order", 40);
+        let mut validate = node("validate_order", 87);
+        validate.children.push(node("check_inventory", 11));
+        root.children.push(validate);
+
+        let out = OutputFormatter::new(OutputFormat::Human)
+            .format_call_hierarchy(&result(root, CallDirection::Outgoing));
+
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines[0], "process_order (/w/process_order.py:41:5)");
+        assert_eq!(lines[1], "  validate_order (/w/validate_order.py:88:5)");
+        assert_eq!(lines[2], "    check_inventory (/w/check_inventory.py:12:5)");
+    }
+
+    /// A deduped node is a bare marker, not a repeated subtree — this is what
+    /// bounds output size on a diamond.
+    #[test]
+    fn deduped_node_renders_arrow_and_no_location() {
+        let mut root = node("process_order", 40);
+        let mut dup = node("check_inventory", 11);
+        dup.deduped = true;
+        root.children.push(dup);
+
+        let out = OutputFormatter::new(OutputFormat::Human)
+            .format_call_hierarchy(&result(root, CallDirection::Outgoing));
+
+        assert!(out.contains("  check_inventory \u{2191}"), "got:\n{out}");
+        assert!(!out.contains("check_inventory.py"), "a deduped leaf repeats no location:\n{out}");
+    }
+
+    #[test]
+    fn cycle_node_renders_cycle_marker() {
+        let mut root = node("countdown", 56);
+        let mut back = node("countdown", 56);
+        back.cycle = true;
+        root.children.push(back);
+
+        let out = OutputFormatter::new(OutputFormat::Human)
+            .format_call_hierarchy(&result(root, CallDirection::Outgoing));
+
+        assert!(out.contains("  countdown (cycle)"), "got:\n{out}");
+    }
+
+    /// By default an external callee is one line: a name and a marker, no
+    /// location and nothing to expand.
+    #[test]
+    fn external_node_without_location_renders_name_only() {
+        let mut root = node("check_inventory", 11);
+        root.children.push(external_node("floor"));
+
+        let out = OutputFormatter::new(OutputFormat::Human)
+            .format_call_hierarchy(&result(root, CallDirection::Outgoing));
+
+        assert!(out.contains("  floor (external)"), "got:\n{out}");
+        assert!(!out.contains(".py:140"), "no location without --external:\n{out}");
+    }
+
+    /// `--external` adds the location but the node still has no children.
+    #[test]
+    fn external_node_with_location_shows_it() {
+        let mut root = node("check_inventory", 11);
+        let mut ext = node("floor", 139);
+        ext.external = true;
+        ext.uri = Some("file:///stdlib/math.pyi".to_string());
+        root.children.push(ext);
+
+        let out = OutputFormatter::new(OutputFormat::Human)
+            .format_call_hierarchy(&result(root, CallDirection::Outgoing));
+
+        assert!(out.contains("floor (/stdlib/math.pyi:140:5) (external)"), "got:\n{out}");
+    }
+
+    /// A found symbol with no calls is a normal answer, not an error.
+    #[test]
+    fn empty_result_states_so_rather_than_rendering_a_bare_line() {
+        let out = OutputFormatter::new(OutputFormat::Human)
+            .format_call_hierarchy(&result(node("double", 108), CallDirection::Outgoing));
+
+        assert!(out.contains("double (/w/double.py:109:5)"), "got:\n{out}");
+        assert!(out.contains("(no outgoing calls)"), "got:\n{out}");
+    }
+
+    #[test]
+    fn empty_result_names_the_incoming_direction() {
+        let out = OutputFormatter::new(OutputFormat::Human)
+            .format_call_hierarchy(&result(node("double", 108), CallDirection::Incoming));
+
+        assert!(out.contains("(no incoming calls)"), "got:\n{out}");
+    }
+
+    #[test]
+    fn unresolved_symbol_reports_not_found() {
+        let res = CallHierarchyResult {
+            direction: CallDirection::Outgoing,
+            depth: 2,
+            entries: vec![CallHierarchyEntry { label: "nope".to_string(), roots: Vec::new() }],
+        };
+        let out = OutputFormatter::new(OutputFormat::Human).format_call_hierarchy(&res);
+        assert!(out.contains("No symbol found for: nope"), "got:\n{out}");
+    }
+
+    /// `--detail full` adds the call sites inline, 1-based like every other
+    /// line number tyf prints.
+    #[test]
+    fn detail_full_adds_call_sites_inline() {
+        let mut root = node("process_order", 40);
+        let mut child = node("validate_order", 87);
+        child.call_sites = vec![48, 60];
+        root.children.push(child);
+
+        let formatter = OutputFormatter::with_detail(
+            OutputFormat::Human,
+            OutputDetail::Full,
+            Styler::no_color(),
+        );
+        let out = formatter.format_call_hierarchy(&result(root, CallDirection::Outgoing));
+
+        assert!(out.contains("[called at 49, 61]"), "got:\n{out}");
+    }
+
+    /// Condensed output must not carry call sites — that is what `full` is for.
+    #[test]
+    fn condensed_omits_call_sites() {
+        let mut root = node("process_order", 40);
+        let mut child = node("validate_order", 87);
+        child.call_sites = vec![48];
+        root.children.push(child);
+
+        let out = OutputFormatter::new(OutputFormat::Human)
+            .format_call_hierarchy(&result(root, CallDirection::Outgoing));
+
+        assert!(!out.contains("called at"), "got:\n{out}");
+    }
+
+    #[test]
+    fn csv_rows_carry_depth_and_flag() {
+        let mut root = node("process_order", 40);
+        let mut dup = node("check_inventory", 11);
+        dup.deduped = true;
+        let mut validate = node("validate_order", 87);
+        validate.children.push(node("check_inventory", 11));
+        root.children.push(validate);
+        root.children.push(dup);
+
+        let out = OutputFormatter::new(OutputFormat::Csv)
+            .format_call_hierarchy(&result(root, CallDirection::Outgoing));
+
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines[0], "symbol,depth,name,file,line,column,flag");
+        assert_eq!(lines[1], "process_order,0,process_order,/w/process_order.py,41,5,");
+        assert_eq!(lines[2], "process_order,1,validate_order,/w/validate_order.py,88,5,");
+        assert_eq!(lines[3], "process_order,2,check_inventory,/w/check_inventory.py,12,5,");
+        assert_eq!(lines[4], "process_order,1,check_inventory,/w/check_inventory.py,12,5,deduped");
+    }
+
+    #[test]
+    fn csv_external_row_has_no_location() {
+        let mut root = node("check_inventory", 11);
+        root.children.push(external_node("floor"));
+
+        let out = OutputFormatter::new(OutputFormat::Csv)
+            .format_call_hierarchy(&result(root, CallDirection::Outgoing));
+
+        assert!(out.contains("check_inventory,1,floor,,,,external"), "got:\n{out}");
+    }
+
+    /// JSON mirrors the tree and states each marker explicitly, so a consumer
+    /// never has to parse the rendered glyphs.
+    #[test]
+    fn json_exposes_explicit_marker_booleans() {
+        let mut root = node("process_order", 40);
+        let mut dup = node("check_inventory", 11);
+        dup.deduped = true;
+        root.children.push(dup);
+
+        let out = OutputFormatter::new(OutputFormat::Json)
+            .format_call_hierarchy(&result(root, CallDirection::Outgoing));
+        let parsed: serde_json::Value = serde_json::from_str(&out).expect("valid JSON");
+
+        assert_eq!(parsed["direction"], "outgoing");
+        assert_eq!(parsed["depth"], 2);
+        let child = &parsed["entries"][0]["roots"][0]["children"][0];
+        assert_eq!(child["name"], "check_inventory");
+        assert_eq!(child["deduped"], true);
+        assert_eq!(child["cycle"], false);
+        assert_eq!(child["external"], false);
     }
 }

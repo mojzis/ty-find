@@ -213,6 +213,7 @@ Available RPC methods:
 | `document_symbols` | List all symbols in a file |
 | `inspect` | Combined hover + references (definitions resolved client-side via workspace symbols) |
 | `members` | Public interface of a class |
+| `call_hierarchy` | Walk the call graph from one or more positions, recursively (the whole tree is built daemon-side) |
 | `diagnostics` | Type errors in a file |
 
 ### Daemon ↔ ty LSP: LSP protocol over stdin/stdout

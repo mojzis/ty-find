@@ -15,6 +15,7 @@
 - [find](commands/find.md)
 - [refs](commands/refs.md)
 - [members](commands/members.md)
+- [calls](commands/calls.md)
 - [list](commands/list.md)
 - [daemon](commands/daemon.md)
 

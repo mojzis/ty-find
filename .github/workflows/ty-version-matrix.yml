@@ -95,7 +95,8 @@ jobs:
                      --test test_daemon \
                      --test test_project_smoke \
                      --test test_complex_project \
-                     --test test_multi_workspace
+                     --test test_multi_workspace \
+                     --test test_calls
 
   # Nightly drift sweep: floor + latest + a RANDOM in-between version, drawn
   # fresh each scheduled run. Non-blocking and gated to schedule/dispatch so the
@@ -132,7 +133,8 @@ jobs:
                      --test test_daemon \
                      --test test_project_smoke \
                      --test test_complex_project \
-                     --test test_multi_workspace
+                     --test test_multi_workspace \
+                     --test test_calls
 
   # Non-blocking job: the latest release. A fresh `ty` release that breaks the
   # suite pings us here (the job goes red on the run summary) without blocking
@@ -167,4 +169,5 @@ jobs:
                      --test test_daemon \
                      --test test_project_smoke \
                      --test test_complex_project \
-                     --test test_multi_workspace
+                     --test test_multi_workspace \
+                     --test test_calls

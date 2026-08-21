@@ -66,6 +66,15 @@ async fn main() {
             #[allow(clippy::exit)]
             std::process::exit(2);
         }
+        // A capability the installed ty lacks is neither a bad invocation nor a
+        // clean "not found" (which exits 0): it gets its own code so a caller
+        // can tell "upgrade ty" apart from "this symbol has no callers".
+        #[cfg(unix)]
+        if let Some(unsupported) = e.downcast_ref::<daemon::protocol::UnsupportedByTy>() {
+            eprintln!("{}", styler.error(&unsupported.to_string()));
+            #[allow(clippy::exit)]
+            std::process::exit(3);
+        }
         eprintln!("{}", styler.error(&format!("Error: {}", format_error_chain(&e))));
         #[allow(clippy::exit)]
         std::process::exit(1);
@@ -127,6 +136,52 @@ async fn run(cli: Cli, styler: Styler, debug_log: Option<Arc<DebugLog>>) -> Resu
     Ok(())
 }
 
+/// The `calls`-specific options, grouped so the dispatcher stays readable.
+struct CallsOptions {
+    /// `--in` was passed. `--out` is the explicit spelling of the default, and
+    /// clap already rejects the two together, so only this flag needs reading.
+    incoming: bool,
+    depth: u32,
+    external: bool,
+}
+
+/// Everything the `calls` handler needs that is not specific to `calls`.
+#[derive(Clone, Copy)]
+struct DispatchContext<'a> {
+    formatter: &'a OutputFormatter,
+    timeout: Duration,
+    debug_log: Option<&'a Arc<DebugLog>>,
+}
+
+async fn dispatch_calls(
+    workspace_root: &Path,
+    file: Option<&Path>,
+    symbols: &[String],
+    opts: CallsOptions,
+    ctx: DispatchContext<'_>,
+) -> Result<()> {
+    let direction = if opts.incoming {
+        lsp::protocol::CallDirection::Incoming
+    } else {
+        lsp::protocol::CallDirection::Outgoing
+    };
+    commands::handle_calls_command(
+        workspace_root,
+        file,
+        symbols,
+        direction,
+        opts.depth,
+        opts.external,
+        ctx.formatter,
+        ctx.timeout,
+        ctx.debug_log.cloned(),
+    )
+    .await
+}
+
+// One arm per subcommand, so this grows with the command surface rather than
+// with any one command's complexity.
+#[allow(clippy::too_many_lines)]
 async fn dispatch_command(
     command: Commands,
     workspace_root: &Path,
@@ -134,6 +189,7 @@ async fn dispatch_command(
     timeout: Duration,
     debug_log: Option<&Arc<DebugLog>>,
 ) -> Result<()> {
+    let ctx = DispatchContext { formatter, timeout, debug_log };
     match command {
         Commands::Find { file, symbols, fuzzy } => {
             commands::handle_find_command(
@@ -184,6 +240,10 @@ async fn dispatch_command(
                 debug_log.cloned(),
             )
             .await?;
+        }
+        Commands::Calls { symbols, incoming, outgoing: _, depth, external, file } => {
+            let opts = CallsOptions { incoming, depth, external };
+            dispatch_calls(workspace_root, file.as_deref(), &symbols, opts, ctx).await?;
         }
         Commands::DocumentSymbols { file } => {
             commands::handle_document_symbols_command(

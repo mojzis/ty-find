@@ -13,11 +13,15 @@ use crate::cli::output::{
 #[cfg(unix)]
 use crate::daemon::client::{ensure_daemon_running, spawn_daemon, DaemonClient, CLIENT_VERSION};
 #[cfg(unix)]
-use crate::daemon::protocol::BatchReferencesQuery;
+use crate::daemon::protocol::{
+    BatchReferencesQuery, CallHierarchyEntry, CallHierarchyQuery, CallHierarchyResult,
+    MAX_CALL_DEPTH,
+};
 #[cfg(unix)]
 use crate::daemon::server::DaemonServer;
 use crate::debug::DebugLog;
 use crate::lsp::client::TyLspClient;
+use crate::lsp::protocol::CallDirection;
 use crate::lsp::protocol::{DocumentSymbol, Location};
 use crate::workspace::navigation::SymbolFinder;
 
@@ -1329,6 +1333,100 @@ pub async fn handle_document_symbols_command(
 ) -> Result<()> {
     anyhow::bail!(
         "The 'list' command requires the background daemon, which is only supported on Unix systems"
+    )
+}
+
+/// Handle the `calls` command: resolve each symbol to a name-token position,
+/// then have the daemon walk the call graph and render the finished tree.
+///
+/// Resolution reuses the exact path `show`/`find`/`refs` use
+/// (`resolve_symbols_to_queries`), which includes the `find_name_column`
+/// adjustment call hierarchy depends on: `ty` returns nothing for the
+/// `def`/`class` keyword that `workspace/symbol` points at.
+#[cfg(unix)]
+#[allow(clippy::too_many_arguments)]
+pub async fn handle_calls_command(
+    workspace_root: &Path,
+    file: Option<&Path>,
+    symbols: &[String],
+    direction: CallDirection,
+    depth: u32,
+    include_external: bool,
+    formatter: &OutputFormatter,
+    timeout: Duration,
+    debug_log: Option<Arc<DebugLog>>,
+) -> Result<()> {
+    // Same dotted-notation contract as show/find/refs: one level only.
+    validate_symbol_tokens(symbols)?;
+
+    ensure_daemon_running().await?;
+
+    let resolved = resolve_symbols_to_queries(symbols, file, workspace_root, timeout).await?;
+
+    // Symbols that resolved to nothing still get an entry, so the output says
+    // which of several requested symbols was not found.
+    let mut unresolved: Vec<String> = Vec::new();
+    let mut queries: Vec<CallHierarchyQuery> = Vec::new();
+    for q in resolved {
+        if q.file.is_empty() {
+            if !unresolved.contains(&q.label) {
+                unresolved.push(q.label);
+            }
+        } else {
+            queries.push(CallHierarchyQuery {
+                label: q.label,
+                file: PathBuf::from(q.file),
+                line: q.line,
+                column: q.column,
+            });
+        }
+    }
+
+    let mut result = if queries.is_empty() {
+        CallHierarchyResult { direction, depth: depth.min(MAX_CALL_DEPTH), entries: Vec::new() }
+    } else {
+        let mut client = connect_daemon(timeout, debug_log.as_ref()).await?;
+        client
+            .execute_call_hierarchy(
+                workspace_root.to_path_buf(),
+                queries,
+                direction,
+                depth,
+                include_external,
+            )
+            .await?
+    };
+
+    for label in unresolved {
+        result.entries.push(CallHierarchyEntry { label, roots: Vec::new() });
+    }
+
+    // Restore the order the user asked in: resolution may have reordered, and
+    // unresolved labels were appended at the end.
+    result
+        .entries
+        .sort_by_key(|entry| symbols.iter().position(|s| *s == entry.label).unwrap_or(usize::MAX));
+
+    println!("{}", formatter.format_call_hierarchy(&result));
+    Ok(())
+}
+
+#[cfg(not(unix))]
+#[allow(clippy::too_many_arguments)]
+pub async fn handle_calls_command(
+    _workspace_root: &Path,
+    _file: Option<&Path>,
+    _symbols: &[String],
+    _direction: crate::lsp::protocol::CallDirection,
+    _depth: u32,
+    _include_external: bool,
+    _formatter: &OutputFormatter,
+    _timeout: Duration,
+    _debug_log: Option<Arc<DebugLog>>,
+) -> Result<()> {
+    anyhow::bail!(
+        "The 'calls' command requires the background daemon, \
+         which is only supported on Unix systems"
     )
 }
 

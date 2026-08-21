@@ -12,11 +12,16 @@
 - `pyproject.toml` uses maturin backend (`bindings = "bin"`) to package the Rust binary as a Python wheel
 
 **Command Processing**:
-- Main commands: `show` (all-in-one), `find` (definitions), `refs` (references), `members` (class interface), `list` (file outline)
+- Main commands: `show` (all-in-one), `find` (definitions), `refs` (references), `members` (class interface), `calls` (call hierarchy), `list` (file outline)
 - `find` supports `--fuzzy` for partial/prefix matching via workspace symbols
-- `find`, `show`, `refs`, and `members` accept multiple symbols in one call to reduce tool invocations (results grouped by symbol)
+- `find`, `show`, `refs`, `members`, and `calls` accept multiple symbols in one call to reduce tool invocations (results grouped by symbol)
+- `calls` walks the call graph entirely in the daemon (`CallWalker` in `src/daemon/server.rs`) and returns a finished tree; the CLI issues one RPC, never per-level requests. Depth is capped there, not in the CLI
 - `SymbolFinder` does text-based symbol matching with whole-word detection
 - `OutputFormatter` supports multiple formats: human, JSON, CSV, paths-only
+
+**ty capability gating**:
+- `tyf` binds to whatever `ty` is installed, and `ty` is `0.0.x`. Where a feature is not present across the whole supported range, the LSP client records the relevant `initialize` capability and the daemon returns a structured error rather than an empty result — an empty result is indistinguishable from a legitimate "nothing found".
+- Today this applies to one feature: `callHierarchyProvider` (`ty >= 0.0.41`), which gates `calls`. See `docs/dev/TY_VERSIONS.md` and `docs/dev/call-hierarchy-spike.md`.
 
 **Concurrency rule — daemon handles all parallelism**:
 - All multi-query operations (batch references, multi-symbol show, etc.) must be batched into a single RPC call and processed by the daemon, **not** parallelized on the CLI client side.

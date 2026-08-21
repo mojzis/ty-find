@@ -102,6 +102,34 @@ tyf members MyClass --all                # include __init__, __repr__, etc
 tyf members MyClass --file src/models.py # narrow to one file
 ```
 
+### calls — Call tree of a symbol: what it calls, or what calls it
+
+Walks the call graph recursively and renders it as a tree. Outgoing (the
+default) answers "what does this do, transitively" in one command instead of a
+chain of file reads; incoming (`--in`) answers "who calls this" — impact
+analysis before an edit, giving the *calling function's identity* rather than
+the raw text ranges `refs` returns.
+
+Depth defaults to 2 and is capped at 5 (larger values are clamped, not
+rejected). A callee reached from two parents is expanded once and marked `↑`
+thereafter; recursion is marked `(cycle)`; code outside the workspace is a
+single `(external)` line and is never expanded, under any flag. `--external`
+adds those locations without expanding them.
+
+Calls through callbacks and dynamic dispatch are invisible to static analysis
+and do not appear. Requires ty 0.0.41 or newer (the release that added LSP call
+hierarchy); on an older ty the command exits 3 naming the installed version —
+distinct from "not found" (exit 0) and a usage error (exit 2).
+
+```
+tyf calls process_order                  # what it calls, 2 levels deep
+tyf calls process_order --depth 3        # deeper (max 5)
+tyf calls check_inventory --in           # who calls it
+tyf calls OrderPipeline.run              # a specific class method
+tyf calls a b c                          # several symbols at once
+tyf calls process_order --external       # locate stdlib callees too
+```
+
 ### list — All functions, classes, and variables defined in a file
 
 Shows all functions, classes, and variables defined in a file — like a table
@@ -171,6 +199,10 @@ in the repository yet, so no version numbers are listed here (and none are inven
 Policy: tyf is tested against specific pinned ty versions and supports a contiguous
 range, from a documented floor up to the latest tested release. Until the source
 lands, check your own version with `ty --version` (or `uvx ty --version`).
+
+One capability boundary is established empirically: `tyf calls` needs LSP call
+hierarchy, which ty first advertises in **0.0.41**. Every other command works
+below that. Check your own version with `ty --version` (or `uvx ty --version`).
 
 ## Testing
 

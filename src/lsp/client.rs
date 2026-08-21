@@ -2,21 +2,22 @@ use anyhow::{Context, Result};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::oneshot;
 
 use crate::lsp::protocol::{
-    DocumentSymbol, DocumentSymbolParams, GotoDefinitionParams, Hover, HoverParams, LSPRequest,
-    LSPResponse, Location, Position, ReferenceContext, ReferenceParams, SymbolInformation,
-    TextDocumentIdentifier, TextDocumentPositionParams, WorkspaceSymbolParams,
+    CallDirection, CallHierarchyIncomingCall, CallHierarchyItem, CallHierarchyOutgoingCall,
+    CallHierarchyPrepareParams, DocumentSymbol, DocumentSymbolParams, GotoDefinitionParams, Hover,
+    HoverParams, LSPRequest, LSPResponse, Location, Position, ReferenceContext, ReferenceParams,
+    SymbolInformation, TextDocumentIdentifier, TextDocumentPositionParams, WorkspaceSymbolParams,
 };
 use crate::lsp::server::TyLspServer;
 
 pub struct TyLspClient {
     /// Kept alive so the child process is killed when the client is dropped.
-    _server: TyLspServer,
+    server: TyLspServer,
     stdin: tokio::sync::Mutex<tokio::process::ChildStdin>,
     request_id: AtomicU64,
     pending_requests: Arc<Mutex<HashMap<u64, oneshot::Sender<LSPResponse>>>>,
@@ -24,6 +25,12 @@ pub struct TyLspClient {
     /// Duplicate opens violate LSP protocol and can cause the server to
     /// re-analyze the file, returning null hover during the re-analysis window.
     opened_documents: Mutex<HashSet<String>>,
+    /// Whether the server advertised `callHierarchyProvider` at `initialize`.
+    ///
+    /// Recorded once, from the initialize result. `ty` only gained call
+    /// hierarchy in 0.0.41, well above tyf's 0.0.15 version floor, so this is
+    /// the first capability tyf has to gate on rather than assume.
+    supports_call_hierarchy: AtomicBool,
 }
 
 /// Build a `file://` URI from a file path, canonicalizing it first.
@@ -70,6 +77,9 @@ fn build_init_params(workspace_root: &str) -> serde_json::Value {
                 "documentSymbol": {
                     "dynamicRegistration": false,
                     "hierarchicalDocumentSymbolSupport": true
+                },
+                "callHierarchy": {
+                    "dynamicRegistration": false
                 }
             },
             "workspace": {
@@ -97,11 +107,12 @@ impl TyLspClient {
         let stdout = server.take_stdout();
 
         let client = Self {
-            _server: server,
+            server,
             stdin: tokio::sync::Mutex::new(stdin),
             request_id: AtomicU64::new(1),
             pending_requests: Arc::new(Mutex::new(HashMap::new())),
             opened_documents: Mutex::new(HashSet::new()),
+            supports_call_hierarchy: AtomicBool::new(false),
         };
 
         // Must start reading responses before sending initialize,
@@ -119,7 +130,21 @@ impl TyLspClient {
     async fn initialize(&self, workspace_root: &str) -> Result<()> {
         let init_params = build_init_params(workspace_root);
 
-        let _response = self.send_request("initialize", init_params).await?;
+        let response = self.send_request("initialize", init_params).await?;
+
+        // TODO(version-floor): `callHierarchyProvider` first appears in ty
+        // 0.0.41 (see docs/dev/call-hierarchy-spike.md), far above the current
+        // 0.0.15 floor in ci/ty-versions.json. This gate is what lets `tyf
+        // calls` fail with a clear message instead of an empty tree on an older
+        // ty; feed it into the version-floor decision.
+        let supported = response
+            .result
+            .as_ref()
+            .and_then(|r| r.get("capabilities"))
+            .and_then(|c| c.get("callHierarchyProvider"))
+            .is_some_and(|v| !v.is_null() && v != false);
+        self.supports_call_hierarchy.store(supported, Ordering::SeqCst);
+        tracing::debug!("server advertises callHierarchyProvider: {supported}");
 
         self.send_notification("initialized", serde_json::json!({})).await?;
 
@@ -277,6 +302,78 @@ impl TyLspClient {
             self.send_request("textDocument/documentSymbol", serde_json::to_value(params)?).await?;
 
         parse_response_array(response)
+    }
+
+    /// The `ty` version backing this client (e.g. `"0.0.73"`).
+    pub fn ty_version(&self) -> &str {
+        self.server.ty_version()
+    }
+
+    /// Whether the server advertised call hierarchy support at `initialize`.
+    pub fn supports_call_hierarchy(&self) -> bool {
+        self.supports_call_hierarchy.load(Ordering::SeqCst)
+    }
+
+    /// Resolve the call hierarchy item(s) at a position.
+    ///
+    /// The position must be on the symbol's **name token** — `ty` returns
+    /// `null` for the `def`/`class` keyword itself (see
+    /// `docs/dev/call-hierarchy-spike.md`). Callers coming from
+    /// `workspace/symbol` must adjust the column first.
+    ///
+    /// An empty vector means either "not a callable here" or "server still
+    /// warming up"; the two are indistinguishable in one response, so callers
+    /// retry via the daemon's `with_warmup`.
+    pub async fn prepare_call_hierarchy(
+        &self,
+        file_path: &str,
+        line: u32,
+        character: u32,
+    ) -> Result<Vec<CallHierarchyItem>> {
+        let uri = file_uri(file_path).await?;
+
+        let params = CallHierarchyPrepareParams {
+            text_document_position_params: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier { uri },
+                position: Position { line, character },
+            },
+            work_done_token: None,
+        };
+
+        let response = self
+            .send_request("textDocument/prepareCallHierarchy", serde_json::to_value(params)?)
+            .await?;
+
+        parse_response_array(response)
+    }
+
+    /// Fetch the calls one hop from `item`, in the given direction.
+    ///
+    /// The item is sent back as the server produced it (including any fields
+    /// tyf does not model), per the LSP call-hierarchy contract.
+    ///
+    /// Returns `(item, from_ranges)` pairs: for `Outgoing` the item is the
+    /// callee and the ranges are its call sites in `item`'s body; for
+    /// `Incoming` the item is the caller and the ranges are the call sites
+    /// inside *that* caller.
+    pub async fn call_hierarchy_calls(
+        &self,
+        item: &CallHierarchyItem,
+        direction: CallDirection,
+    ) -> Result<Vec<(CallHierarchyItem, Vec<crate::lsp::protocol::Range>)>> {
+        let params = serde_json::json!({ "item": serde_json::to_value(item)? });
+        let response = self.send_request(direction.lsp_method(), params).await?;
+
+        match direction {
+            CallDirection::Outgoing => {
+                let calls: Vec<CallHierarchyOutgoingCall> = parse_response_array(response)?;
+                Ok(calls.into_iter().map(|c| (c.to, c.from_ranges)).collect())
+            }
+            CallDirection::Incoming => {
+                let calls: Vec<CallHierarchyIncomingCall> = parse_response_array(response)?;
+                Ok(calls.into_iter().map(|c| (c.from, c.from_ranges)).collect())
+            }
+        }
     }
 
     async fn send_request(&self, method: &str, params: Value) -> Result<LSPResponse> {

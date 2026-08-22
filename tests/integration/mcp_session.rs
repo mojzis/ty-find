@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::sync::Once;
 
 /// The MCP revision this server is built against.
 pub const PROTOCOL_VERSION: &str = "2026-07-28";
@@ -16,6 +17,37 @@ pub const PROTOCOL_VERSION: &str = "2026-07-28";
 /// Repo root — the workspace all fixtures live in.
 pub fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+}
+
+/// Bring the daemon up once, before any test spawns a server.
+///
+/// Tests in a target run in parallel and each drives its own `tyf mcp` child,
+/// and every child calls `ensure_daemon_running` on its first tool call.
+/// Started cold and all at once, those children race to spawn a daemon — a
+/// *cross-process* race that the in-process startup gate in
+/// `src/daemon/client.rs` cannot cover — and the losing daemons churn the
+/// socket. On a slow `ty` that churn is enough to make every LSP-backed
+/// request exceed its deadline.
+///
+/// One synchronous CLI query up front leaves a daemon running with the
+/// workspace already open, so every child finds it and no child spawns one.
+/// This makes the suite test the bridge rather than daemon startup;
+/// `test_mcp_concurrency` covers startup deliberately and skips this.
+fn warm_daemon_once() {
+    static WARM: Once = Once::new();
+    WARM.call_once(|| {
+        let output = Command::new(env!("CARGO_BIN_EXE_tyf"))
+            .arg("--workspace")
+            .arg(workspace_root())
+            .args(["show", "hello_world"])
+            .output()
+            .expect("failed to warm the daemon");
+        assert!(
+            output.status.success(),
+            "warming the daemon failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    });
 }
 
 /// A live `tyf mcp` process being driven over stdio.
@@ -39,6 +71,17 @@ impl McpSession {
     /// Spawn `tyf mcp`, optionally passing `--workspace`, with the process cwd
     /// set to `cwd`. Passing `workspace: None` exercises cwd-based resolution.
     pub fn start_in(cwd: &Path, workspace: Option<&Path>) -> Self {
+        warm_daemon_once();
+        Self::spawn(cwd, workspace)
+    }
+
+    /// Spawn without warming the daemon first, for the one test that is about
+    /// what happens when several servers start cold at the same time.
+    pub fn start_cold(workspace: &Path) -> Self {
+        Self::spawn(workspace, Some(workspace))
+    }
+
+    fn spawn(cwd: &Path, workspace: Option<&Path>) -> Self {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_tyf"));
         cmd.arg("mcp");
         if let Some(ws) = workspace {

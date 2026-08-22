@@ -21,7 +21,7 @@ fn test_concurrent_tool_calls_start_exactly_one_daemon() {
     common::require_ty();
     stop_daemon();
 
-    let mut session = McpSession::start(&workspace_root());
+    let mut session = McpSession::start_cold(&workspace_root());
     let calls = [
         json!({ "name": "show", "arguments": { "symbols": ["hello_world"] } }),
         json!({ "name": "find", "arguments": { "symbols": ["calculate_sum"] } }),

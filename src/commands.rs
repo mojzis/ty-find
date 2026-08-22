@@ -1,5 +1,6 @@
 use anyhow::Result;
 use std::collections::{HashMap, HashSet};
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -260,6 +261,51 @@ impl std::fmt::Display for UsageError {
 }
 
 impl std::error::Error for UsageError {}
+
+/// Text a command produced, split by the stream the CLI writes it to.
+///
+/// Command handlers build one of these instead of printing directly, so both
+/// frontends render identical text from the same code: the CLI calls
+/// [`CommandOutput::emit`], the MCP bridge calls [`CommandOutput::combined`].
+#[derive(Debug, Default, Clone)]
+pub struct CommandOutput {
+    /// Result text. Written to stdout verbatim, so producers include the
+    /// trailing newline the CLI's `println!` used to add.
+    pub stdout: String,
+    /// Diagnostics that accompany a partial result (e.g. "'X' is a function,
+    /// not a class"). Written to stderr verbatim.
+    pub stderr: String,
+}
+
+impl CommandOutput {
+    /// A result-only output.
+    pub fn from_stdout(text: impl Into<String>) -> Self {
+        Self { stdout: text.into(), stderr: String::new() }
+    }
+
+    /// A result-only output ending in a newline, matching what `println!` wrote.
+    pub fn line(text: &str) -> Self {
+        Self::from_stdout(format!("{text}\n"))
+    }
+
+    /// Write both streams, reproducing the CLI's original print behaviour.
+    pub fn emit(&self) {
+        if !self.stderr.is_empty() {
+            eprint!("{}", self.stderr);
+        }
+        if !self.stdout.is_empty() {
+            print!("{}", self.stdout);
+        }
+    }
+
+    /// Both streams merged in the order a terminal shows them, for consumers
+    /// with a single text channel (the MCP bridge).
+    pub fn combined(&self) -> String {
+        let mut merged = self.stderr.clone();
+        merged.push_str(&self.stdout);
+        merged
+    }
+}
 
 /// Reject symbol tokens that use unsupported or malformed dotted notation.
 ///
@@ -625,7 +671,7 @@ pub async fn handle_references_command(
     timeout: Duration,
     show_tests: bool,
     debug_log: Option<Arc<DebugLog>>,
-) -> Result<()> {
+) -> Result<CommandOutput> {
     ensure_daemon_running().await?;
 
     // Explicit --file -l -c: single position mode
@@ -655,17 +701,11 @@ pub async fn handle_references_command(
             show_tests,
         )
         .await?;
-        let cache = SourceCache::from_uris(
-            enriched.displayed.iter().map(|e| e.location.uri.as_str()).chain(
-                enriched
-                    .test_references
-                    .iter()
-                    .flat_map(|t| t.displayed.iter().map(|e| e.location.uri.as_str())),
-            ),
-        )
-        .await;
-        println!("{}", formatter.format_enriched_references_results(&[enriched], &cache));
-        return Ok(());
+        let group = [enriched];
+        let cache = SourceCache::from_uris(reference_uris(&group)).await;
+        return Ok(CommandOutput::line(
+            &formatter.format_enriched_references_results(&group, &cache),
+        ));
     }
 
     let all_queries = collect_queries(queries, read_stdin)?;
@@ -706,18 +746,26 @@ pub async fn handle_references_command(
         log.log_reproduction_commands(workspace_root, &all_queries, &cmd);
     }
 
-    let cache = SourceCache::from_uris(enriched_results.iter().flat_map(|r| {
-        let main = r.displayed.iter().map(|e| e.location.uri.as_str());
-        let test = r
-            .test_references
-            .iter()
-            .flat_map(|t| t.displayed.iter().map(|e| e.location.uri.as_str()));
-        main.chain(test)
-    }))
-    .await;
-    println!("{}", formatter.format_enriched_references_results(&enriched_results, &cache));
+    let cache = SourceCache::from_uris(reference_uris(&enriched_results)).await;
+    Ok(CommandOutput::line(
+        &formatter.format_enriched_references_results(&enriched_results, &cache),
+    ))
+}
 
-    Ok(())
+/// Every file URI the given reference groups will display, main and test alike.
+///
+/// Shared by both `refs` paths so the source cache is built the same way for a
+/// single position query and a batch of symbol queries.
+#[cfg(unix)]
+fn reference_uris(results: &[EnrichedReferencesResult]) -> Vec<&str> {
+    let mut uris = Vec::new();
+    for result in results {
+        uris.extend(result.displayed.iter().map(|e| e.location.uri.as_str()));
+        if let Some(tests) = &result.test_references {
+            uris.extend(tests.displayed.iter().map(|e| e.location.uri.as_str()));
+        }
+    }
+    uris
 }
 
 /// Apply limit and enrich displayed references with enclosing symbol context.
@@ -798,7 +846,7 @@ pub async fn handle_references_command(
     _timeout: Duration,
     _show_tests: bool,
     _debug_log: Option<Arc<DebugLog>>,
-) -> Result<()> {
+) -> Result<CommandOutput> {
     anyhow::bail!(
         "The 'refs' command requires the background daemon, which is only supported on Unix systems"
     )
@@ -813,7 +861,7 @@ pub async fn handle_find_command(
     formatter: &OutputFormatter,
     timeout: Duration,
     debug_log: Option<Arc<DebugLog>>,
-) -> Result<()> {
+) -> Result<CommandOutput> {
     validate_symbol_tokens(symbols)?;
 
     // --fuzzy mode: use workspace/symbol pure fuzzy query
@@ -831,6 +879,7 @@ pub async fn handle_find_command(
             ensure_daemon_running().await?;
             let mut client = connect_daemon(timeout, debug_log.as_ref()).await?;
 
+            let mut rendered = String::new();
             for symbol in symbols {
                 // Dotted query: resolve the container exactly, then match the
                 // member by prefix (fuzzy). Bare query: ty's fuzzy workspace search.
@@ -857,7 +906,8 @@ pub async fn handle_find_command(
                             "0 symbols found matching '{symbol}' (fuzzy)"
                         ));
                     }
-                    println!(
+                    let _ = writeln!(
+                        rendered,
                         "{}",
                         formatter.styler().error(&format!("No results found matching '{symbol}'"))
                     );
@@ -871,9 +921,13 @@ pub async fn handle_find_command(
                     if symbols.len() > 1 {
                         let heading =
                             format!("=== {symbol} ({} match(es)) ===", result.symbols.len());
-                        println!("{}\n", formatter.styler().symbol(&heading));
+                        let _ = writeln!(rendered, "{}\n", formatter.styler().symbol(&heading));
                     }
-                    println!("{}", formatter.format_workspace_symbols(&result.symbols));
+                    let _ = writeln!(
+                        rendered,
+                        "{}",
+                        formatter.format_workspace_symbols(&result.symbols)
+                    );
                 }
             }
             if let Some(ref log) = debug_log {
@@ -884,7 +938,7 @@ pub async fn handle_find_command(
                     log.log_lsp_snippet(workspace_root, sym, 0, 0, "workspace/symbol");
                 }
             }
-            return Ok(());
+            return Ok(CommandOutput::from_stdout(rendered));
         }
     }
 
@@ -959,9 +1013,7 @@ pub async fn handle_find_command(
     let cache =
         SourceCache::from_uris(results.iter().flat_map(|(_, locs)| locs).map(|l| l.uri.as_str()))
             .await;
-    println!("{}", formatter.format_find_results(&results, &cache));
-
-    Ok(())
+    Ok(CommandOutput::line(&formatter.format_find_results(&results, &cache)))
 }
 
 /// Find a symbol's location(s) using workspace symbols search.
@@ -1009,7 +1061,7 @@ pub async fn handle_show_command(
     show_tests: bool,
     show_doc: bool,
     debug_log: Option<Arc<DebugLog>>,
-) -> Result<()> {
+) -> Result<CommandOutput> {
     validate_symbol_tokens(symbols)?;
     ensure_daemon_running().await?;
 
@@ -1123,19 +1175,16 @@ pub async fn handle_show_command(
         });
     }
 
-    let cache = SourceCache::from_uris(entries.iter().flat_map(|e| {
-        let defs = e.definitions.iter().map(|l| l.uri.as_str());
-        let refs = e.displayed_references.iter().map(|r| r.location.uri.as_str());
-        let test = e
-            .test_references
-            .iter()
-            .flat_map(|t| t.displayed.iter().map(|r| r.location.uri.as_str()));
-        defs.chain(refs).chain(test)
-    }))
-    .await;
-    println!("{}", formatter.format_show_results(&entries, &cache));
-
-    Ok(())
+    let mut shown_uris: Vec<&str> = Vec::new();
+    for entry in &entries {
+        shown_uris.extend(entry.definitions.iter().map(|l| l.uri.as_str()));
+        shown_uris.extend(entry.displayed_references.iter().map(|r| r.location.uri.as_str()));
+        if let Some(tests) = &entry.test_references {
+            shown_uris.extend(tests.displayed.iter().map(|r| r.location.uri.as_str()));
+        }
+    }
+    let cache = SourceCache::from_uris(shown_uris).await;
+    Ok(CommandOutput::line(&formatter.format_show_results(&entries, &cache)))
 }
 
 #[cfg(not(unix))]
@@ -1151,7 +1200,7 @@ pub async fn handle_show_command(
     _show_tests: bool,
     _show_doc: bool,
     _debug_log: Option<Arc<DebugLog>>,
-) -> Result<()> {
+) -> Result<CommandOutput> {
     anyhow::bail!(
         "The 'show' command requires the background daemon, which is only supported on Unix systems"
     )
@@ -1292,7 +1341,7 @@ pub async fn handle_document_symbols_command(
     formatter: &OutputFormatter,
     timeout: Duration,
     debug_log: Option<Arc<DebugLog>>,
-) -> Result<()> {
+) -> Result<CommandOutput> {
     ensure_daemon_running().await?;
     let mut client = connect_daemon(timeout, debug_log.as_ref()).await?;
 
@@ -1311,16 +1360,15 @@ pub async fn handle_document_symbols_command(
     }
 
     if result.symbols.is_empty() {
-        println!(
-            "{}",
-            formatter.styler().error(&format!("No symbols found in {}", file.display()))
-        );
-    } else {
-        println!("Document outline for {}:\n", file.display());
-        println!("{}", formatter.format_document_symbols(&result.symbols));
+        return Ok(CommandOutput::line(
+            &formatter.styler().error(&format!("No symbols found in {}", file.display())),
+        ));
     }
 
-    Ok(())
+    let mut rendered = String::new();
+    let _ = writeln!(rendered, "Document outline for {}:\n", file.display());
+    let _ = writeln!(rendered, "{}", formatter.format_document_symbols(&result.symbols));
+    Ok(CommandOutput::from_stdout(rendered))
 }
 
 #[cfg(not(unix))]
@@ -1330,7 +1378,7 @@ pub async fn handle_document_symbols_command(
     _formatter: &OutputFormatter,
     _timeout: Duration,
     _debug_log: Option<Arc<DebugLog>>,
-) -> Result<()> {
+) -> Result<CommandOutput> {
     anyhow::bail!(
         "The 'list' command requires the background daemon, which is only supported on Unix systems"
     )
@@ -1355,7 +1403,7 @@ pub async fn handle_calls_command(
     formatter: &OutputFormatter,
     timeout: Duration,
     debug_log: Option<Arc<DebugLog>>,
-) -> Result<()> {
+) -> Result<CommandOutput> {
     // Same dotted-notation contract as show/find/refs: one level only.
     validate_symbol_tokens(symbols)?;
 
@@ -1407,8 +1455,7 @@ pub async fn handle_calls_command(
         .entries
         .sort_by_key(|entry| symbols.iter().position(|s| *s == entry.label).unwrap_or(usize::MAX));
 
-    println!("{}", formatter.format_call_hierarchy(&result));
-    Ok(())
+    Ok(CommandOutput::line(&formatter.format_call_hierarchy(&result)))
 }
 
 #[cfg(not(unix))]
@@ -1423,7 +1470,7 @@ pub async fn handle_calls_command(
     _formatter: &OutputFormatter,
     _timeout: Duration,
     _debug_log: Option<Arc<DebugLog>>,
-) -> Result<()> {
+) -> Result<CommandOutput> {
     anyhow::bail!(
         "The 'calls' command requires the background daemon, \
          which is only supported on Unix systems"
@@ -1439,7 +1486,7 @@ pub async fn handle_members_command(
     formatter: &OutputFormatter,
     timeout: Duration,
     debug_log: Option<Arc<DebugLog>>,
-) -> Result<()> {
+) -> Result<CommandOutput> {
     ensure_daemon_running().await?;
 
     let mut results: Vec<crate::daemon::protocol::MembersResult> = Vec::new();
@@ -1450,15 +1497,18 @@ pub async fn handle_members_command(
         results.push(result);
     }
 
-    // Check for non-class symbols and print appropriate errors
-    let mut has_output = false;
+    // Collect diagnostics for non-class symbols alongside the valid results
+    let mut diagnostics = String::new();
     let mut valid_results: Vec<crate::daemon::protocol::MembersResult> = Vec::new();
 
     for result in results {
         match result.symbol_kind.as_ref() {
             None => {
-                eprintln!("No symbol '{}' found in the project.", result.class_name);
-                has_output = true;
+                let _ = writeln!(
+                    diagnostics,
+                    "No symbol '{}' found in the project.",
+                    result.class_name
+                );
             }
             Some(kind) if !matches!(kind, crate::lsp::protocol::SymbolKind::Class) => {
                 let kind_name = match kind {
@@ -1469,11 +1519,11 @@ pub async fn handle_members_command(
                     crate::lsp::protocol::SymbolKind::Module => "a module",
                     _ => "not a class",
                 };
-                eprintln!(
+                let _ = writeln!(
+                    diagnostics,
                     "'{}' is {kind_name}, not a class. Use 'show' instead.",
                     result.class_name
                 );
-                has_output = true;
             }
             Some(_) => {
                 valid_results.push(result);
@@ -1493,15 +1543,16 @@ pub async fn handle_members_command(
         log.log_reproduction_commands(workspace_root, symbols, &cmd);
     }
 
+    let mut stdout = String::new();
     if !valid_results.is_empty() {
-        if has_output {
+        if !diagnostics.is_empty() {
             // Separate error messages from valid output
-            eprintln!();
+            diagnostics.push('\n');
         }
-        println!("{}", formatter.format_members_results(&valid_results));
+        let _ = writeln!(stdout, "{}", formatter.format_members_results(&valid_results));
     }
 
-    Ok(())
+    Ok(CommandOutput { stdout, stderr: diagnostics })
 }
 
 /// Look up a single class's members via the daemon.
@@ -1566,7 +1617,7 @@ pub async fn handle_members_command(
     _formatter: &OutputFormatter,
     _timeout: Duration,
     _debug_log: Option<Arc<DebugLog>>,
-) -> Result<()> {
+) -> Result<CommandOutput> {
     anyhow::bail!(
         "The 'members' command requires the background daemon, which is only supported on Unix systems"
     )

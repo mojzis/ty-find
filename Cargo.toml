@@ -17,6 +17,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 serde_repr = "0.1.20"
 owo-colors = "4"
 supports-color = "3"
+rmcp = { version = "=3.1.4", default-features = false, features = ["server", "macros", "transport-io", "schemars"] }
+schemars = "1.2"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
@@ -50,6 +52,10 @@ path = "tests/integration/test_multi_workspace.rs"
 [[test]]
 name = "test_calls"
 path = "tests/integration/test_calls.rs"
+
+[[test]]
+name = "test_mcp"
+path = "tests/integration/test_mcp.rs"
 
 [[bin]]
 name = "tyf"

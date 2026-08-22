@@ -36,6 +36,7 @@ Browsing:
   list         All functions, classes, and variables defined in a file
 
 Infrastructure:
+  mcp          Serve the same commands as an MCP server over stdio
   daemon       Manage the background LSP server (auto-starts on first use)
 
 {options}";
@@ -302,6 +303,28 @@ pub enum Commands {
     DocumentSymbols { file: PathBuf },
 
     // -- Infrastructure --
+    /// Serve the same commands as an MCP server over stdio
+    #[command(
+        name = "mcp",
+        long_about = "Serve tyf's symbol lookups as an MCP (Model Context Protocol) server \
+        on stdio, for harnesses that consume MCP servers more easily than a shell command.\n\n\
+        Exposes one tool per command \u{2014} show, find, refs, members, list \u{2014} with the \
+        same parameters, the same dotted-notation rules, and byte-identical condensed \
+        output. It is a thin bridge over the same background daemon the CLI uses, so \
+        both frontends share one warm index.\n\n\
+        Runs until stdin closes; the harness starts and stops it. stdio is the only \
+        transport. The workspace is resolved once at startup from --workspace, or from \
+        the process's working directory when that is omitted.\n\n\
+        Examples:\n  \
+        tyf mcp                              # workspace = current directory\n  \
+        tyf mcp --workspace /path/to/project # explicit workspace"
+    )]
+    Mcp {
+        /// Project root for every tool call (default: the process's working directory)
+        #[arg(long, value_name = "PATH")]
+        workspace: Option<PathBuf>,
+    },
+
     /// Manage the background LSP server (auto-starts on first use)
     Daemon {
         #[command(subcommand)]
@@ -485,6 +508,26 @@ mod tests {
     }
 
     #[test]
+    fn mcp_workspace_defaults_to_none() {
+        let cli = Cli::try_parse_from(["tyf", "mcp"]).unwrap();
+        match cli.command {
+            Commands::Mcp { workspace } => assert!(workspace.is_none()),
+            _ => panic!("expected Mcp"),
+        }
+    }
+
+    /// The flag has to sit on the subcommand: the global `--workspace` is not
+    /// `global = true`, so `tyf mcp --workspace X` would not parse without it.
+    #[test]
+    fn mcp_accepts_its_own_workspace_flag() {
+        let cli = Cli::try_parse_from(["tyf", "mcp", "--workspace", "/tmp/proj"]).unwrap();
+        match cli.command {
+            Commands::Mcp { workspace } => assert_eq!(workspace, Some(PathBuf::from("/tmp/proj"))),
+            _ => panic!("expected Mcp"),
+        }
+    }
+
+    #[test]
     fn calls_defaults_to_outgoing_depth_two() {
         let cli = Cli::try_parse_from(["tyf", "calls", "my_func"]).unwrap();
         match cli.command {
@@ -581,7 +624,8 @@ mod tests {
         cmd.write_help(&mut buf).unwrap();
         let help = String::from_utf8(buf).unwrap();
 
-        let expected_subcommands = &["show", "find", "refs", "members", "calls", "list", "daemon"];
+        let expected_subcommands =
+            &["show", "find", "refs", "members", "calls", "list", "mcp", "daemon"];
 
         for subcmd in expected_subcommands {
             assert!(

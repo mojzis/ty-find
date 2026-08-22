@@ -308,19 +308,19 @@ pub enum Commands {
         name = "mcp",
         long_about = "Serve tyf's symbol lookups as an MCP (Model Context Protocol) server \
         on stdio, for harnesses that consume MCP servers more easily than a shell command.\n\n\
-        Exposes one tool per command \u{2014} show, find, refs, members, list \u{2014} with the \
-        same parameters, the same dotted-notation rules, and byte-identical condensed \
-        output. It is a thin bridge over the same background daemon the CLI uses, so \
-        both frontends share one warm index.\n\n\
+        Exposes one tool per lookup command \u{2014} show, find, refs, members, list \u{2014} \
+        with the same parameters, the same dotted-notation rules, and byte-identical \
+        condensed output. 'calls' is CLI-only for now. It is a thin bridge over the same \
+        background daemon the CLI uses, so both frontends share one warm index.\n\n\
         Runs until stdin closes; the harness starts and stops it. stdio is the only \
-        transport. The workspace is resolved once at startup from --workspace, or from \
-        the process's working directory when that is omitted.\n\n\
+        transport. The workspace is resolved once at startup from --workspace, or \
+        auto-detected from the process's working directory when that is omitted.\n\n\
         Examples:\n  \
         tyf mcp                              # workspace = current directory\n  \
         tyf mcp --workspace /path/to/project # explicit workspace"
     )]
     Mcp {
-        /// Project root for every tool call (default: the process's working directory)
+        /// Project root for every tool call (default: auto-detect from the working directory)
         #[arg(long, value_name = "PATH")]
         workspace: Option<PathBuf>,
     },

@@ -301,9 +301,7 @@ impl CommandOutput {
     /// Both streams merged in the order a terminal shows them, for consumers
     /// with a single text channel (the MCP bridge).
     pub fn combined(&self) -> String {
-        let mut merged = self.stderr.clone();
-        merged.push_str(&self.stdout);
-        merged
+        format!("{}{}", self.stderr, self.stdout)
     }
 }
 
@@ -657,21 +655,39 @@ async fn classify_and_resolve(
     Ok(resolved)
 }
 
+/// The `refs`-specific options, grouped so a caller cannot transpose two of
+/// the four adjacent booleans without the compiler noticing.
+#[derive(Clone, Copy, Debug)]
+pub struct RefsOptions {
+    /// Explicit 1-indexed `(line, column)`, which requires `file` too.
+    pub position: Option<(u32, u32)>,
+    /// Read queries from stdin, one per line.
+    pub read_stdin: bool,
+    /// Count the declaration itself as a usage.
+    pub include_declaration: bool,
+    /// Maximum individual references to display; 0 means unlimited.
+    pub references_limit: usize,
+    /// Show test references in their own section.
+    pub tests: bool,
+}
+
 #[cfg(unix)]
-#[allow(clippy::too_many_arguments)]
 pub async fn handle_references_command(
     workspace_root: &Path,
     file: Option<&Path>,
     queries: &[String],
-    position: Option<(u32, u32)>,
-    read_stdin: bool,
-    include_declaration: bool,
-    references_limit: usize,
     formatter: &OutputFormatter,
+    options: RefsOptions,
     timeout: Duration,
-    show_tests: bool,
     debug_log: Option<Arc<DebugLog>>,
 ) -> Result<CommandOutput> {
+    let RefsOptions {
+        position,
+        read_stdin,
+        include_declaration,
+        references_limit,
+        tests: show_tests,
+    } = options;
     ensure_daemon_running().await?;
 
     // Explicit --file -l -c: single position mode
@@ -833,18 +849,13 @@ async fn enrich_and_limit_references(
 }
 
 #[cfg(not(unix))]
-#[allow(clippy::too_many_arguments)]
 pub async fn handle_references_command(
     _workspace_root: &Path,
     _file: Option<&Path>,
     _queries: &[String],
-    _position: Option<(u32, u32)>,
-    _read_stdin: bool,
-    _include_declaration: bool,
-    _references_limit: usize,
     _formatter: &OutputFormatter,
+    _options: RefsOptions,
     _timeout: Duration,
-    _show_tests: bool,
     _debug_log: Option<Arc<DebugLog>>,
 ) -> Result<CommandOutput> {
     anyhow::bail!(
@@ -1048,20 +1059,36 @@ async fn find_symbol_via_workspace(
     Ok(result.symbols.into_iter().map(|s| s.location).collect())
 }
 
+/// The `show`-specific options, grouped for the same reason as [`RefsOptions`].
+#[derive(Clone, Copy, Debug)]
+pub struct ShowOptions {
+    /// List individual usage locations, not just the count.
+    pub references: bool,
+    /// Maximum individual references to display; 0 means unlimited.
+    pub references_limit: usize,
+    /// Show test references in their own section.
+    pub tests: bool,
+    /// Include the docstring.
+    pub doc: bool,
+}
+
 #[cfg(unix)]
-#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+#[allow(clippy::too_many_lines)]
 pub async fn handle_show_command(
     workspace_root: &Path,
     file: Option<&Path>,
     symbols: &[String],
     formatter: &OutputFormatter,
+    options: ShowOptions,
     timeout: Duration,
-    show_individual_refs: bool,
-    references_limit: usize,
-    show_tests: bool,
-    show_doc: bool,
     debug_log: Option<Arc<DebugLog>>,
 ) -> Result<CommandOutput> {
+    let ShowOptions {
+        references: show_individual_refs,
+        references_limit,
+        tests: show_tests,
+        doc: show_doc,
+    } = options;
     validate_symbol_tokens(symbols)?;
     ensure_daemon_running().await?;
 
@@ -1188,17 +1215,13 @@ pub async fn handle_show_command(
 }
 
 #[cfg(not(unix))]
-#[allow(clippy::too_many_arguments)]
 pub async fn handle_show_command(
     _workspace_root: &Path,
     _file: Option<&Path>,
     _symbols: &[String],
     _formatter: &OutputFormatter,
+    _options: ShowOptions,
     _timeout: Duration,
-    _show_individual_refs: bool,
-    _references_limit: usize,
-    _show_tests: bool,
-    _show_doc: bool,
     _debug_log: Option<Arc<DebugLog>>,
 ) -> Result<CommandOutput> {
     anyhow::bail!(
@@ -1751,6 +1774,36 @@ pub async fn handle_daemon_command(command: DaemonCommands) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn command_output_line_appends_exactly_one_newline() {
+        let output = CommandOutput::line("rendered");
+        assert_eq!(output.stdout, "rendered\n");
+        assert!(output.stderr.is_empty());
+    }
+
+    #[test]
+    fn command_output_from_stdout_is_verbatim() {
+        let output = CommandOutput::from_stdout("as written");
+        assert_eq!(output.stdout, "as written");
+        assert!(output.stderr.is_empty());
+    }
+
+    /// The MCP bridge has one text channel, and a terminal shows the
+    /// diagnostics before the results, so `combined` must put stderr first.
+    #[test]
+    fn command_output_combined_puts_diagnostics_before_results() {
+        let output = CommandOutput {
+            stdout: "the results\n".to_string(),
+            stderr: "a diagnostic\n\n".to_string(),
+        };
+        assert_eq!(output.combined(), "a diagnostic\n\nthe results\n");
+    }
+
+    #[test]
+    fn command_output_combined_of_a_result_only_output_is_just_stdout() {
+        assert_eq!(CommandOutput::line("only this").combined(), "only this\n");
+    }
 
     #[test]
     fn test_is_test_file_test_prefix() {

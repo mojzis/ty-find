@@ -15,10 +15,10 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 
 use crate::cli::args::{OutputDetail, OutputFormat};
-use crate::cli::format_error_chain;
+use crate::cli::classify_error;
 use crate::cli::output::OutputFormatter;
 use crate::cli::style::Styler;
-use crate::commands::{self, CommandOutput, UsageError};
+use crate::commands::{self, CommandOutput, RefsOptions, ShowOptions};
 
 /// The MCP revision this server implements.
 const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::V_2026_07_28;
@@ -32,12 +32,6 @@ const REFERENCES_LIMIT: usize = 20;
 const INSTRUCTIONS: &str =
     "Type-aware Python navigation by symbol name — no file paths or line numbers needed. \
      Batch several symbols into one call.";
-
-/// The condensed, uncoloured renderer both this bridge and `tyf --detail
-/// condensed --color never` use.
-fn formatter() -> OutputFormatter {
-    OutputFormatter::with_detail(OutputFormat::Human, OutputDetail::Condensed, Styler::no_color())
-}
 
 /// Render a handler outcome as a tool result.
 ///
@@ -64,14 +58,18 @@ fn normalize(text: &str) -> String {
 
 /// The message the CLI would print for this error, without the ANSI styling.
 fn error_text(error: &anyhow::Error) -> String {
-    if let Some(usage) = error.downcast_ref::<UsageError>() {
-        return usage.0.clone();
-    }
-    #[cfg(unix)]
-    if let Some(unsupported) = error.downcast_ref::<crate::daemon::protocol::UnsupportedByTy>() {
-        return unsupported.to_string();
-    }
-    format!("Error: {}", format_error_chain(error))
+    classify_error(error).message
+}
+
+/// The CLI's arg parser rejects an invocation with no symbols. An empty array
+/// over MCP is the same mistake, so it gets the same kind of usage error
+/// rather than a successful, empty result.
+fn reject_empty_batch(values: &[String], field: &str) -> Option<CallToolResult> {
+    values.is_empty().then(|| {
+        CallToolResult::error(vec![ContentBlock::text(format!(
+            "tyf: '{field}' must list at least one entry"
+        ))])
+    })
 }
 
 /// Symbol names, or `file:line:col` positions where a tool accepts them.
@@ -82,7 +80,7 @@ type Queries = Vec<String>;
 pub struct ShowParams {
     /// Symbol names. `Class.member` narrows to one class member.
     pub symbols: Queries,
-    /// Narrow to this file instead of the whole project.
+    /// Narrow to this file, relative to the workspace root or absolute.
     #[serde(default)]
     pub file: Option<String>,
     /// List individual usage locations, not just the count.
@@ -101,7 +99,7 @@ pub struct ShowParams {
 pub struct FindParams {
     /// Symbol names. `Class.member` narrows to one class member.
     pub symbols: Queries,
-    /// Narrow to this file instead of the whole project.
+    /// Narrow to this file, relative to the workspace root or absolute.
     #[serde(default)]
     pub file: Option<String>,
     /// Match by prefix instead of exact name.
@@ -114,10 +112,11 @@ pub struct FindParams {
 pub struct RefsParams {
     /// Symbol names or `file:line:col` positions, auto-detected per entry.
     pub queries: Queries,
-    /// Narrow symbol lookups to this file.
+    /// Narrow symbol lookups to this file, relative to the workspace root.
     #[serde(default)]
     pub file: Option<String>,
-    /// Count the declaration itself as a usage.
+    /// Count the declaration itself as a usage. Default false (the CLI's
+    /// `--include-declaration` defaults to true).
     #[serde(default)]
     pub include_declaration: bool,
 }
@@ -127,7 +126,7 @@ pub struct RefsParams {
 pub struct MembersParams {
     /// Class names.
     pub symbols: Queries,
-    /// Narrow to this file instead of the whole project.
+    /// Narrow to this file, relative to the workspace root or absolute.
     #[serde(default)]
     pub file: Option<String>,
     /// Include dunder and private members.
@@ -138,7 +137,7 @@ pub struct MembersParams {
 /// Parameters for the `list` tool.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ListParams {
-    /// Python file to outline.
+    /// Python file to outline, relative to the workspace root or absolute.
     pub file: String,
 }
 
@@ -146,6 +145,9 @@ pub struct ListParams {
 #[derive(Clone)]
 pub struct TyFindMcpServer {
     workspace_root: PathBuf,
+    /// The condensed, uncoloured renderer, identical to what
+    /// `tyf --detail condensed --color never` uses.
+    formatter: OutputFormatter,
     timeout: Duration,
     tool_router: ToolRouter<Self>,
 }
@@ -154,7 +156,12 @@ pub struct TyFindMcpServer {
 impl TyFindMcpServer {
     /// Build a server bound to an already-resolved workspace root.
     pub fn new(workspace_root: PathBuf, timeout: Duration) -> Self {
-        Self { workspace_root, timeout, tool_router: Self::tool_router() }
+        let formatter = OutputFormatter::with_detail(
+            OutputFormat::Human,
+            OutputDetail::Condensed,
+            Styler::no_color(),
+        );
+        Self { workspace_root, formatter, timeout, tool_router: Self::tool_router() }
     }
 
     #[tool(description = "Where Python symbols are defined, their type signature, and how often \
@@ -163,18 +170,23 @@ impl TyFindMcpServer {
         &self,
         Parameters(params): Parameters<ShowParams>,
     ) -> Result<CallToolResult, McpError> {
+        if let Some(error) = reject_empty_batch(&params.symbols, "symbols") {
+            return Ok(error);
+        }
         let file = params.file.map(PathBuf::from);
         Ok(tool_result(
             commands::handle_show_command(
                 &self.workspace_root,
                 file.as_deref(),
                 &params.symbols,
-                &formatter(),
+                &self.formatter,
+                ShowOptions {
+                    references: params.references || params.all,
+                    references_limit: REFERENCES_LIMIT,
+                    tests: params.all,
+                    doc: params.doc || params.all,
+                },
                 self.timeout,
-                params.references || params.all,
-                REFERENCES_LIMIT,
-                params.all,
-                params.doc || params.all,
                 None,
             )
             .await,
@@ -188,6 +200,9 @@ impl TyFindMcpServer {
         &self,
         Parameters(params): Parameters<FindParams>,
     ) -> Result<CallToolResult, McpError> {
+        if let Some(error) = reject_empty_batch(&params.symbols, "symbols") {
+            return Ok(error);
+        }
         let file = params.file.map(PathBuf::from);
         Ok(tool_result(
             commands::handle_find_command(
@@ -195,7 +210,7 @@ impl TyFindMcpServer {
                 file.as_deref(),
                 &params.symbols,
                 params.fuzzy,
-                &formatter(),
+                &self.formatter,
                 self.timeout,
                 None,
             )
@@ -209,19 +224,24 @@ impl TyFindMcpServer {
         &self,
         Parameters(params): Parameters<RefsParams>,
     ) -> Result<CallToolResult, McpError> {
+        if let Some(error) = reject_empty_batch(&params.queries, "queries") {
+            return Ok(error);
+        }
         let file = params.file.map(PathBuf::from);
         Ok(tool_result(
             commands::handle_references_command(
                 &self.workspace_root,
                 file.as_deref(),
                 &params.queries,
-                None,
-                false,
-                params.include_declaration,
-                REFERENCES_LIMIT,
-                &formatter(),
+                &self.formatter,
+                RefsOptions {
+                    position: None,
+                    read_stdin: false,
+                    include_declaration: params.include_declaration,
+                    references_limit: REFERENCES_LIMIT,
+                    tests: false,
+                },
                 self.timeout,
-                false,
                 None,
             )
             .await,
@@ -236,6 +256,9 @@ impl TyFindMcpServer {
         &self,
         Parameters(params): Parameters<MembersParams>,
     ) -> Result<CallToolResult, McpError> {
+        if let Some(error) = reject_empty_batch(&params.symbols, "symbols") {
+            return Ok(error);
+        }
         let file = params.file.map(PathBuf::from);
         Ok(tool_result(
             commands::handle_members_command(
@@ -243,7 +266,7 @@ impl TyFindMcpServer {
                 file.as_deref(),
                 &params.symbols,
                 params.all,
-                &formatter(),
+                &self.formatter,
                 self.timeout,
                 None,
             )
@@ -260,7 +283,7 @@ impl TyFindMcpServer {
             commands::handle_document_symbols_command(
                 &self.workspace_root,
                 Path::new(&params.file),
-                &formatter(),
+                &self.formatter,
                 self.timeout,
                 None,
             )
@@ -301,6 +324,7 @@ pub async fn serve_stdio(workspace_root: PathBuf, timeout: Duration) -> Result<(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::UsageError;
 
     /// The tool table this server exposes.
     fn tools() -> Vec<rmcp::model::Tool> {
@@ -382,6 +406,17 @@ mod tests {
     fn other_errors_keep_the_cli_error_prefix_and_chain() {
         let error = anyhow::anyhow!("root cause").context("outer");
         assert_eq!(error_text(&error), "Error: outer\n  Caused by: root cause");
+    }
+
+    #[test]
+    fn an_empty_batch_is_rejected_like_the_cli_rejects_no_symbols() {
+        let error = reject_empty_batch(&[], "symbols").expect("empty batch must be rejected");
+        assert_eq!(error.is_error, Some(true));
+    }
+
+    #[test]
+    fn a_non_empty_batch_is_not_rejected() {
+        assert!(reject_empty_batch(&["MyClass".to_string()], "symbols").is_none());
     }
 
     #[test]

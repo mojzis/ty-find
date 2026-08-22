@@ -57,6 +57,10 @@ path = "tests/integration/test_calls.rs"
 name = "test_mcp"
 path = "tests/integration/test_mcp.rs"
 
+[[test]]
+name = "test_mcp_concurrency"
+path = "tests/integration/test_mcp_concurrency.rs"
+
 [[bin]]
 name = "tyf"
 path = "src/main.rs"

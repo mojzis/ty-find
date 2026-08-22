@@ -57,5 +57,8 @@ tyf [OPTIONS] <COMMAND>
 **[list](list.md)**
 : All functions, classes, and variables defined in a file
 
+**[mcp](mcp.md)**
+: Serve the same commands as an MCP server over stdio (see [MCP server](../mcp.md))
+
 **[daemon](daemon.md)**
 : Manage the background LSP server (auto-starts on first use)

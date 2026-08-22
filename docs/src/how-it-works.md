@@ -7,14 +7,17 @@
 
 # How It Works
 
-ty-find is built as a three-layer system: a thin **CLI client**, a persistent **background daemon**, and the **ty LSP server** that does the actual Python analysis. This page explains how they fit together and why.
+ty-find is built as a three-layer system: a thin **frontend**, a persistent **background daemon**, and the **ty LSP server** that does the actual Python analysis. This page explains how they fit together and why.
+
+There are two frontends — the **CLI** and the **MCP server** ([`tyf mcp`](mcp.md)) — and they are peers. Both parse a request, hand it to the same daemon over the same socket, and render the result with the same formatter. Neither does any Python analysis of its own, and they share one warm index.
 
 ## Architecture overview
 
 ```mermaid
 graph TB
-    subgraph Terminal
+    subgraph Frontends
         CLI["<b>tyf</b> CLI<br/><small>parse args · format output</small>"]
+        MCP["<b>tyf mcp</b><br/><small>MCP over stdio · same formatter</small>"]
     end
 
     subgraph Daemon ["Daemon (background process)"]
@@ -31,6 +34,7 @@ graph TB
     end
 
     CLI -- "JSON-RPC 2.0<br/>Unix socket" --> Router
+    MCP -- "JSON-RPC 2.0<br/>Unix socket" --> Router
     Router --> CA
     Router --> CB
     CA -- "LSP protocol<br/>stdin/stdout" --> LA
@@ -42,6 +46,7 @@ Each layer has a single responsibility:
 | Layer | Responsibility |
 |-------|----------------|
 | **CLI** (`tyf`) | Parse arguments, connect to daemon, format output |
+| **MCP server** (`tyf mcp`) | Serve tool calls over stdio, connect to daemon, format output |
 | **Daemon** | Keep LSP servers alive between calls, route requests |
 | **ty LSP** | Python type analysis, symbol resolution, indexing |
 
@@ -251,11 +256,11 @@ sequenceDiagram
 
 ## Concurrency model
 
-All parallelism is handled by the daemon, not the CLI:
+All LSP parallelism is handled by the daemon, not the frontends:
 
 - The LSP protocol runs over a single stdin/stdout pipe per server, so requests are inherently sequential.
-- Multi-symbol operations (like `tyf show A B C`) are sent as a single batch RPC call. The daemon processes them sequentially on its LSP client and returns merged results.
-- The CLI never spawns multiple connections or concurrent requests. This keeps the architecture simple and avoids race conditions.
+- Multi-symbol operations (like `tyf show A B C`) are sent as a single batch RPC call. The daemon processes them sequentially on its LSP client and returns merged results. Batch your symbols rather than issuing one request per symbol — that is where the win is.
+- The CLI runs one command per process and never opens concurrent connections. The MCP server may: a harness can pipeline tool calls, and each is served on its own task. That is safe because the daemon serializes LSP work anyway — but daemon *startup* is gated within the process, so concurrent first calls wait for one daemon to come up instead of each spawning their own.
 
 ```mermaid
 sequenceDiagram

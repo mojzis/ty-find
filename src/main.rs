@@ -17,7 +17,7 @@ mod ripgrep;
 mod workspace;
 
 use cli::args::{Cli, Commands};
-use cli::format_error_chain;
+use cli::classify_error;
 use cli::output::OutputFormatter;
 use cli::style::{Styler, UseColor};
 #[cfg(unix)]
@@ -66,26 +66,13 @@ async fn main() {
     }
 
     if let Err(e) = result {
-        // Usage errors (e.g. malformed dotted notation) print their message
-        // verbatim and exit with a distinct code so callers can tell a bad
-        // invocation apart from a clean "not found" (which exits 0).
-        if let Some(usage) = e.downcast_ref::<commands::UsageError>() {
-            eprintln!("{}", styler.error(&usage.0));
-            #[allow(clippy::exit)]
-            std::process::exit(2);
-        }
-        // A capability the installed ty lacks is neither a bad invocation nor a
-        // clean "not found" (which exits 0): it gets its own code so a caller
-        // can tell "upgrade ty" apart from "this symbol has no callers".
-        #[cfg(unix)]
-        if let Some(unsupported) = e.downcast_ref::<daemon::protocol::UnsupportedByTy>() {
-            eprintln!("{}", styler.error(&unsupported.to_string()));
-            #[allow(clippy::exit)]
-            std::process::exit(3);
-        }
-        eprintln!("{}", styler.error(&format!("Error: {}", format_error_chain(&e))));
+        // A usage error (2) and a capability the installed ty lacks (3) each get
+        // their own exit code, so a caller can tell a bad invocation and
+        // "upgrade ty" apart from a clean "not found" (which exits 0).
+        let report = classify_error(&e);
+        eprintln!("{}", styler.error(&report.message));
         #[allow(clippy::exit)]
-        std::process::exit(1);
+        std::process::exit(report.exit_code);
     }
 }
 
@@ -221,18 +208,19 @@ async fn dispatch_command(
             references_limit,
             tests,
         } => {
-            let position = line.zip(column);
             commands::handle_references_command(
                 workspace_root,
                 file.as_deref(),
                 &queries,
-                position,
-                stdin,
-                include_declaration,
-                references_limit,
                 formatter,
+                commands::RefsOptions {
+                    position: line.zip(column),
+                    read_stdin: stdin,
+                    include_declaration,
+                    references_limit,
+                    tests,
+                },
                 timeout,
-                tests,
                 debug_log.cloned(),
             )
             .await?
@@ -267,19 +255,18 @@ async fn dispatch_command(
             .emit();
         }
         Commands::Show { file, symbols, doc, references, references_limit, tests, all } => {
-            let show_doc = doc || all;
-            let show_refs = references || all;
-            let show_tests = tests || all;
             commands::handle_show_command(
                 workspace_root,
                 file.as_deref(),
                 &symbols,
                 formatter,
+                commands::ShowOptions {
+                    references: references || all,
+                    references_limit,
+                    tests: tests || all,
+                    doc: doc || all,
+                },
                 timeout,
-                show_refs,
-                references_limit,
-                show_tests,
-                show_doc,
                 debug_log.cloned(),
             )
             .await?

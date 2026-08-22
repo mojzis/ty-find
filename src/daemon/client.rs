@@ -470,12 +470,29 @@ impl DaemonClient {
 /// Version of the current binary, used to detect stale daemons after upgrades.
 pub const CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// Serializes daemon startup within one process.
+///
+/// The CLI runs one command per process, so check-then-spawn was safe there.
+/// The MCP frontend serves many tool calls from a single process and rmcp runs
+/// each in its own task, so without this gate concurrent first calls each see
+/// "no daemon", each spawn one, and each new daemon unlinks the previous
+/// winner's socket on bind — leaving orphaned daemons (and their `ty lsp`
+/// children) running until their idle timeout.
+///
+/// A `tokio::sync::Mutex` rather than a `std` one: it is held across the
+/// spawn-and-wait `.await`s by design.
+static STARTUP_GATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 /// Ensure the daemon is running, starting it if necessary.
 ///
 /// If an existing daemon is running but was built from a different version of
 /// the binary (e.g. after `pip install --upgrade`), it is shut down and a fresh
 /// one is spawned so the user always talks to a daemon matching their CLI.
+///
+/// Concurrent callers in one process are serialized: the first performs the
+/// check and any spawn, the rest wait and then find a running daemon.
 pub async fn ensure_daemon_running() -> Result<()> {
+    let _startup_guard = STARTUP_GATE.lock().await;
     let socket_path = get_socket_path()?;
     let pidfile_path = pidfile::get_pidfile_path()?;
 

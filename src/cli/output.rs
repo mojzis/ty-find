@@ -1625,6 +1625,7 @@ impl OutputFormatter {
     }
 }
 
+#[cfg(unix)]
 impl OutputFormatter {
     /// Format a single class members result.
     pub fn format_members_result(&self, result: &MembersResult) -> String {

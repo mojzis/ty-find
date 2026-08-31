@@ -19,6 +19,13 @@
 - `SymbolFinder` does text-based symbol matching with whole-word detection
 - `OutputFormatter` supports multiple formats: human, JSON, CSV, paths-only
 
+**Two frontends, one bridge**:
+- The CLI and the MCP server (`tyf mcp`, `src/mcp/`) are peers. Both parse a request, call the same `handle_*_command` in `src/commands.rs`, and render the result; neither does LSP work of its own. The MCP surface covers the five lookup commands; `calls` is CLI-only while it remains gated on `ty >= 0.0.41`.
+- Command handlers return a `CommandOutput { stdout, stderr }` rather than printing. The CLI calls `emit()`; the MCP bridge calls `combined()` and returns it as text content. There is one renderer, so tool output is byte-identical (modulo trailing whitespace) to `tyf --detail condensed --color never`.
+- The MCP server adds no daemon-side logic, no retries, and no protocol of its own: it is stdio in, existing daemon RPC out. One warm index serves both frontends.
+- `tyf mcp` owns stdout for the JSON-RPC stream, so nothing else may write there — `--verbose` logging is routed to stderr for that subcommand.
+- rmcp serves each tool call on its own task, so a harness can pipeline calls. LSP work is still serialized by the daemon, but daemon *startup* is not idempotent, so `ensure_daemon_running` takes a process-wide `tokio::sync::Mutex`: without it, concurrent first calls each spawn a daemon and each new daemon unlinks the previous one's socket on bind, orphaning the losers.
+
 **ty capability gating**:
 - `tyf` binds to whatever `ty` is installed, and `ty` is `0.0.x`. Where a feature is not present across the whole supported range, the LSP client records the relevant `initialize` capability and the daemon returns a structured error rather than an empty result — an empty result is indistinguishable from a legitimate "nothing found".
 - Today this applies to one feature: `callHierarchyProvider` (`ty >= 0.0.41`), which gates `calls`. See `docs/dev/TY_VERSIONS.md` and `docs/dev/call-hierarchy-spike.md`.
@@ -58,3 +65,4 @@ The check is implemented in `src/ripgrep.rs` and integrated into the `with_warmu
 - **Rust toolchain** required for building from source
 - **tokio** for async LSP communication and process management
 - **clap** for CLI parsing with subcommands and multiple output formats
+- **rmcp** (pinned exactly) + **schemars** for the MCP server frontend and its tool schemas

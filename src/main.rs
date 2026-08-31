@@ -1,6 +1,5 @@
 use anyhow::{Context, Result};
 use clap::{CommandFactory, Parser};
-use std::fmt::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -12,10 +11,13 @@ mod commands;
 mod daemon;
 mod debug;
 mod lsp;
+#[cfg(unix)]
+mod mcp;
 mod ripgrep;
 mod workspace;
 
 use cli::args::{Cli, Commands};
+use cli::classify_error;
 use cli::output::OutputFormatter;
 use cli::style::{Styler, UseColor};
 #[cfg(unix)]
@@ -30,7 +32,13 @@ async fn main() {
     let cli = Cli::parse();
 
     if cli.verbose {
-        tracing_subscriber::fmt().with_env_filter("ty_find=debug").init();
+        // `tyf mcp` owns stdout for the protocol stream, so its logs go to stderr.
+        let builder = tracing_subscriber::fmt().with_env_filter("ty_find=debug");
+        if matches!(cli.command, Commands::Mcp { .. }) {
+            builder.with_writer(std::io::stderr).init();
+        } else {
+            builder.init();
+        }
     }
 
     let use_color = UseColor::resolve(&cli.color);
@@ -58,37 +66,25 @@ async fn main() {
     }
 
     if let Err(e) = result {
-        // Usage errors (e.g. malformed dotted notation) print their message
-        // verbatim and exit with a distinct code so callers can tell a bad
-        // invocation apart from a clean "not found" (which exits 0).
-        if let Some(usage) = e.downcast_ref::<commands::UsageError>() {
-            eprintln!("{}", styler.error(&usage.0));
-            #[allow(clippy::exit)]
-            std::process::exit(2);
-        }
-        // A capability the installed ty lacks is neither a bad invocation nor a
-        // clean "not found" (which exits 0): it gets its own code so a caller
-        // can tell "upgrade ty" apart from "this symbol has no callers".
-        #[cfg(unix)]
-        if let Some(unsupported) = e.downcast_ref::<daemon::protocol::UnsupportedByTy>() {
-            eprintln!("{}", styler.error(&unsupported.to_string()));
-            #[allow(clippy::exit)]
-            std::process::exit(3);
-        }
-        eprintln!("{}", styler.error(&format!("Error: {}", format_error_chain(&e))));
+        // A usage error (2) and a capability the installed ty lacks (3) each get
+        // their own exit code, so a caller can tell a bad invocation and
+        // "upgrade ty" apart from a clean "not found" (which exits 0).
+        let report = classify_error(&e);
+        eprintln!("{}", styler.error(&report.message));
         #[allow(clippy::exit)]
-        std::process::exit(1);
+        std::process::exit(report.exit_code);
     }
 }
 
-/// Format the full anyhow error chain for display.
-fn format_error_chain(error: &anyhow::Error) -> String {
-    let mut chain = error.chain();
-    let mut msg = chain.next().expect("error chain is never empty").to_string();
-    for cause in chain {
-        let _ = write!(msg, "\n  Caused by: {cause}");
+/// A subcommand-level `--workspace` flag, which outranks the global one.
+///
+/// Harnesses spawn `tyf mcp --workspace <path>`; the global flag is not
+/// `global = true`, so it cannot follow the subcommand.
+fn subcommand_workspace(command: &Commands) -> Option<&Path> {
+    match command {
+        Commands::Mcp { workspace } => workspace.as_deref(),
+        _ => None,
     }
-    msg
 }
 
 /// Resolve the workspace root directory and describe the detection method.
@@ -116,16 +112,12 @@ async fn run(cli: Cli, styler: Styler, debug_log: Option<Arc<DebugLog>>) -> Resu
     }
 
     let cwd = std::env::current_dir().context("Failed to get current directory")?;
-    let (workspace_root, detection_method) = resolve_workspace(cli.workspace.as_deref(), &cwd)?;
+    let explicit_workspace = subcommand_workspace(&cli.command).or(cli.workspace.as_deref());
+    let (workspace_root, detection_method) = resolve_workspace(explicit_workspace, &cwd)?;
 
     // Log workspace resolution
     if let Some(ref log) = debug_log {
-        log.log_workspace_resolution(
-            &cwd,
-            &workspace_root,
-            cli.workspace.as_deref(),
-            &detection_method,
-        );
+        log.log_workspace_resolution(&cwd, &workspace_root, explicit_workspace, &detection_method);
     }
 
     let formatter = OutputFormatter::with_detail(cli.format, cli.detail, styler);
@@ -176,7 +168,9 @@ async fn dispatch_calls(
         ctx.timeout,
         ctx.debug_log.cloned(),
     )
-    .await
+    .await?
+    .emit();
+    Ok(())
 }
 
 // One arm per subcommand, so this grows with the command surface rather than
@@ -201,7 +195,8 @@ async fn dispatch_command(
                 timeout,
                 debug_log.cloned(),
             )
-            .await?;
+            .await?
+            .emit();
         }
         Commands::References {
             queries,
@@ -213,21 +208,23 @@ async fn dispatch_command(
             references_limit,
             tests,
         } => {
-            let position = line.zip(column);
             commands::handle_references_command(
                 workspace_root,
                 file.as_deref(),
                 &queries,
-                position,
-                stdin,
-                include_declaration,
-                references_limit,
                 formatter,
+                commands::RefsOptions {
+                    position: line.zip(column),
+                    read_stdin: stdin,
+                    include_declaration,
+                    references_limit,
+                    tests,
+                },
                 timeout,
-                tests,
                 debug_log.cloned(),
             )
-            .await?;
+            .await?
+            .emit();
         }
         Commands::Members { file, symbols, all } => {
             commands::handle_members_command(
@@ -239,7 +236,8 @@ async fn dispatch_command(
                 timeout,
                 debug_log.cloned(),
             )
-            .await?;
+            .await?
+            .emit();
         }
         Commands::Calls { symbols, incoming, outgoing: _, depth, external, file } => {
             let opts = CallsOptions { incoming, depth, external };
@@ -253,25 +251,40 @@ async fn dispatch_command(
                 timeout,
                 debug_log.cloned(),
             )
-            .await?;
+            .await?
+            .emit();
         }
         Commands::Show { file, symbols, doc, references, references_limit, tests, all } => {
-            let show_doc = doc || all;
-            let show_refs = references || all;
-            let show_tests = tests || all;
             commands::handle_show_command(
                 workspace_root,
                 file.as_deref(),
                 &symbols,
                 formatter,
+                commands::ShowOptions {
+                    references: references || all,
+                    references_limit,
+                    tests: tests || all,
+                    doc: doc || all,
+                },
                 timeout,
-                show_refs,
-                references_limit,
-                show_tests,
-                show_doc,
                 debug_log.cloned(),
             )
-            .await?;
+            .await?
+            .emit();
+        }
+        Commands::Mcp { workspace: _ } => {
+            // Already folded into `workspace_root` by `run`.
+            #[cfg(unix)]
+            {
+                mcp::serve_stdio(workspace_root.to_path_buf(), timeout).await?;
+            }
+            #[cfg(not(unix))]
+            {
+                anyhow::bail!(
+                    "The MCP server requires the background daemon, \
+                     which is only supported on Unix systems"
+                );
+            }
         }
         Commands::Daemon { command } => {
             #[cfg(unix)]

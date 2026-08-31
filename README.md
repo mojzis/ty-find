@@ -153,6 +153,20 @@ tyf calls check_inventory --in
 tyf list src/services/user.py
 ```
 
+### MCP Server
+
+For harnesses that consume MCP servers more easily than a shell command, `tyf mcp`
+serves the same lookups over stdio — one tool per lookup command, same parameters,
+same output (`calls` is CLI-only for now). It bridges to the same background daemon, so both frontends share one warm index.
+
+```bash
+claude mcp add tyf -- tyf mcp
+```
+
+Use MCP where your harness makes MCP easier than shell; the CLI remains the primary
+interface for Claude Code. See [docs/src/mcp.md](docs/src/mcp.md) for registration
+snippets for Codex, Cursor and Gemini CLI, and the full tool surface.
+
 ### Daemon Management
 
 The daemon starts automatically on first use. Run `tyf daemon --help` for manual control.
@@ -169,8 +183,9 @@ tyf --format csv find User --fuzzy
 ## Architecture
 
 ```
-CLI Command → Daemon Client (auto-connects) → Unix Socket
-→ Daemon Server (5min idle timeout) → LSP Client Pool → ty LSP Server
+CLI Command  ─┐
+              ├→ Daemon Client (auto-connects) → Unix Socket
+MCP Tool Call ─┘  → Daemon Server (5min idle timeout) → LSP Client Pool → ty LSP Server
 ```
 
 The daemon keeps LSP connections warm: first command takes 1-2s, subsequent commands 50-100ms. See [How it works](https://mojzis.github.io/ty-find/how-it-works.html) for details.

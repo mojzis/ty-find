@@ -37,6 +37,7 @@ Browsing:
 
 Infrastructure:
   daemon       Manage the background LSP server (auto-starts on first use)
+  guide        Agent-facing instructions: setup, then the command reference
 
 {options}";
 
@@ -306,6 +307,25 @@ pub enum Commands {
     Daemon {
         #[command(subcommand)]
         command: DaemonCommands,
+    },
+
+    /// Agent-facing instructions: setup, then the command reference
+    #[command(
+        long_about = "Agent-facing instructions, embedded in the binary so they always match \
+        the build. Prints one page and exits; never touches the workspace, the daemon or \
+        the LSP, so it is safe as the very first command in a fresh checkout \
+        (e.g. `uvx ty-find guide`).\n\n\
+        With no page given, picks one from the working directory: `use` when the nearest \
+        pyproject.toml has a .venv with tyf installed, `setup` otherwise.\n\n\
+        Examples:\n  \
+        tyf guide            # auto-select\n  \
+        tyf guide setup      # install and wire into CLAUDE.md\n  \
+        tyf guide use        # command reference"
+    )]
+    Guide {
+        /// Page to print (default: detect from the working directory)
+        #[arg(value_enum)]
+        page: Option<crate::guide::Page>,
     },
 
     /// Generate markdown documentation from CLI help text
@@ -581,7 +601,8 @@ mod tests {
         cmd.write_help(&mut buf).unwrap();
         let help = String::from_utf8(buf).unwrap();
 
-        let expected_subcommands = &["show", "find", "refs", "members", "calls", "list", "daemon"];
+        let expected_subcommands =
+            &["show", "find", "refs", "members", "calls", "list", "daemon", "guide"];
 
         for subcmd in expected_subcommands {
             assert!(
@@ -601,5 +622,33 @@ mod tests {
             !help.contains("inspect"),
             "Hidden alias 'inspect' should not appear in help.\nHelp text:\n{help}"
         );
+    }
+
+    #[test]
+    fn guide_accepts_no_page_or_a_named_page() {
+        let cli = Cli::try_parse_from(["tyf", "guide"]).unwrap();
+        assert!(matches!(cli.command, Commands::Guide { page: None }));
+        let cli = Cli::try_parse_from(["tyf", "guide", "use"]).unwrap();
+        assert!(matches!(cli.command, Commands::Guide { page: Some(crate::guide::Page::Use) }));
+        let cli = Cli::try_parse_from(["tyf", "guide", "setup"]).unwrap();
+        assert!(matches!(cli.command, Commands::Guide { page: Some(crate::guide::Page::Setup) }));
+        assert!(Cli::try_parse_from(["tyf", "guide", "tune"]).is_err(), "unknown page is rejected");
+    }
+
+    /// Every `tyf ...` the guide pages show must parse: a guide that shows a
+    /// command the CLI rejects is worse than no guide.
+    #[test]
+    fn every_command_in_the_guides_parses() {
+        for page in crate::guide::Page::all() {
+            for argv in crate::guide::embedded_invocations(page) {
+                if let Err(err) = Cli::try_parse_from(&argv) {
+                    panic!(
+                        "guide `{}` shows `{}`, which the CLI rejects: {err}",
+                        page.name(),
+                        argv.join(" ")
+                    );
+                }
+            }
+        }
     }
 }

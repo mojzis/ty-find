@@ -18,6 +18,7 @@
 - [calls](commands/calls.md)
 - [list](commands/list.md)
 - [daemon](commands/daemon.md)
+- [guide](commands/guide.md)
 
 # Reference
 

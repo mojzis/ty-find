@@ -2,6 +2,7 @@ use std::process;
 
 /// Ensure `ty` is available, either directly on PATH or via `uvx`.
 /// Panics with install instructions if neither works.
+#[allow(dead_code)] // the daemon and guide suites don't need ty
 pub fn require_ty() {
     let direct = process::Command::new("ty")
         .arg("--version")
@@ -105,6 +106,55 @@ pub fn has_call_hierarchy() -> bool {
             println!("SKIP: could not determine the installed ty version");
             false
         }
+    }
+}
+
+/// The Unix socket the daemon listens on: `/tmp/ty-find-{uid}.sock`.
+///
+/// Mirrors `get_socket_path` in `src/daemon/client.rs`. The daemon has no
+/// env override, so this real path is the only one a test can watch.
+#[cfg(unix)]
+#[allow(dead_code)] // only the daemon-sensitive suites use this
+#[allow(unsafe_code)]
+pub fn daemon_socket_path() -> std::path::PathBuf {
+    // SAFETY: `libc::getuid()` is a simple syscall that returns the real
+    // user ID. It has no preconditions and cannot cause UB.
+    let uid = unsafe { libc::getuid() };
+    std::path::PathBuf::from(format!("/tmp/ty-find-{uid}.sock"))
+}
+
+/// The daemon's pidfile: `/tmp/ty-find-{uid}.pid`.
+///
+/// Mirrors `pidfile_path` in `src/daemon/pidfile.rs`.
+#[cfg(unix)]
+#[allow(dead_code)] // only the daemon-sensitive suites use this
+#[allow(unsafe_code)]
+pub fn daemon_pidfile_path() -> std::path::PathBuf {
+    // SAFETY: as above.
+    let uid = unsafe { libc::getuid() };
+    std::path::PathBuf::from(format!("/tmp/ty-find-{uid}.pid"))
+}
+
+/// PIDs of every running *daemon* started from the binary at `bin_path`.
+///
+/// The daemon's command line is `<bin> daemon start --foreground`, so
+/// matching on that prefix excludes ordinary `tyf` invocations running at
+/// the same moment. Uses `ps` rather than `pgrep -f`: concurrent `pgrep`
+/// invocations carry the pattern in their own command lines and match each
+/// other.
+#[allow(dead_code)] // only the daemon-sensitive suites use this
+pub fn daemon_pids(bin_path: &std::path::Path) -> std::collections::HashSet<String> {
+    let prefix = format!("{} daemon", bin_path.to_string_lossy());
+    let output = process::Command::new("ps").args(["-eo", "pid=,args="]).output();
+    match output {
+        Ok(out) => String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter_map(|line| {
+                let (pid, args) = line.trim().split_once(' ')?;
+                args.trim_start().starts_with(&prefix).then(|| pid.to_string())
+            })
+            .collect(),
+        Err(_) => std::collections::HashSet::new(),
     }
 }
 

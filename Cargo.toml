@@ -51,9 +51,20 @@ path = "tests/integration/test_multi_workspace.rs"
 name = "test_calls"
 path = "tests/integration/test_calls.rs"
 
+[[test]]
+name = "test_guide"
+path = "tests/integration/test_guide.rs"
+
 [[bin]]
 name = "tyf"
 path = "src/main.rs"
+
+# `uvx ty-find` looks for an executable named after the package. maturin's
+# `bin` bindings ship every cargo binary and reject [project.scripts], so this
+# is a real binary: a tiny wrapper that execs the `tyf` next to it.
+[[bin]]
+name = "ty-find"
+path = "src/bin/ty-find.rs"
 
 [profile.release]
 opt-level = 3

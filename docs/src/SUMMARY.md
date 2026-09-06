@@ -19,6 +19,7 @@
 - [list](commands/list.md)
 - [mcp](commands/mcp.md)
 - [daemon](commands/daemon.md)
+- [guide](commands/guide.md)
 
 # MCP
 

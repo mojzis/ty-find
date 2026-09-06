@@ -77,7 +77,11 @@ cargo install ripgrep
 uv add --dev ty-find
 ```
 
-**Note:** On Windows, only `tyf find --file` is supported for now. All other commands require Unix domain sockets (Linux, macOS).
+Not sure where to start? `uvx ty-find guide` prints agent-facing instructions
+(setup, then the command reference) without installing anything or starting the
+daemon. Inside a project that has it installed, `uv run tyf guide` does the same.
+
+**Note:** On Windows, only `tyf find --file` and `tyf guide` are supported for now. All other commands require Unix domain sockets (Linux, macOS).
 
 ## Usage
 

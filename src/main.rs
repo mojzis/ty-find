@@ -11,6 +11,7 @@ mod commands;
 #[cfg(unix)]
 mod daemon;
 mod debug;
+mod guide;
 mod lsp;
 mod ripgrep;
 mod workspace;
@@ -28,6 +29,13 @@ use workspace::detection::WorkspaceDetector;
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
+
+    // `guide` is what an agent runs before anything is set up, so it goes
+    // first: before the debug log, workspace detection, the socket and the
+    // LSP. Nothing below this point may run for it.
+    if let Commands::Guide { page } = cli.command {
+        return print_guide(page);
+    }
 
     if cli.verbose {
         tracing_subscriber::fmt().with_env_filter("ty_find=debug").init();
@@ -76,6 +84,22 @@ async fn main() {
             std::process::exit(3);
         }
         eprintln!("{}", styler.error(&format!("Error: {}", format_error_chain(&e))));
+        #[allow(clippy::exit)]
+        std::process::exit(1);
+    }
+}
+
+/// Print one guide page to stdout, verbatim. Nothing else runs.
+///
+/// The working directory is only looked at when no page was named, and a
+/// missing one (deleted cwd) is treated as "no project" rather than an error:
+/// a guide that refuses to print instructions has failed at its one job.
+fn print_guide(page: Option<guide::Page>) {
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let text = guide::render(page, &cwd);
+    let mut stdout = std::io::stdout().lock();
+    if let Err(e) = std::io::Write::write_all(&mut stdout, text.as_bytes()) {
+        eprintln!("Error: failed to write guide: {e}");
         #[allow(clippy::exit)]
         std::process::exit(1);
     }
@@ -288,6 +312,9 @@ async fn dispatch_command(
             let cmd = Cli::command();
             cli::generate_docs::generate_docs(&cmd, &output_dir)?;
         }
+        // Handled in `main` before anything else; unreachable here, but a
+        // panic would be the wrong way to say so.
+        Commands::Guide { page } => print_guide(page),
     }
 
     Ok(())

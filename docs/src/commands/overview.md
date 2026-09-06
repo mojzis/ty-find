@@ -59,3 +59,6 @@ tyf [OPTIONS] <COMMAND>
 
 **[daemon](daemon.md)**
 : Manage the background LSP server (auto-starts on first use)
+
+**[guide](guide.md)**
+: Agent-facing instructions: setup, then the command reference

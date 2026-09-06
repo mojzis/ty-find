@@ -1,7 +1,9 @@
 #![cfg(unix)]
 
+#[path = "common.rs"]
+mod common;
+
 use std::collections::HashSet;
-use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
 
@@ -19,19 +21,14 @@ use std::time::Duration;
 /// available in CI), the child process will likely fail to bind the socket or
 /// start the server — that's fine, we only care that it didn't spawn a swarm.
 #[test]
-#[allow(unsafe_code)]
 fn test_daemon_start_does_not_fork_bomb() {
     // Build the binary first (assert_cmd does this lazily, but we need the
     // path upfront to grep for it in the process table).
     let bin_path = assert_cmd::cargo::cargo_bin!("tyf");
 
-    // Use a unique socket path so we don't interfere with a real daemon.
-    // We achieve this by removing any existing socket so the "already running"
-    // check doesn't short-circuit.
-    //
-    // SAFETY: `libc::getuid()` is a simple syscall that returns the real
-    // user ID. It has no preconditions and cannot cause UB.
-    let socket_path = format!("/tmp/ty-find-{}.sock", unsafe { libc::getuid() });
+    // Remove any existing socket so the "already running" check doesn't
+    // short-circuit.
+    let socket_path = common::daemon_socket_path();
     let _ = std::fs::remove_file(&socket_path);
 
     // Snapshot existing tyf PIDs *before* spawning so we ignore processes
@@ -88,11 +85,9 @@ fn test_daemon_start_does_not_fork_bomb() {
 /// The hover request itself may fail (ty LSP may not be installed), but the
 /// daemon server should have been spawned and its socket should exist.
 #[test]
-#[allow(unsafe_code)]
 fn test_daemon_auto_start_on_first_request() {
     let bin_path = assert_cmd::cargo::cargo_bin!("tyf");
-    // SAFETY: `libc::getuid()` is a simple syscall with no preconditions.
-    let socket_path = format!("/tmp/ty-find-{}.sock", unsafe { libc::getuid() });
+    let socket_path = common::daemon_socket_path();
 
     // --- setup: make sure no daemon is running ---
     let _ = Command::new(bin_path.as_os_str()).arg("daemon").arg("stop").output();
@@ -100,7 +95,7 @@ fn test_daemon_auto_start_on_first_request() {
     let _ = std::fs::remove_file(&socket_path);
 
     // Sanity-check: socket must not exist.
-    assert!(!Path::new(&socket_path).exists(), "Socket still present after cleanup");
+    assert!(!socket_path.exists(), "Socket still present after cleanup");
 
     // --- act: run a daemon-dependent command (type) ---
     // Create a minimal Python file so the CLI doesn't bail on missing file before
@@ -127,7 +122,7 @@ fn test_daemon_auto_start_on_first_request() {
     std::thread::sleep(Duration::from_millis(500));
 
     // --- assert: daemon socket should exist ---
-    let socket_exists = Path::new(&socket_path).exists();
+    let socket_exists = socket_path.exists();
 
     // Double-check via daemon status.
     let status = Command::new(bin_path.as_os_str())

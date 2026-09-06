@@ -57,13 +57,13 @@ The CLAUDE.md snippet uses emphatic language ("Use `tyf` instead of grep") becau
 
 ## Priming a new session
 
-In the first Claude Code session with a new project, you can prime Claude by asking it to run:
+In the first Claude Code session with a new project, prime Claude by asking it to run:
 
 ```
-tyf --help
+uv run tyf guide
 ```
 
-This helps Claude understand what commands are available and how to use them, making it more likely to reach for tyf over grep in subsequent interactions.
+It prints a short, agent-facing page: the command reference when tyf is already installed in the project, or the setup steps (including the CLAUDE.md snippet above) when it is not. In a project without tyf, `uvx ty-find guide` does the same with nothing installed. Neither starts the daemon. `tyf --help` remains the fallback for a full option listing.
 
 ## AGENTS.md for other tools
 

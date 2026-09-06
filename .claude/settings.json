@@ -2,8 +2,12 @@
   "hooks": {
     "SessionStart": [
       {
-        "type": "command",
-        "command": "uv sync --dev && cargo install prek && prek install"
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv sync --dev && cargo install prek && prek install"
+          }
+        ]
       }
     ]
   }

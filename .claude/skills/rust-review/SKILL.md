@@ -1,6 +1,7 @@
 ---
 name: rust-review
 context: fork
+background: false
 description: Deep Rust code quality review. Auto-invoke when finishing a task, before marking work complete, when the user asks to review code, or when preparing a PR. Covers error handling, async correctness, duplicated logic, test quality, performance patterns, idiomatic Rust, docs-code alignment, and API design beyond what clippy catches.
 ---
 
@@ -91,5 +92,24 @@ Group all findings by severity, then by area. For each finding:
 - Suggest a **concrete fix** (not just "improve this")
 
 End with a summary: X must-fix, Y should-fix, Z suggestions.
+
+---
+
+## Return contract
+
+This skill runs in a forked subagent context. Your final message **is** the return value, and it is
+consumed by the calling agent — not by a human.
+
+- Return the complete review in the final message: every finding, in full, with file:line and the
+  concrete fix. The caller cannot see your tool calls, your intermediate output, or any file you
+  read — anything not in the final message is lost.
+- Do not truncate, summarize, or say "see above" / "as noted earlier". There is no above.
+- Do not address the user, ask questions, or offer follow-ups ("want me to fix these?"). The caller
+  decides what happens next.
+- No preamble, no sign-off. Start with the findings.
+- If a file has to carry the report (the caller asked for a path), still return the full report
+  inline **and** name the path — the caller may not read the file.
+- If the review could not run (e.g. the project's check/test command fails, or there is no diff to review), say exactly that
+  and why, as the entire final message.
 
 $ARGUMENTS

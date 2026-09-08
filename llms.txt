@@ -139,6 +139,33 @@ of contents. Useful for getting an overview of a file you haven't seen before.
 tyf list src/services/user.py
 ```
 
+### mcp — Serve the same commands as an MCP server over stdio
+
+For harnesses that consume MCP servers more easily than a shell command.
+Exposes one tool per lookup command — `show`, `find`, `refs`, `members`,
+`list` — with the same parameters, the same dotted-notation rules, and byte-identical
+condensed output. A thin bridge over the same background daemon the CLI uses,
+so both frontends share one warm index.
+
+stdio is the only transport; the server runs until stdin closes. The workspace
+is resolved once at startup from `--workspace`, or auto-detected from the
+process's working directory when that is omitted (which is what harnesses
+normally give you). `calls` is CLI-only for now.
+
+```
+tyf mcp                              # workspace = current directory
+tyf mcp --workspace /path/to/project # explicit workspace
+```
+
+Register it the way your harness expects, e.g. for Claude Code:
+
+```
+claude mcp add tyf -- tyf mcp
+```
+
+Use MCP where your harness makes MCP easier than shell; the CLI remains the
+primary interface for Claude Code.
+
 ### daemon — Manage the background server
 
 The daemon starts automatically on first use and shuts down after 5 minutes

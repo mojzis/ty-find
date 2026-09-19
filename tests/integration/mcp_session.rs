@@ -11,8 +11,14 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::Once;
 
-/// The MCP revision this server is built against.
-pub const PROTOCOL_VERSION: &str = "2026-07-28";
+/// The MCP revision the harness negotiates over `initialize`.
+///
+/// The server implements 2026-07-28, but that revision is stateless and has no
+/// `initialize` handshake (it is reached via `server/discover` plus per-request
+/// `_meta`). Since rmcp 3.2, `initialize` therefore only ever agrees to a
+/// legacy revision — the newest one, 2025-11-25, is what session-based clients
+/// such as this stdio harness actually speak.
+pub const PROTOCOL_VERSION: &str = "2025-11-25";
 
 /// Repo root — the workspace all fixtures live in.
 pub fn workspace_root() -> PathBuf {

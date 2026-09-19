@@ -318,3 +318,10 @@ sequenceDiagram
 ```
 
 Retries use exponential backoff (100ms, 200ms, 400ms, 800ms) and apply to all operations that can return empty or null results during warmup, including `hover`, `workspace/symbol`, `definition`, `references`, and `documentSymbol`.
+
+`workspace/symbol` has two refinements:
+
+- **ripgrep short-circuit (exact names only).** After the first empty answer to an exact-name lookup (plain `find`, `show`, `refs`), the daemon runs `rg` for the name as a whole word across `.py` files. If it appears nowhere, the symbol cannot exist and the retries are skipped. Fuzzy/prefix queries (`find --fuzzy Calculat`) never use this: a partial name is by construction not a whole word in the source, so `rg` would wrongly report "not found".
+- **Warm index.** Once `workspace/symbol` has answered non-empty for a workspace, the daemon treats that workspace's index as built, and an empty fuzzy answer is final — no retries. Exact-name lookups still retry (guarded by `rg`), so a symbol in a file written moments ago is found once ty picks it up.
+
+Plain `find` falls back to a fuzzy query after an exact miss; that fallback never retries, since the exact request just before it already waited out (or `rg`-disproved) a cold index.

@@ -31,6 +31,13 @@ pub struct TyLspClient {
     /// hierarchy in 0.0.41, well above tyf's 0.0.15 version floor, so this is
     /// the first capability tyf has to gate on rather than assume.
     supports_call_hierarchy: AtomicBool,
+    /// Set once `workspace/symbol` has returned a non-empty result.
+    ///
+    /// Before that, an empty answer may just mean ty hasn't indexed the
+    /// workspace yet; after it, an empty fuzzy answer is treated as
+    /// authoritative. Assumes ty answers `workspace/symbol` only once it has
+    /// indexed the whole workspace, not file-by-file. One-way latch.
+    symbols_index_warm: AtomicBool,
 }
 
 /// Build a `file://` URI from a file path, canonicalizing it first.
@@ -113,6 +120,7 @@ impl TyLspClient {
             pending_requests: Arc::new(Mutex::new(HashMap::new())),
             opened_documents: Mutex::new(HashSet::new()),
             supports_call_hierarchy: AtomicBool::new(false),
+            symbols_index_warm: AtomicBool::new(false),
         };
 
         // Must start reading responses before sending initialize,
@@ -286,7 +294,17 @@ impl TyLspClient {
 
         let response = self.send_request("workspace/symbol", serde_json::to_value(params)?).await?;
 
-        parse_response_array(response)
+        let symbols: Vec<SymbolInformation> = parse_response_array(response)?;
+        if !symbols.is_empty() {
+            self.symbols_index_warm.store(true, Ordering::Relaxed);
+        }
+        Ok(symbols)
+    }
+
+    /// Whether `workspace/symbol` has answered non-empty at least once, i.e.
+    /// ty has indexed the workspace and an empty result is a real miss.
+    pub fn symbols_index_warm(&self) -> bool {
+        self.symbols_index_warm.load(Ordering::Relaxed)
     }
 
     pub async fn document_symbols(&self, file_path: &str) -> Result<Vec<DocumentSymbol>> {

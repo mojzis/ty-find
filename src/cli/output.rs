@@ -94,6 +94,7 @@ impl ShowEntry<'_> {
     }
 }
 
+#[derive(Clone)]
 pub struct OutputFormatter {
     format: OutputFormat,
     detail: OutputDetail,

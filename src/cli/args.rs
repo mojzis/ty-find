@@ -140,8 +140,9 @@ pub enum Commands {
         Use Class.member dotted notation (one level only) to narrow to a specific class \
         member. Module-qualified names (module.func) and nested paths (Outer.Inner.method) \
         are not supported; using 2+ dots is a usage error.\n\
-        Use --fuzzy for partial/prefix matching (returns richer symbol information \
-        including kind and container name).\n\n\
+        Use --fuzzy for partial/prefix matching. Output has the same shape as a plain \
+        find (numbered path:line:col), with the matched name and kind on the line \
+        below.\n\n\
         Examples:\n  \
         tyf find calculate_sum\n  \
         tyf find Calculator.add                  # find a specific class method\n  \
@@ -157,7 +158,7 @@ pub enum Commands {
         #[arg(short, long)]
         file: Option<PathBuf>,
 
-        /// Use fuzzy/prefix matching via workspace symbols (richer output with kind + container)
+        /// Use fuzzy/prefix matching via workspace symbols (adds matched name + kind per result)
         #[arg(long, default_value_t = false)]
         fuzzy: bool,
     },

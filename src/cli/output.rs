@@ -422,29 +422,9 @@ impl OutputFormatter {
         }
 
         match self.format {
-            OutputFormat::Human => {
-                let mut output = String::new();
-                for (symbol, locations) in results {
-                    if locations.is_empty() {
-                        let _ = writeln!(
-                            output,
-                            "{}",
-                            self.s.error(&format!("No results found for: '{symbol}'"))
-                        );
-                        continue;
-                    }
-                    let _ = writeln!(output, "=== {} ===", self.s.symbol(symbol));
-                    {
-                        output.push_str(&self.format_human(
-                            locations,
-                            &format!("'{symbol}'"),
-                            cache,
-                        ));
-                    }
-                    output.push('\n');
-                }
-                output.trim_end().to_string()
-            }
+            OutputFormat::Human => self.format_grouped_human(results, |symbol, locations| {
+                self.format_human(locations, &format!("'{symbol}'"), cache)
+            }),
             OutputFormat::Json => {
                 let grouped: Vec<serde_json::Value> = results
                     .iter()
@@ -469,18 +449,43 @@ impl OutputFormatter {
                 }
                 output
             }
-            OutputFormat::Paths => {
-                let mut paths: Vec<String> = results
-                    .iter()
-                    .flat_map(|(_, locations)| {
-                        locations.iter().map(|loc| self.uri_to_path(&loc.uri))
-                    })
-                    .collect();
-                paths.sort();
-                paths.dedup();
-                paths.join("\n")
-            }
+            OutputFormat::Paths => self.unique_sorted_paths(
+                results.iter().flat_map(|(_, locations)| locations.iter().map(|l| l.uri.as_str())),
+            ),
         }
+    }
+
+    /// Human layout shared by the multi-query `find` formatters: a
+    /// `=== query ===` heading plus `render`'s block for each query that
+    /// matched, and only a "No results" line for one that did not.
+    fn format_grouped_human<T>(
+        &self,
+        results: &[(String, Vec<T>)],
+        render: impl Fn(&str, &[T]) -> String,
+    ) -> String {
+        let mut output = String::new();
+        for (query, items) in results {
+            if items.is_empty() {
+                let _ = writeln!(
+                    output,
+                    "{}",
+                    self.s.error(&format!("No results found for: '{query}'"))
+                );
+                continue;
+            }
+            let _ = writeln!(output, "=== {} ===", self.s.symbol(query));
+            output.push_str(&render(query, items));
+            output.push('\n');
+        }
+        output.trim_end().to_string()
+    }
+
+    /// Sorted, de-duplicated file paths for `--format paths` across queries.
+    fn unique_sorted_paths<'a>(&self, uris: impl Iterator<Item = &'a str>) -> String {
+        let mut paths: Vec<String> = uris.map(|uri| self.uri_to_path(uri)).collect();
+        paths.sort();
+        paths.dedup();
+        paths.join("\n")
     }
 
     /// Format enriched references results (with context and limit support).
@@ -717,24 +722,37 @@ impl OutputFormatter {
         })
     }
 
-    pub fn format_workspace_symbols(&self, symbols: &[SymbolInformation]) -> String {
+    /// Format `find --fuzzy` results for `query`.
+    ///
+    /// The human layout mirrors plain `find` (see [`Self::format_human`]):
+    /// a `Found N symbol(s) matching: 'query'` header, then numbered
+    /// `path:line:col` lines with one indented detail line each. Plain `find`
+    /// puts the source line there; fuzzy puts `name [kind]`, since the name is
+    /// the thing a partial query didn't know. Callers that parse the numbered
+    /// line get the same shape either way.
+    pub fn format_workspace_symbols(&self, symbols: &[SymbolInformation], query: &str) -> String {
         match self.format {
             OutputFormat::Human => {
-                let mut output = String::new();
+                if symbols.is_empty() {
+                    return self.s.error(&format!("No results found for: '{query}'"));
+                }
+
+                let mut output =
+                    format!("Found {} symbol(s) matching: '{query}'\n\n", symbols.len());
 
                 for (i, symbol) in symbols.iter().enumerate() {
                     let file_path = self.uri_to_path(&symbol.location.uri);
                     let line = symbol.location.range.start.line + 1;
                     let column = symbol.location.range.start.character + 1;
 
-                    let kind_str = format!("({:?})", symbol.kind);
+                    let kind_str = format!("[{}]", Self::kind_label(&symbol.kind));
                     let _ = write!(
                         output,
-                        "{}. {} {}\n   {}\n\n",
+                        "{}. {}\n   {} {}\n\n",
                         i + 1,
+                        self.s.file_location(&file_path, line, column),
                         self.s.symbol(&symbol.name),
                         self.s.dim(&kind_str),
-                        self.s.file_location(&file_path, line, column),
                     );
                 }
 
@@ -762,6 +780,55 @@ impl OutputFormatter {
                 .map(|symbol| self.uri_to_path(&symbol.location.uri))
                 .collect::<Vec<_>>()
                 .join("\n"),
+        }
+    }
+
+    /// Format `find --fuzzy` results for one or more queries, grouped by query.
+    ///
+    /// Same grouping rules as [`Self::format_find_results`]: a single query
+    /// renders exactly like [`Self::format_workspace_symbols`]; several get a
+    /// `=== query ===` heading each (only the "No results" line for a miss),
+    /// one JSON document, or one CSV table with a leading `symbol` column.
+    pub fn format_workspace_symbol_results(
+        &self,
+        results: &[(String, Vec<SymbolInformation>)],
+    ) -> String {
+        if let [(query, symbols)] = results {
+            return self.format_workspace_symbols(symbols, query);
+        }
+
+        match self.format {
+            OutputFormat::Human => self.format_grouped_human(results, |query, symbols| {
+                self.format_workspace_symbols(symbols, query)
+            }),
+            OutputFormat::Json => {
+                let grouped: Vec<serde_json::Value> = results
+                    .iter()
+                    .map(|(query, symbols)| serde_json::json!({ "symbol": query, "symbols": symbols }))
+                    .collect();
+                serde_json::to_string_pretty(&grouped).unwrap_or_else(|_| "[]".to_string())
+            }
+            OutputFormat::Csv => {
+                let mut output = String::from("symbol,name,kind,file,line,column\n");
+                for (query, symbols) in results {
+                    for symbol in symbols {
+                        let file_path = self.uri_to_path(&symbol.location.uri);
+                        let line = symbol.location.range.start.line + 1;
+                        let column = symbol.location.range.start.character + 1;
+                        let _ = writeln!(
+                            output,
+                            "{query},{},{:?},{file_path},{line},{column}",
+                            symbol.name, symbol.kind,
+                        );
+                    }
+                }
+                output
+            }
+            OutputFormat::Paths => self.unique_sorted_paths(
+                results
+                    .iter()
+                    .flat_map(|(_, symbols)| symbols.iter().map(|s| s.location.uri.as_str())),
+            ),
         }
     }
 
@@ -1854,10 +1921,91 @@ mod tests {
             location: make_location("file:///test.py", 0, 0),
             container_name: None,
         }];
-        let result = formatter.format_workspace_symbols(&symbols);
+        let result = formatter.format_workspace_symbols(&symbols, "MyC");
 
-        assert!(result.contains("MyClass"));
-        assert!(result.contains("Class"));
+        // Same shape as plain `find`: a "Found N ..." header, then numbered
+        // `path:line:col` lines with a one-line detail underneath.
+        let lines: Vec<&str> = result.lines().collect();
+        assert_eq!(lines[0], "Found 1 symbol(s) matching: 'MyC'");
+        assert_eq!(lines[1], "");
+        assert_eq!(lines[2], "1. /test.py:1:1");
+        assert_eq!(lines[3], "   MyClass [class]");
+    }
+
+    #[test]
+    fn test_format_workspace_symbols_empty_reports_query() {
+        let formatter = OutputFormatter::new(OutputFormat::Human);
+        let result = formatter.format_workspace_symbols(&[], "nope");
+        assert_eq!(result, "No results found for: 'nope'");
+    }
+
+    #[test]
+    fn test_format_workspace_symbol_results_single_symbol_no_heading() {
+        let formatter = OutputFormatter::new(OutputFormat::Human);
+        let results = vec![(
+            "MyC".to_string(),
+            vec![make_symbol_info("MyClass", SymbolKind::Class, "file:///a.py", 0)],
+        )];
+        let result = formatter.format_workspace_symbol_results(&results);
+        assert!(!result.contains("==="), "single query gets no heading:\n{result}");
+        assert!(result.starts_with("Found 1 symbol(s) matching: 'MyC'"), "{result}");
+    }
+
+    #[test]
+    fn test_format_workspace_symbol_results_multiple_symbols() {
+        // Same rules as plain `find`: a heading per query that matched
+        // something, and only the "No results" line for one that did not.
+        let formatter = OutputFormatter::new(OutputFormat::Human);
+        let results = vec![
+            (
+                "foo".to_string(),
+                vec![make_symbol_info("foo_bar", SymbolKind::Function, "file:///a.py", 0)],
+            ),
+            ("bar".to_string(), vec![]),
+        ];
+        let result = formatter.format_workspace_symbol_results(&results);
+        assert!(result.contains("=== foo ==="), "{result}");
+        assert!(result.contains("Found 1 symbol(s) matching: 'foo'"), "{result}");
+        assert!(!result.contains("=== bar ==="), "empty query should not get a heading");
+        assert!(result.contains("No results found for: 'bar'"), "{result}");
+    }
+
+    #[test]
+    fn test_format_workspace_symbol_results_multiple_json_is_one_document() {
+        let formatter = OutputFormatter::new(OutputFormat::Json);
+        let results = vec![
+            (
+                "foo".to_string(),
+                vec![make_symbol_info("foo_bar", SymbolKind::Function, "file:///a.py", 0)],
+            ),
+            ("bar".to_string(), vec![]),
+        ];
+        let output = formatter.format_workspace_symbol_results(&results);
+        let parsed: serde_json::Value = serde_json::from_str(&output).expect("one JSON document");
+        assert_eq!(parsed.as_array().map(Vec::len), Some(2));
+        assert_eq!(parsed[0]["symbol"], "foo");
+        assert_eq!(parsed[0]["symbols"][0]["name"], "foo_bar");
+        assert_eq!(parsed[1]["symbol"], "bar");
+        assert_eq!(parsed[1]["symbols"].as_array().map(Vec::len), Some(0));
+    }
+
+    #[test]
+    fn test_format_workspace_symbol_results_multiple_csv() {
+        let formatter = OutputFormatter::new(OutputFormat::Csv);
+        let results = vec![
+            (
+                "foo".to_string(),
+                vec![make_symbol_info("foo_bar", SymbolKind::Function, "file:///a.py", 0)],
+            ),
+            (
+                "bar".to_string(),
+                vec![make_symbol_info("bar_baz", SymbolKind::Class, "file:///b.py", 1)],
+            ),
+        ];
+        let output = formatter.format_workspace_symbol_results(&results);
+        assert!(output.starts_with("symbol,name,kind,file,line,column\n"), "{output}");
+        assert!(output.contains("foo,foo_bar,Function,"), "{output}");
+        assert!(output.contains("bar,bar_baz,Class,"), "{output}");
     }
 
     #[test]
@@ -3509,7 +3657,7 @@ mod tests {
     fn test_format_workspace_symbols_json() {
         let formatter = OutputFormatter::new(OutputFormat::Json);
         let symbols = vec![make_symbol_info("MyClass", SymbolKind::Class, "file:///a.py", 0)];
-        let result = formatter.format_workspace_symbols(&symbols);
+        let result = formatter.format_workspace_symbols(&symbols, "MyClass");
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert!(parsed.is_array());
         assert_eq!(parsed[0]["name"], "MyClass");
@@ -3519,7 +3667,7 @@ mod tests {
     fn test_format_workspace_symbols_csv() {
         let formatter = OutputFormatter::new(OutputFormat::Csv);
         let symbols = vec![make_symbol_info("MyClass", SymbolKind::Class, "file:///a.py", 0)];
-        let result = formatter.format_workspace_symbols(&symbols);
+        let result = formatter.format_workspace_symbols(&symbols, "MyClass");
         assert!(result.starts_with("name,kind,file,line,column\n"));
         assert!(result.contains("MyClass"));
     }
@@ -3531,7 +3679,7 @@ mod tests {
             make_symbol_info("A", SymbolKind::Class, "file:///a.py", 0),
             make_symbol_info("B", SymbolKind::Function, "file:///b.py", 0),
         ];
-        let result = formatter.format_workspace_symbols(&symbols);
+        let result = formatter.format_workspace_symbols(&symbols, "x");
         assert!(result.contains("a.py"));
         assert!(result.contains("b.py"));
     }

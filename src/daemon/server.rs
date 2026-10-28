@@ -432,11 +432,17 @@ impl DaemonServer {
         let params: WorkspaceSymbolsParams =
             serde_json::from_value(params).context("Invalid workspace symbols parameters")?;
 
-        let workspace = params.workspace;
-        let client = self.lsp_pool.get_or_create(workspace.clone()).await?;
+        let client = self.lsp_pool.get_or_create(params.workspace.clone()).await?;
 
-        let mut symbols =
-            Self::workspace_symbols_with_warmup(&client, &params.query, &workspace).await?;
+        let (delays, rg_check) = warmup_plan(&params, client.symbols_index_warm());
+        let mut symbols = with_warmup(
+            "workspace symbols",
+            delays,
+            |syms: &Vec<crate::lsp::protocol::SymbolInformation>| !syms.is_empty(),
+            || client.workspace_symbols(&params.query),
+            rg_check,
+        )
+        .await?;
 
         // Filter by exact name if specified (avoids serializing thousands of fuzzy matches)
         if let Some(ref exact_name) = params.exact_name {
@@ -957,28 +963,6 @@ impl DaemonServer {
         .await
     }
 
-    /// Workspace symbols with retry on cold start.
-    ///
-    /// On cold start the ty LSP server may not have finished indexing the
-    /// workspace yet, returning zero symbols. Retry with back-off.
-    ///
-    /// Uses ripgrep as a circuit-breaker: after the first empty result, if `rg`
-    /// confirms the symbol doesn't exist in any `.py` file, skips retries.
-    async fn workspace_symbols_with_warmup(
-        client: &TyLspClient,
-        query: &str,
-        workspace_root: &std::path::Path,
-    ) -> Result<Vec<crate::lsp::protocol::SymbolInformation>> {
-        with_warmup(
-            "workspace symbols",
-            &WARMUP_DELAYS,
-            |syms: &Vec<crate::lsp::protocol::SymbolInformation>| !syms.is_empty(),
-            || client.workspace_symbols(query),
-            Some(RgCheck { symbol: query, workspace_root }),
-        )
-        .await
-    }
-
     /// Handle a shutdown request.
     #[allow(clippy::unused_async)] // Matches async handler interface
     async fn handle_shutdown(&self, _params: Value) -> Result<Value> {
@@ -1225,6 +1209,40 @@ struct RgCheck<'a> {
     workspace_root: &'a std::path::Path,
 }
 
+/// Retry delays and ripgrep short-circuit for a workspace-symbol request.
+///
+/// - **`skip_warmup`**: one LSP call, no retries, no `rg` — the caller already
+///   waited out a cold index for this query.
+/// - **Exact name**: retry with back-off, short-circuited by `rg` when the
+///   name appears nowhere in the source. This applies even on a warm index,
+///   so a symbol in a just-written file ty hasn't picked up yet still gets
+///   its retries.
+/// - **Fuzzy/prefix query, warm index** (`index_warm`: ty already answered
+///   non-empty for this workspace): an empty result is authoritative.
+/// - **Fuzzy/prefix query, cold index**: retry with back-off, never `rg`. rg
+///   matches whole words, and a partial query (`Calculat`, `handle_`) is by
+///   construction not a whole word in the source, so rg would wrongly report
+///   "does not exist" and skip the retries.
+fn warmup_plan(
+    params: &WorkspaceSymbolsParams,
+    index_warm: bool,
+) -> (&'static [u64], Option<RgCheck<'_>>) {
+    if params.skip_warmup {
+        return (&[], None);
+    }
+    if let Some(symbol) = params.exact_name.as_deref() {
+        return (
+            &WARMUP_DELAYS,
+            Some(RgCheck { symbol, workspace_root: params.workspace.as_path() }),
+        );
+    }
+    if index_warm {
+        (&[], None)
+    } else {
+        (&WARMUP_DELAYS, None)
+    }
+}
+
 /// Retry an LSP operation with exponential back-off when it returns an "empty" result.
 ///
 /// On cold start the ty LSP server may not have finished indexing a document
@@ -1300,6 +1318,71 @@ async fn send_error_response<W: AsyncWrite + Unpin>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
+
+    fn symbols_params(query: &str, exact_name: Option<&str>) -> WorkspaceSymbolsParams {
+        WorkspaceSymbolsParams {
+            workspace: PathBuf::from("/ws"),
+            query: query.to_string(),
+            limit: None,
+            exact_name: exact_name.map(str::to_string),
+            container_name: None,
+            skip_warmup: false,
+        }
+    }
+
+    #[test]
+    fn test_warmup_plan_cold_fuzzy_retries_without_rg() {
+        // Regression: a fuzzy/prefix query like "Calculat" is never a whole
+        // word, so a word-boundary rg check would wrongly conclude the symbol
+        // does not exist and skip the cold-start retries — `find X --fuzzy`
+        // against a cold daemon then reported "No results found".
+        let params = symbols_params("Calculat", None);
+        let (delays, rg) = warmup_plan(&params, false);
+        assert_eq!(delays, &WARMUP_DELAYS, "cold fuzzy queries keep their retries");
+        assert!(rg.is_none(), "no textual negative proof exists for a fuzzy query");
+    }
+
+    #[test]
+    fn test_warmup_plan_cold_exact_retries_with_rg() {
+        let params = symbols_params("Calculator", Some("Calculator"));
+        let (delays, rg) = warmup_plan(&params, false);
+        assert_eq!(delays, &WARMUP_DELAYS);
+        let check = rg.expect("exact queries short-circuit via rg");
+        assert_eq!(check.symbol, "Calculator");
+        assert_eq!(check.workspace_root, Path::new("/ws"));
+    }
+
+    #[test]
+    fn test_warmup_plan_warm_fuzzy_answers_immediately() {
+        // Once the index has answered non-empty, an empty fuzzy result is
+        // authoritative: no retry ladder (1.5 s) for a miss.
+        let params = symbols_params("zzz", None);
+        let (delays, rg) = warmup_plan(&params, true);
+        assert!(delays.is_empty(), "warm daemon must not retry a fuzzy miss");
+        assert!(rg.is_none());
+    }
+
+    #[test]
+    fn test_warmup_plan_warm_exact_keeps_rg_and_retries() {
+        // A warm index can still lag a just-written file: if the name is in
+        // the source, retry; rg keeps a true miss fast.
+        let params = symbols_params("NewThing", Some("NewThing"));
+        let (delays, rg) = warmup_plan(&params, true);
+        assert_eq!(delays, &WARMUP_DELAYS);
+        assert_eq!(rg.expect("exact queries keep the rg check").symbol, "NewThing");
+    }
+
+    #[test]
+    fn test_warmup_plan_skip_warmup_is_single_call() {
+        for exact in [None, Some("zzz")] {
+            let mut params = symbols_params("zzz", exact);
+            params.skip_warmup = true;
+            let (delays, rg) = warmup_plan(&params, false);
+            assert!(delays.is_empty(), "skip_warmup must not retry: {params:?}");
+            assert!(rg.is_none(), "skip_warmup must not shell out to rg: {params:?}");
+        }
+    }
 
     #[test]
     fn test_get_socket_path() {

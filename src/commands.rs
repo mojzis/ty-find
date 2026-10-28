@@ -305,14 +305,26 @@ impl CommandOutput {
     }
 }
 
-/// Reject symbol tokens that use unsupported or malformed dotted notation.
+/// The usage message printed for an empty (or whitespace-only) symbol token.
+const EMPTY_SYMBOL_USAGE: &str =
+    "tyf: symbol name is empty; pass a name such as `my_func` or `Class.member`";
+
+/// Reject symbol tokens that are empty or use unsupported/malformed dotted
+/// notation.
 ///
-/// Bare names and one-level `Class.member` tokens pass; 2+ dots and
-/// leading/trailing dots produce a [`UsageError`]. `file:line:col` position
-/// tokens must be filtered out *before* calling this (they legitimately
-/// contain dots in the file path).
+/// Bare names and one-level `Class.member` tokens pass; an empty or
+/// whitespace-only token, 2+ dots, and leading/trailing dots produce a
+/// [`UsageError`]. `file:line:col` position tokens must be filtered out
+/// *before* calling this (they legitimately contain dots in the file path).
+///
+/// Runs before any daemon or LSP work, so a bad invocation never pays the
+/// startup cost — `tyf find ''` used to start the daemon only to report
+/// "No results found".
 pub fn validate_symbol_tokens(tokens: &[String]) -> Result<()> {
     for token in tokens {
+        if token.trim().is_empty() {
+            return Err(UsageError(EMPTY_SYMBOL_USAGE.to_string()).into());
+        }
         if matches!(classify_symbol(token), SymbolToken::Invalid) {
             return Err(UsageError(dotted_usage_message(token)).into());
         }
@@ -890,7 +902,7 @@ pub async fn handle_find_command(
             ensure_daemon_running().await?;
             let mut client = connect_daemon(timeout, debug_log.as_ref()).await?;
 
-            let mut rendered = String::new();
+            let mut results = Vec::with_capacity(symbols.len());
             for symbol in symbols {
                 // Dotted query: resolve the container exactly, then match the
                 // member by prefix (fuzzy). Bare query: ty's fuzzy workspace search.
@@ -911,35 +923,13 @@ pub async fn handle_find_command(
                             .await?
                     };
 
-                if result.symbols.is_empty() {
-                    if let Some(ref log) = debug_log {
-                        log.log_result_summary(&format!(
-                            "0 symbols found matching '{symbol}' (fuzzy)"
-                        ));
-                    }
-                    let _ = writeln!(
-                        rendered,
-                        "{}",
-                        formatter.styler().error(&format!("No results found matching '{symbol}'"))
-                    );
-                } else {
-                    if let Some(ref log) = debug_log {
-                        log.log_result_summary(&format!(
-                            "{} symbol(s) found matching '{symbol}' (fuzzy)",
-                            result.symbols.len()
-                        ));
-                    }
-                    if symbols.len() > 1 {
-                        let heading =
-                            format!("=== {symbol} ({} match(es)) ===", result.symbols.len());
-                        let _ = writeln!(rendered, "{}\n", formatter.styler().symbol(&heading));
-                    }
-                    let _ = writeln!(
-                        rendered,
-                        "{}",
-                        formatter.format_workspace_symbols(&result.symbols)
-                    );
+                if let Some(ref log) = debug_log {
+                    log.log_result_summary(&format!(
+                        "{} symbol(s) found matching '{symbol}' (fuzzy)",
+                        result.symbols.len()
+                    ));
                 }
+                results.push((symbol.clone(), result.symbols));
             }
             if let Some(ref log) = debug_log {
                 let cmd = format!("find {} --fuzzy", symbols.join(" "));
@@ -949,7 +939,7 @@ pub async fn handle_find_command(
                     log.log_lsp_snippet(workspace_root, sym, 0, 0, "workspace/symbol");
                 }
             }
-            return Ok(CommandOutput::from_stdout(rendered));
+            return Ok(CommandOutput::line(&formatter.format_workspace_symbol_results(&results)));
         }
     }
 
@@ -1053,9 +1043,12 @@ async fn find_symbol_via_workspace(
         return Ok(Vec::new());
     }
 
-    // Fallback: fuzzy search (no exact_name filter), reuse the same connection
-    let result =
-        client.execute_workspace_symbols(workspace_root.to_path_buf(), symbol.to_string()).await?;
+    // Fallback: fuzzy search (no exact_name filter), reuse the same connection.
+    // The exact request above already sent this same query through the
+    // cold-start retries (or rg proved the name absent), so don't wait again.
+    let result = client
+        .execute_workspace_symbols_no_warmup(workspace_root.to_path_buf(), symbol.to_string())
+        .await?;
     Ok(result.symbols.into_iter().map(|s| s.location).collect())
 }
 
@@ -2180,6 +2173,20 @@ mod tests {
         assert!(msg.contains("'a.b.c'"), "message should name the offending token: {msg}");
         assert!(msg.contains("one level only"), "message should explain the limit: {msg}");
         assert!(msg.contains("single dot"), "message should suggest the fix: {msg}");
+    }
+
+    #[test]
+    fn test_validate_symbol_tokens_rejects_empty_and_blank() {
+        for token in ["", "   ", "\t"] {
+            let err = validate_symbol_tokens(&[token.to_string()]).unwrap_err();
+            let msg = err
+                .downcast_ref::<UsageError>()
+                .unwrap_or_else(|| panic!("{token:?} should be a UsageError"))
+                .0
+                .clone();
+            assert!(msg.contains("empty"), "message should say the symbol is empty: {msg}");
+            assert!(msg.contains("tyf:"), "message should be a usage line: {msg}");
+        }
     }
 
     #[test]

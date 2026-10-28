@@ -104,7 +104,7 @@ tyf show calculate_sum --file src/math.py
 
 ### Find Symbol by Name
 
-Searches the workspace for a symbol's definition. Supports multiple symbols in a single call. Use `--fuzzy` for partial/prefix matching with richer output (kind + container):
+Searches the workspace for a symbol's definition. Supports multiple symbols in a single call. Use `--fuzzy` for partial/prefix matching; results keep the same `N. path:line:col` shape, with the matched name and kind underneath:
 
 ```bash
 tyf find calculate_sum
@@ -115,7 +115,7 @@ tyf find calculate_sum multiply divide
 # Narrow to a specific file (text-based search + goto_definition)
 tyf find function_name --file myfile.py
 
-# Fuzzy/prefix match (returns symbol kind + container info)
+# Fuzzy/prefix match (each result also shows the matched name + kind)
 tyf find handle_ --fuzzy
 ```
 

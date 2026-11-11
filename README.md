@@ -2,6 +2,8 @@
 
 An **LSP adapter for AI coding agents**. Symbol name in, structured code intelligence out.
 
+📖 **[Documentation](https://mojzis.github.io/ty-find/)** · part of **[aesop](https://mojzis.github.io/aesop/)**, a small menagerie of tools for agentic Python
+
 LSP servers are the gold standard for code navigation — but they require file positions (`file.py:29:7`). LLMs think in symbol names (`MyClass`). To use an LSP, an LLM first has to grep for the position, which is imprecise and adds a round-trip. **tyf bridges this gap:** one command gives you definition, signature, and references — by name, no file paths needed.
 
 ```

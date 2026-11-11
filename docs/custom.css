@@ -1,260 +1,399 @@
-/* ty-find docs — custom mdbook overrides
-   Fonts loaded via theme/head.hbs, NOT @import
-   IMPORTANT: mdbook sets :root { font-size: 62.5% } making 1rem = 10px.
-   Always use `em` (not `rem`) for font sizes to avoid undersized text. */
+/* aesop docs theme for mdBook — GENERATED COPY.
+   Canonical source: mojzis/aesop, docs-theme/aesop-docs.css.
+   Edit there and run docs-theme/sync.py; do not edit the copy in a tool repo.
 
-:root {
-  --font-sans: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, sans-serif;
-  --font-mono: 'IBM Plex Mono', 'SFMono-Regular', Consolas, monospace;
-  --ty-accent: #0ea5e9;
-  --ty-accent-dim: #0284c7;
-  --ty-accent-glow: rgba(14, 165, 233, 0.12);
+   Per-tool values (--accent, mascot, tagline) come from theme/head.hbs.
+   mdBook sets :root { font-size: 62.5% }, so 1rem = 10px: sizes here use
+   px or em, never rem. */
+
+html:root,
+html:is(.light, .rust, .coal, .navy, .ayu) {
+  --a-bg: #1a1d21;
+  --a-surface: #22262b;
+  --a-surface-2: #2a2f35;
+  --a-text: #f3efe6;
+  --a-body: #cfccc4;
+  --a-muted: #9aa0a8;
+  --a-green: #33ff99;
+  --a-border: rgba(255, 255, 255, 0.08);
+  --a-border-strong: rgba(255, 255, 255, 0.14);
+  --a-accent: var(--accent, var(--a-green));
+  --a-accent-soft: color-mix(in srgb, var(--a-accent) 12%, transparent);
+  --a-sans: "Inter", system-ui, -apple-system, sans-serif;
+  --a-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", monospace;
+
+  /* mdBook's own variables, pinned to one dark palette whatever theme
+     class a returning visitor has stored. */
+  --bg: var(--a-bg);
+  --fg: var(--a-body);
+  --sidebar-bg: var(--a-bg);
+  --sidebar-fg: var(--a-muted);
+  --sidebar-non-existant: #5a6068;
+  --sidebar-active: var(--a-text);
+  --sidebar-spacer: var(--a-border);
+  --scrollbar: #3a4048;
+  --icons: var(--a-muted);
+  --icons-hover: var(--a-text);
+  --links: var(--a-accent);
+  --inline-code-color: var(--a-text);
+  --theme-popup-bg: var(--a-surface);
+  --theme-popup-border: var(--a-border-strong);
+  --theme-hover: var(--a-surface-2);
+  --quote-bg: var(--a-surface);
+  --quote-border: var(--a-border);
+  --table-border-color: var(--a-border);
+  --table-header-bg: var(--a-surface);
+  --table-alternate-bg: transparent;
+  --searchbar-border-color: var(--a-border-strong);
+  --searchbar-bg: var(--a-surface);
+  --searchbar-fg: var(--a-text);
+  --searchbar-shadow-color: transparent;
+  --searchresults-header-fg: var(--a-muted);
+  --searchresults-border-color: var(--a-border);
+  --searchresults-li-bg: var(--a-surface);
+  --search-mark-bg: var(--a-accent);
+  --color-scheme: dark;
+  --overlay-bg: rgba(10, 12, 14, 0.6);
+  --sidebar-header-border-color: var(--a-accent);
+  --content-max-width: 780px;
+  --menu-bar-height: 56px;
+  color-scheme: dark;
 }
 
-/* --- Global typography --- */
+/* ---------- base ---------- */
+
 html body {
-  font-family: var(--font-sans) !important;
+  font-family: var(--a-sans);
+  font-size: 16px;
+  background: var(--a-bg);
+  color: var(--a-body);
+  -webkit-font-smoothing: antialiased;
 }
+html code, html pre, html .hljs, html kbd { font-family: var(--a-mono) !important; }
+html ::selection { background: color-mix(in srgb, var(--a-accent) 35%, transparent); color: var(--a-text); }
 
-html code, html pre, html pre > code, html .hljs {
-  font-family: var(--font-mono) !important;
-}
-
-html .content main {
-  font-size: 0.95em;
-  line-height: 1.7;
-  max-width: 900px;
-  margin-inline-start: 0;
-  margin-inline-end: auto;
-}
-
-/* ==========================================================
-   SIDEBAR
-   All selectors prefixed with `html .sidebar` to beat
-   mdbook's chrome.css specificity.
-   ========================================================== */
-
-html .sidebar {
-  font-family: var(--font-sans) !important;
-  font-size: 0.85em !important;
-}
-
-/* Spacers between sections */
-html .sidebar .chapter-item.spacer {
-  height: 1px !important;
-  margin: 12px 16px !important;
-  padding: 0 !important;
-  list-style: none;
-  opacity: 0.15;
-  background: currentColor;
-}
-
-/* Part titles (GETTING STARTED, COMMANDS, REFERENCE) */
-html .sidebar .part-title {
-  text-transform: uppercase !important;
-  font-size: 0.76em !important;
-  font-weight: 600 !important;
-  letter-spacing: 0.1em !important;
-  opacity: 0.5;
-  margin-top: 18px !important;
-  margin-bottom: 4px !important;
-  padding-left: 16px;
-  pointer-events: none;
-}
-
-/* All nav links */
-html .sidebar ol.chapter li a,
-html .sidebar ol.chapter li.chapter-item a {
-  padding: 5px 16px !important;
-  margin: 1px 8px !important;
-  border-radius: 6px !important;
-  display: block !important;
-  transition: background 0.15s ease, color 0.15s ease !important;
-  font-weight: 400 !important;
-  text-decoration: none !important;
-  border-left: 3px solid transparent !important;
-}
-
-/* Hover */
-html .sidebar ol.chapter li a:hover,
-html .sidebar ol.chapter li.chapter-item a:hover {
-  background: var(--ty-accent-glow) !important;
-}
-
-/* Active page */
-html .sidebar ol.chapter li a.active,
-html .sidebar ol.chapter li.chapter-item a.active,
-html .sidebar ol.chapter li.chapter-item li a.active {
-  background: var(--ty-accent-glow) !important;
-  font-weight: 500 !important;
-  border-left: 3px solid var(--ty-accent) !important;
-  padding-left: 13px !important;
-}
-
-/* On-this-page section (in-page headings shown under the active item) */
-html .sidebar .on-this-page {
-  margin-left: 12px !important;
-}
-
-html .sidebar .on-this-page ol {
-  padding-left: 0 !important;
-}
-
-html .sidebar .on-this-page li a {
-  padding-left: 10px !important;
-  font-size: 0.9em !important;
-  opacity: 0.6;
-}
-
-html .sidebar .on-this-page li a:hover {
-  opacity: 1 !important;
-}
-
-/* Section numbers — subtle */
-html .sidebar .section-number {
-  opacity: 0.35 !important;
-  font-size: 0.78em !important;
-  font-variant-numeric: tabular-nums;
-}
-
-/* ==========================================================
-   CONTENT AREA
-   ========================================================== */
-
-/* Headings */
-html .content main h1 {
-  font-weight: 600 !important;
-  font-size: 1.8em !important;
-  letter-spacing: -0.02em;
-  margin-top: 0;
-  padding-bottom: 0.3em;
-  border-bottom: 2px solid var(--ty-accent) !important;
-}
-
-html .content main h2 {
-  font-weight: 600 !important;
-  font-size: 1.3em !important;
-  letter-spacing: -0.01em;
-  margin-top: 2em;
-}
-
-html .content main h3 {
-  font-weight: 500 !important;
-  font-size: 1.1em !important;
-}
-
-/* Code blocks */
-html .content pre {
-  border-radius: 8px !important;
-  padding: 1em 1.2em !important;
-  font-size: 0.875em !important;
-  line-height: 1.6 !important;
-  border: 1px solid rgba(128, 128, 128, 0.15) !important;
-}
-
-/* Inline code */
-html .content code:not(pre code) {
-  padding: 0.15em 0.4em !important;
-  border-radius: 4px !important;
-  font-size: 0.88em !important;
-  font-weight: 500;
-}
-
-/* Tables */
-html .content table {
-  border-collapse: separate !important;
-  border-spacing: 0 !important;
-  border-radius: 8px !important;
-  overflow: hidden;
-  border: 1px solid rgba(128, 128, 128, 0.2) !important;
-  width: 100%;
-}
-
-html .content table th {
-  font-weight: 600 !important;
-  font-size: 0.85em !important;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-html .content table td,
-html .content table th {
-  padding: 0.6em 1em !important;
-  border-bottom: 1px solid rgba(128, 128, 128, 0.1) !important;
-}
-
-html .content table tr:last-child td {
-  border-bottom: none !important;
-}
-
-/* Links */
-html .content a {
-  text-decoration: underline !important;
-  text-decoration-color: var(--ty-accent) !important;
-  text-underline-offset: 2px;
-  transition: color 0.15s ease;
-}
-
-html .content a:hover {
-  color: var(--ty-accent) !important;
-}
-
-/* Command names in definition lists */
-html .content dt strong,
-html .content p strong code {
-  color: var(--ty-accent) !important;
-}
-
-/* ==========================================================
-   THEME-SPECIFIC ACCENT COLORS
-   ========================================================== */
-
-.navy  { --ty-accent: #38bdf8; --ty-accent-dim: #0ea5e9; --ty-accent-glow: rgba(56, 189, 248, 0.10); }
-.ayu   { --ty-accent: #39bae6; --ty-accent-dim: #59c2ff; --ty-accent-glow: rgba(57, 186, 230, 0.10); }
-.coal  { --ty-accent: #38bdf8; --ty-accent-dim: #0ea5e9; --ty-accent-glow: rgba(56, 189, 248, 0.08); }
-.light { --ty-accent: #0284c7; --ty-accent-dim: #0369a1; --ty-accent-glow: rgba(2, 132, 199, 0.08); }
-.rust  { --ty-accent: #f59e0b; --ty-accent-dim: #d97706; --ty-accent-glow: rgba(245, 158, 11, 0.10); }
-
-/* ==========================================================
-   TOP BAR & NAV ARROWS
-   ========================================================== */
+/* ---------- top bar ---------- */
 
 html #mdbook-menu-bar {
-  border-bottom: 1px solid rgba(128, 128, 128, 0.15) !important;
+  background: color-mix(in srgb, var(--a-bg) 80%, transparent);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--a-border);
+  align-items: center;
+  padding: 0 8px;
 }
+html #mdbook-menu-bar.bordered { border-bottom-color: var(--a-border); }
+html #mdbook-menu-bar .icon-button,
+html #mdbook-menu-bar .right-buttons a { transition: color .15s; }
+html #mdbook-menu-bar .icon-button:hover,
+html #mdbook-menu-bar .right-buttons a:hover { color: var(--a-accent); }
+html .left-buttons, html .right-buttons { display: flex; align-items: center; margin: 0 6px; }
+html .menu-bar .fa-svg svg { width: 16px; height: 16px; }
 
-/* Version badge beside the title — small, dimmed */
+/* One palette: the theme picker has nothing to pick. Print stays reachable
+   via the browser. */
+html #mdbook-theme-toggle, html #mdbook-theme-list,
+html .right-buttons a[href$="print.html"] { display: none !important; }
+
+/* Title becomes the breadcrumb: ● aesop / tool vX.Y.Z  (built by aesop.js) */
+html .menu-title {
+  font-family: var(--a-sans);
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: var(--menu-bar-height);
+  text-align: left;
+  color: var(--a-text);
+  display: flex; align-items: center; gap: 8px;
+  overflow: hidden;
+}
+html .menu-title a { color: inherit; text-decoration: none; }
+html .menu-title .a-home { display: inline-flex; align-items: center; gap: 8px; font-weight: 800; }
+html .menu-title .a-home:hover { color: var(--a-green); }
+html .menu-title .a-dot {
+  width: 10px; height: 10px; border-radius: 50%; flex: none;
+  background: var(--a-green); box-shadow: 0 0 12px var(--a-green);
+}
+html .menu-title .a-sep { color: #4a5058; font-weight: 400; }
+html .menu-title .a-tool { color: var(--a-accent); }
 html .menu-title .version-badge {
-  font-size: 0.62em;
-  font-weight: 400;
-  opacity: 0.55;
-  margin-left: 0.5em;
-  letter-spacing: 0.02em;
-  vertical-align: middle;
-  font-variant-numeric: tabular-nums;
+  font: 500 11px var(--a-mono);
+  color: var(--a-muted);
+  border: 1px solid var(--a-border-strong);
+  border-radius: 999px;
+  padding: 2px 8px;
+  line-height: 1.4;
+  letter-spacing: 0;
 }
 
-html #mdbook-menu-bar .icon-button {
-  transition: color 0.15s ease;
+/* ---------- sidebar ---------- */
+
+html .sidebar {
+  font-family: var(--a-sans);
+  font-size: 14px;
+  background: var(--a-bg);
+  border-right: 1px solid var(--a-border);
+}
+html .sidebar .sidebar-scrollbox { padding: 0 10px 16px; }
+html .sidebar-resize-handle .sidebar-resize-indicator { opacity: 0; }
+
+/* Mascot card (built by aesop.js) */
+html .a-card {
+  display: flex; align-items: center; gap: 12px;
+  margin: 14px 4px 18px; padding: 10px;
+  background: var(--a-surface);
+  border: 1px solid var(--a-border);
+  border-radius: 16px;
+  color: inherit; text-decoration: none;
+  transition: border-color .2s, background .2s;
+}
+html .a-card:hover { border-color: var(--a-accent); background: var(--a-surface-2); text-decoration: none; }
+html .a-card img { width: 52px; height: 52px; border-radius: 12px; object-fit: cover; background: var(--a-bg); flex: none; }
+html .a-card b { display: block; color: var(--a-text); font-size: 15px; letter-spacing: -0.02em; line-height: 1.2; }
+html .a-card i { display: block; color: var(--a-muted); font-size: 12px; line-height: 1.3; margin-top: 2px; }
+
+html .sidebar ol.chapter { padding: 0; line-height: 1.4; }
+html .sidebar ol.chapter li.chapter-item { margin: 0; line-height: 1.4; }
+html .sidebar ol.chapter .chapter-link-wrapper { display: flex; }
+html .sidebar ol.chapter li a {
+  display: block; flex: 1;
+  padding: 6px 12px;
+  margin: 1px 0;
+  border-radius: 8px;
+  color: var(--a-muted);
+  text-decoration: none;
+  transition: background .15s, color .15s;
+}
+html .sidebar ol.chapter li a:hover { color: var(--a-text); background: var(--a-surface); text-decoration: none; }
+html .sidebar ol.chapter li a.active {
+  color: var(--a-text);
+  font-weight: 600;
+  background: var(--a-accent-soft);
+  box-shadow: inset 2px 0 0 var(--a-accent);
+}
+html .sidebar ol.chapter ol.section { padding-left: 12px; margin-left: 12px; border-left: 1px solid var(--a-border); }
+html .sidebar ol.chapter li a strong[aria-hidden] { display: none; } /* section numbers */
+html .sidebar .part-title {
+  font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .12em;
+  color: var(--a-muted); opacity: .7;
+  margin: 22px 0 6px; padding: 0 12px;
+}
+html .sidebar .chapter-item.spacer { height: 1px; margin: 12px; background: var(--a-border); }
+html .sidebar .on-this-page { margin: 2px 0 6px 12px; padding-left: 0; border-left: 1px solid var(--a-border); }
+html .sidebar .on-this-page ol { padding-left: 0; }
+html .sidebar .on-this-page li, html .sidebar .on-this-page li a { line-height: 1.35; }
+html .sidebar .on-this-page li a { font-size: 13px; padding: 4px 12px; margin: 0; }
+html .sidebar .on-this-page ol ol { margin-left: 12px; }
+html .sidebar .chapter-fold-toggle { color: var(--a-muted); }
+
+/* "part of aesop" footer (built by aesop.js) */
+html .a-part {
+  display: flex; align-items: center; gap: 8px;
+  margin: 24px 4px 8px; padding: 12px;
+  border-top: 1px solid var(--a-border);
+  font-size: 12px; color: var(--a-muted); text-decoration: none;
+}
+html .a-part:hover { color: var(--a-text); text-decoration: none; }
+html .a-part .a-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--a-green); box-shadow: 0 0 10px var(--a-green); flex: none; }
+html .a-part b { color: var(--a-text); font-weight: 700; }
+
+/* ---------- content ---------- */
+
+html .content { padding: 0 24px 64px; }
+html .content main {
+  font-size: 16px;
+  line-height: 1.7;
+  max-width: var(--content-max-width);
+  margin-inline: auto;
+  padding-top: 24px;
+}
+html .content main p, html .content main li { color: var(--a-body); }
+html .content main strong { color: var(--a-text); font-weight: 600; }
+
+html .content main :is(h1, h2, h3, h4) { color: var(--a-text); font-family: var(--a-sans); }
+html .content main :is(h1, h2, h3, h4) a.header { color: inherit; text-decoration: none; }
+html .content main h1 {
+  font-size: clamp(34px, 4.6vw, 48px);
+  font-weight: 800; letter-spacing: -0.04em; line-height: 1.08;
+  margin: 24px 0 20px;
+}
+html .content main h2 {
+  font-size: 24px; font-weight: 700; letter-spacing: -0.025em; line-height: 1.25;
+  margin: 56px 0 12px; padding-top: 24px;
+  border-top: 1px solid var(--a-border);
+}
+html .content main h3 { font-size: 18px; font-weight: 600; letter-spacing: -0.015em; margin: 36px 0 8px; }
+html .content main h4 {
+  font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .1em;
+  color: var(--a-muted); margin: 28px 0 6px;
+}
+/* The first paragraph under the page title reads as the lede. */
+html .content main > h1:first-child + p { font-size: 19px; line-height: 1.55; color: var(--a-muted); }
+html .content main > h1:first-child + p strong { color: var(--a-text); }
+
+/* Intro page hero: mascot beside the title (built by aesop.js) */
+html .a-hero { display: flex; align-items: center; gap: 28px; margin: 24px 0 8px; }
+html .a-hero img { width: 148px; height: 148px; border-radius: 24px; object-fit: cover; background: var(--a-surface); flex: none; }
+html .a-hero .a-animal { font-size: 13px; font-style: italic; color: var(--a-muted); margin: 0 0 4px; }
+html .a-hero h1 { margin: 0 0 6px !important; }
+html .a-hero .a-tagline { font-size: 19px; color: var(--a-muted); margin: 0; line-height: 1.4; }
+@media (max-width: 600px) {
+  html .a-hero { flex-direction: column; align-items: flex-start; gap: 16px; }
+  html .a-hero img { width: 104px; height: 104px; border-radius: 20px; }
 }
 
-html #mdbook-menu-bar .icon-button:hover {
-  color: var(--ty-accent) !important;
+html .content a:not(.header) {
+  color: var(--a-accent);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--a-accent) 35%, transparent);
+  text-underline-offset: 3px;
+  transition: text-decoration-color .15s;
 }
+html .content a:not(.header):hover { text-decoration-color: var(--a-accent); }
 
-html .nav-chapters {
-  display: none !important;
+html .content hr { border: 0; border-top: 1px solid var(--a-border); margin: 40px 0; }
+html .content ul, html .content ol { padding-left: 1.4em; }
+html .content li { margin: 4px 0; }
+html .content li::marker { color: var(--a-muted); }
+
+/* code */
+html .content pre {
+  position: relative;
+  background: var(--a-surface);
+  border: 1px solid var(--a-border);
+  border-radius: 12px;
+  margin: 20px 0;
+  padding: 0;
 }
-
-/* ==========================================================
-   RESPONSIVE
-   ========================================================== */
-
-@media (max-width: 1080px) {
-  html .content main { font-size: 0.92em; }
+html .content pre > code, html .content pre > code.hljs {
+  display: block;
+  background: transparent !important;
+  color: #dcd8cf;
+  font-size: 13.5px; line-height: 1.65;
+  padding: 16px 18px;
+  overflow-x: auto;
 }
+html .content :not(pre) > code, html .content :not(pre) > code.hljs {
+  background: var(--a-surface-2) !important;
+  color: var(--a-text);
+  border: 1px solid var(--a-border);
+  border-radius: 6px;
+  padding: 1px 6px;
+  font-size: .86em;
+}
+html .content a > code { color: var(--a-accent) !important; }
+html .content :is(h1, h2, h3, h4) > code, html .content :is(h1, h2, h3, h4) a > code {
+  background: transparent !important; border: 0; padding: 0;
+  font-size: .88em; font-weight: 500; letter-spacing: -0.03em; color: var(--a-accent);
+}
+html pre > .buttons { top: 8px; right: 8px; opacity: 0; transition: opacity .15s; }
+html pre:hover > .buttons { opacity: 1; }
+html pre > .buttons button {
+  background: var(--a-surface-2); border: 1px solid var(--a-border-strong); border-radius: 8px;
+  padding: 5px 7px; color: var(--a-muted);
+}
+html pre > .buttons button:hover { color: var(--a-accent); border-color: var(--a-accent); }
+
+/* Syntax palette — overrides whichever highlight sheet the stored theme loads. */
+html .hljs-comment, html .hljs-quote, html .hljs-meta { color: #747b85 !important; font-style: italic; }
+html .hljs-keyword, html .hljs-selector-tag, html .hljs-literal, html .hljs-section, html .hljs-link { color: #c9a5ff !important; }
+html .hljs-string, html .hljs-regexp, html .hljs-addition, html .hljs-attribute, html .hljs-symbol { color: #9fe3b3 !important; }
+html .hljs-number, html .hljs-built_in, html .hljs-builtin-name, html .hljs-type, html .hljs-params { color: #f0b37e !important; }
+html .hljs-title, html .hljs-name, html .hljs-selector-id, html .hljs-selector-class, html .hljs-function { color: #8cc4ff !important; }
+html .hljs-variable, html .hljs-template-variable, html .hljs-attr, html .hljs-tag { color: #f0d58a !important; }
+html .hljs-deletion { color: #ff9b9b !important; }
+html .hljs-addition, html .hljs-deletion { background: transparent !important; }
+
+/* tables */
+html .content .table-wrapper { margin: 24px 0; border: 1px solid var(--a-border); border-radius: 12px; overflow-x: auto; }
+html .content table { border-collapse: collapse; width: 100%; margin: 0; font-size: 14.5px; }
+html .content table thead { background: var(--a-surface); }
+html .content table th {
+  text-align: left; font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .1em; color: var(--a-muted);
+  padding: 10px 16px; border: 0; border-bottom: 1px solid var(--a-border);
+}
+html .content table td { padding: 10px 16px; border: 0; border-top: 1px solid var(--a-border); vertical-align: top; }
+html .content table tbody tr:first-child td { border-top: 0; }
+html .content table tbody tr { background: transparent !important; }
+html .content table tbody tr:hover { background: color-mix(in srgb, var(--a-surface) 60%, transparent) !important; }
+
+/* quotes and admonitions */
+html .content blockquote {
+  margin: 24px 0; padding: 14px 18px;
+  background: var(--a-surface);
+  border: 1px solid var(--a-border);
+  border-left: 3px solid var(--a-accent);
+  border-radius: 12px;
+  color: var(--a-body);
+}
+html .content blockquote > :first-child { margin-top: 0; }
+html .content blockquote > :last-child { margin-bottom: 0; }
+html .content .blockquote-tag { border-radius: 12px; }
+
+html .content kbd {
+  background: var(--a-surface-2); color: var(--a-text);
+  border: 1px solid var(--a-border-strong); border-bottom-width: 2px;
+  border-radius: 6px; box-shadow: none; padding: 1px 6px; font-size: .82em;
+}
+html .content img { max-width: 100%; border-radius: 12px; }
+html .content .mermaid { background: var(--a-surface); border: 1px solid var(--a-border); border-radius: 12px; padding: 20px; text-align: center; }
+
+/* ---------- prev / next ---------- */
+
+html .nav-wide-wrapper { display: none !important; }
+html .content .nav-wrapper {
+  display: flex !important; gap: 16px;
+  max-width: var(--content-max-width);
+  margin: 64px auto 0; padding-top: 24px;
+  border-top: 1px solid var(--a-border);
+}
+html .content .nav-wrapper > div { display: none; }
+html .content .nav-wrapper .mobile-nav-chapters {
+  flex: 1; float: none; width: auto;
+  display: flex; flex-direction: column; gap: 2px;
+  padding: 14px 18px;
+  background: var(--a-surface);
+  border: 1px solid var(--a-border);
+  border-radius: 16px;
+  color: var(--a-text); font-size: 15px; font-weight: 600; text-align: left; text-decoration: none;
+  transition: transform .2s, border-color .2s, background .2s;
+}
+html .content .nav-wrapper .mobile-nav-chapters:hover { transform: translateY(-2px); border-color: var(--a-accent); background: var(--a-surface-2); }
+html .content .nav-wrapper .mobile-nav-chapters .fa-svg { display: none; }
+html .content .nav-wrapper .mobile-nav-chapters::before {
+  font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .1em; color: var(--a-muted);
+}
+html .content .nav-wrapper .previous::before { content: "← Previous"; }
+html .content .nav-wrapper .next { text-align: right; margin-left: auto; }
+html .content .nav-wrapper .next::before { content: "Next →"; }
+html .content .nav-wrapper .next:only-of-type { flex: 0 1 50%; }
+
+/* ---------- search ---------- */
+
+html #mdbook-search-wrapper { max-width: var(--content-max-width); margin: 0 auto; padding: 0 24px; }
+html #mdbook-searchbar {
+  margin: 16px 0 0; padding: 12px 16px;
+  font: 15px var(--a-sans);
+  background: var(--a-surface); color: var(--a-text);
+  border: 1px solid var(--a-border-strong); border-radius: 12px;
+}
+html #mdbook-searchbar:focus { outline: none; border-color: var(--a-accent); box-shadow: 0 0 0 3px var(--a-accent-soft); }
+html .searchresults-outer { border-bottom: 1px solid var(--a-border); }
+html ul#mdbook-searchresults li { border-radius: 10px; padding: 8px 12px; }
+html ul#mdbook-searchresults li.focus { background: var(--a-surface); }
+html ul#mdbook-searchresults span.teaser em { color: var(--a-accent); font-style: normal; font-weight: 600; }
+html mark { background: color-mix(in srgb, var(--a-accent) 30%, transparent); color: var(--a-text); border-radius: 3px; padding: 0 2px; }
+
+/* ---------- scrollbars, focus ---------- */
+
+html { scrollbar-color: #3a4048 transparent; }
+html :focus-visible { outline: 2px solid var(--a-accent); outline-offset: 2px; border-radius: 4px; }
 
 @media (max-width: 600px) {
-  html .sidebar ol.chapter li a,
-  html .sidebar ol.chapter li.chapter-item a { margin: 1px 4px !important; }
+  html .content { padding: 0 16px 48px; }
+  html .content .nav-wrapper { flex-direction: column; }
+  html .menu-title .a-home span:not(.a-dot), html .menu-title .a-sep { display: none; }
 }
+@media (prefers-reduced-motion: reduce) { html * { transition: none !important; } }

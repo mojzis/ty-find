@@ -3,7 +3,7 @@
 // (run automatically in the docs deploy workflow) and on each `cargo release`.
 (function () {
   "use strict";
-  var VERSION = "0.5.3";
+  var VERSION = "0.5.4";
 
   function injectVersion() {
     var title = document.querySelector(".menu-title");

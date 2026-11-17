@@ -3,7 +3,7 @@
 Find where a function, class, or variable is defined. Searches the whole project by name — no need to know which file it's in.
 
 Use `Class.member` dotted notation (one level only) to narrow to a specific class member. Module-qualified names (`module.func`) and nested paths (`Outer.Inner.method`) are not supported; using 2+ dots is a usage error.
-Use `--fuzzy` for partial/prefix matching (returns richer symbol information including kind and container name).
+Use `--fuzzy` for partial/prefix matching. Output has the same shape as a plain find (numbered path:line:col), with the matched name and kind on the line below.
 
 Examples:
   tyf find calculate_sum
@@ -29,7 +29,7 @@ tyf find <SYMBOLS> [OPTIONS]
 : Narrow the search to a specific file (searches whole project if omitted)
 
 **`--fuzzy`**
-: Use fuzzy/prefix matching via workspace symbols (richer output with kind + container)
+: Use fuzzy/prefix matching via workspace symbols (adds matched name + kind per result)
 
 ## Examples
 

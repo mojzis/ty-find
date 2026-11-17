@@ -92,7 +92,7 @@ impl Styler {
         }
     }
 
-    /// Kind labels in fuzzy find: `[class]`, `[function]`.
+    /// Kind labels in fuzzy find: `[class]`, `[func]`.
     /// Dim.
     pub fn dim(self, text: &str) -> String {
         if self.color.enabled() {

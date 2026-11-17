@@ -429,6 +429,13 @@ pub struct WorkspaceSymbolsParams {
     /// this string. Used for dotted notation like `Class.method`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub container_name: Option<String>,
+
+    /// Answer from a single LSP call, with no cold-start retries.
+    ///
+    /// Set by plain `find`'s fuzzy fallback: the exact-name request just
+    /// before it already waited out (or rg-disproved) a cold index.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub skip_warmup: bool,
 }
 
 /// Parameters for document symbols request.

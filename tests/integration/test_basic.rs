@@ -944,6 +944,39 @@ async fn test_find_nonexistent_symbol_returns_quickly() {
 }
 
 #[tokio::test]
+async fn test_find_nonexistent_symbol_quick_on_cold_workspace_index() {
+    common::require_ty();
+
+    // Regression: plain `find` falls back to a fuzzy workspace/symbol query
+    // after an exact miss. On a workspace whose ty index has never answered
+    // non-empty, that fallback ran the full 1.5 s retry ladder even though the
+    // exact phase had already proven (via rg) that the name does not exist.
+    warm_daemon_index(); // daemon itself running; the temp workspace stays cold
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("mod.py"), "def present():\n    return 1\n")
+        .expect("write fixture");
+
+    let start = std::time::Instant::now();
+    let output = cargo_bin_cmd!("tyf")
+        .arg("--workspace")
+        .arg(dir.path())
+        .arg("find")
+        .arg("this_symbol_absolutely_does_not_exist_xyz_12345")
+        .output()
+        .expect("failed to run tyf");
+    let elapsed = start.elapsed();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "command failed: {stdout}");
+    assert!(stdout.contains("No results found for:"), "expected a clean miss, got:\n{stdout}");
+    assert!(
+        elapsed < std::time::Duration::from_millis(1000),
+        "miss on a cold workspace index took {elapsed:?}; the fuzzy fallback must not retry"
+    );
+}
+
+#[tokio::test]
 async fn test_find_existing_symbol_still_works_with_rg() {
     common::require_ty();
 
@@ -1247,6 +1280,127 @@ async fn test_dotted_fuzzy_prefix_member_exact_container() {
     assert!(
         predicate::str::contains("multiply").eval(&stdout),
         "fuzzy dotted find should prefix-match the member 'mult' → 'multiply', got:\n{stdout}"
+    );
+}
+
+#[tokio::test]
+async fn test_empty_symbol_is_usage_error() {
+    // `tyf find ''` used to start the daemon and print "No results found",
+    // exit 0. An empty query is a bad invocation: exit 2, message on stderr,
+    // nothing on stdout — and it must be rejected before any LSP work.
+    for cmd_name in ["show", "find", "refs"] {
+        for token in ["", "  "] {
+            let run = run_dotted(cmd_name, token);
+            assert_eq!(
+                run.code,
+                Some(2),
+                "`{cmd_name} {token:?}` should use usage-error exit code 2, got stdout:\n{}",
+                run.stdout
+            );
+            assert!(
+                run.stderr.contains("empty"),
+                "`{cmd_name} {token:?}` should say the symbol is empty, got:\n{}",
+                run.stderr
+            );
+            assert!(
+                run.stdout.is_empty(),
+                "`{cmd_name} {token:?}` should print nothing to stdout, got:\n{}",
+                run.stdout
+            );
+        }
+    }
+
+    // Same for --fuzzy, which takes a separate code path.
+    let mut cmd = cargo_bin_cmd!("tyf");
+    cmd.arg("--workspace").arg(workspace_root()).arg("find").arg("--fuzzy").arg("");
+    let output = cmd.output().expect("failed to run tyf");
+    assert_eq!(output.status.code(), Some(2), "`find --fuzzy ''` should exit 2");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("empty"), "`find --fuzzy ''` should say the symbol is empty: {stderr}");
+    assert!(output.stdout.is_empty(), "`find --fuzzy ''` should print nothing to stdout");
+}
+
+/// Run one workspace-symbol query that is known to match, so the daemon's
+/// ty index for the repo root has answered at least once.
+fn warm_daemon_index() {
+    let mut warmup = cargo_bin_cmd!("tyf");
+    warmup.arg("--workspace").arg(workspace_root()).arg("find").arg("Calculator");
+    let output = warmup.output().expect("warmup failed");
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("example.py:9:"),
+        "warm-up query should resolve Calculator, got:\n{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+#[tokio::test]
+async fn test_fuzzy_nonexistent_symbol_returns_quickly_on_warm_daemon() {
+    common::require_ty();
+
+    // Fuzzy queries cannot use the rg circuit-breaker (ty's matcher is a
+    // case-insensitive subsequence match, so no textual negative proof
+    // exists). Without an explicit "index is warm" signal every fuzzy miss
+    // would pay the full 1.5 s retry ladder; with it, a miss on a warm daemon
+    // is answered immediately.
+    warm_daemon_index();
+
+    let start = std::time::Instant::now();
+    let mut cmd = cargo_bin_cmd!("tyf");
+    cmd.arg("--workspace")
+        .arg(workspace_root())
+        .arg("find")
+        .arg("this_symbol_absolutely_does_not_exist_xyz_12345")
+        .arg("--fuzzy");
+    let output = cmd.output().expect("failed to run tyf");
+    let elapsed = start.elapsed();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "command failed: {stdout}");
+    assert!(stdout.contains("No results found for:"), "expected a clean miss, got:\n{stdout}");
+    assert!(
+        elapsed < std::time::Duration::from_millis(1000),
+        "fuzzy miss on a warm daemon took {elapsed:?}; the 1.5 s retry ladder must not run"
+    );
+}
+
+#[tokio::test]
+async fn test_fuzzy_find_output_matches_plain_find_shape() {
+    common::require_ty();
+
+    // Plain `find` prints `N. path:line:col`; `--fuzzy` used to print
+    // `N. name (Kind)` with the path on the next line. Agents parse the
+    // numbered line, so both modes now put the location there.
+    //
+    // Cold-start behaviour is covered by the daemon's warm-up unit tests;
+    // this test is about output shape, so warm the index first rather than
+    // race 47 sibling tests for the first answer from a cold ty.
+    warm_daemon_index();
+    let mut cmd = cargo_bin_cmd!("tyf");
+    cmd.arg("--workspace").arg(workspace_root()).arg("find").arg("Calculat").arg("--fuzzy");
+    let output = cmd.output().expect("failed to run tyf");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "fuzzy find failed: {stdout}");
+
+    let lines: Vec<&str> = stdout.lines().collect();
+    let header = lines.first().unwrap_or_else(|| panic!("fuzzy find printed nothing"));
+    assert!(
+        header.starts_with("Found ") && header.ends_with("symbol(s) matching: 'Calculat'"),
+        "fuzzy find should start with a Found header like plain find, got:\n{stdout}"
+    );
+    // Fuzzy also matches calculate_sum etc., in ty's order; locate the
+    // Calculator entry by its detail line rather than assuming its position.
+    let detail = lines
+        .iter()
+        .position(|l| *l == "   Calculator [class]")
+        .unwrap_or_else(|| panic!("no `   Calculator [class]` detail line in:\n{stdout}"));
+    let numbered = lines[detail - 1];
+    let (n, location) = numbered
+        .split_once(". ")
+        .unwrap_or_else(|| panic!("line before the detail should be numbered, got: {numbered}"));
+    assert!(n.parse::<usize>().is_ok(), "expected a result number, got: {numbered}");
+    assert_eq!(
+        location, "example.py:9:1",
+        "numbered line should carry `path:line:col` like plain find, got:\n{stdout}"
     );
 }
 

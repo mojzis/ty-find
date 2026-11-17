@@ -309,6 +309,27 @@ impl DaemonClient {
             limit: None,
             exact_name: None,
             container_name: None,
+            skip_warmup: false,
+        };
+        self.execute(Method::WorkspaceSymbols, params).await
+    }
+
+    /// Execute a fuzzy workspace symbols request with no cold-start retries.
+    ///
+    /// For a follow-up to an exact-name request that already waited out a
+    /// cold index — retrying again would only repeat that wait.
+    pub async fn execute_workspace_symbols_no_warmup(
+        &mut self,
+        workspace: PathBuf,
+        query: String,
+    ) -> Result<WorkspaceSymbolsResult> {
+        let params = WorkspaceSymbolsParams {
+            workspace,
+            query,
+            limit: None,
+            exact_name: None,
+            container_name: None,
+            skip_warmup: true,
         };
         self.execute(Method::WorkspaceSymbols, params).await
     }
@@ -326,6 +347,7 @@ impl DaemonClient {
             limit: None,
             exact_name,
             container_name: None,
+            skip_warmup: false,
         };
         self.execute(Method::WorkspaceSymbols, params).await
     }
@@ -346,6 +368,7 @@ impl DaemonClient {
             limit: None,
             exact_name: Some(symbol_name),
             container_name: Some(container),
+            skip_warmup: false,
         };
         self.execute(Method::WorkspaceSymbols, params).await
     }

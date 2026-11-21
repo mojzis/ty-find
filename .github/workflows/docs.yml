@@ -49,7 +49,7 @@ jobs:
       - uses: astral-sh/setup-uv@v10.4.0
 
       - name: Release notes page
-        run: uvx relnotes@latest page --out docs/src/release-notes.md
+        run: uvx --from git+https://github.com/mojzis/relnotes relnotes page --out docs/src/release-notes.md
 
       - name: Build book
         run: mdbook build docs

@@ -73,7 +73,7 @@ docs:
 	@echo "📖 Building documentation..."
 	@if command -v mdbook > /dev/null 2>&1; then \
 		bash docs/gen-version.sh; \
-		uvx relnotes@latest page --out docs/src/release-notes.md; \
+		uvx --from git+https://github.com/mojzis/relnotes relnotes page --out docs/src/release-notes.md; \
 		mdbook build docs; \
 		bash docs/generate-llms-txt.sh; \
 		echo "Docs built at docs/book/html/index.html"; \

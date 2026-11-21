@@ -1,6 +1,7 @@
 # Summary
 
 [Introduction](index.md)
+- [Release notes](release-notes.md)
 
 # Getting Started
 
